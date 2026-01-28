@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Chantier, Entry, User, Alert } from '../types';
-import { Plus, X, Delete, Check, ArrowLeft, Clock, Calendar, Users, Bell, Info, Pencil } from 'lucide-react';
+import { Plus, X, Check, ArrowLeft, Clock, Calendar, Users, Bell, Info, Pencil } from 'lucide-react';
 import { StatusBadge } from './StatusBadge';
 
 interface Props {
