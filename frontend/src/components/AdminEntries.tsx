@@ -68,7 +68,8 @@ export const AdminEntries: React.FC<Props> = () => {
                             <th className="p-4">Date</th>
                             <th className="p-4">Ouvrier</th>
                             <th className="p-4">Chantier</th>
-                            <th className="p-4 text-right">Valeur</th>
+                            <th className="p-4 text-right">Heures</th>
+                            <th className="p-4 text-right">Matériel</th>
                             <th className="p-4 text-right">Actions</th>
                         </tr>
                     </thead>
@@ -90,7 +91,10 @@ export const AdminEntries: React.FC<Props> = () => {
                                     {e.chantier_nom}
                                 </td>
                                 <td className="p-4 text-right font-mono font-bold text-white">
-                                    {e.heures > 0 ? `${e.heures} h` : `${e.materiel} .-`}
+                                    {e.heures > 0 ? `${e.heures} h` : '-'}
+                                </td>
+                                <td className="p-4 text-right font-mono font-bold text-blue-400">
+                                    {e.materiel > 0 ? `${e.materiel} .-` : '-'}
                                 </td>
                                 <td className="p-4 text-right">
                                     <div className="flex items-center justify-end gap-2">

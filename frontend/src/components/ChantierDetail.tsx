@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Chantier, Entry, User, Alert } from '../types';
-import { Plus, X, Check, ArrowLeft, Clock, Calendar, Users, Bell, Info, Pencil } from 'lucide-react';
+import { Plus, X, Check, ArrowLeft, Clock, Calendar, Bell, Info, Pencil } from 'lucide-react';
 import { StatusBadge } from './StatusBadge';
 
 interface Props {
@@ -9,22 +9,19 @@ interface Props {
     onBack: () => void;
 }
 
-type Tab = 'SUIVI' | 'INFO' | 'EQUIPE' | 'ALERTES';
+type Tab = 'SUIVI' | 'INFO' | 'ALERTES';
 
 export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, currentUser, onBack }) => {
     const [chantier, setChantier] = useState(initialChantier);
     const [activeTab, setActiveTab] = useState<Tab>('SUIVI');
     const [entries, setEntries] = useState<Entry[]>([]);
     const [alerts, setAlerts] = useState<Alert[]>([]);
-    // For assigning members
-    const [availableUsers, setAvailableUsers] = useState<User[]>([]);
 
     // Suivi Modal
     const [showEntryModal, setShowEntryModal] = useState(false);
     // Combined Entry Mode
     const [entryForm, setEntryForm] = useState({ heures: '', materiel: '' });
     const [entryDate, setEntryDate] = useState(new Date().toISOString().split('T')[0]);
-    const [selectedUserId, setSelectedUserId] = useState(currentUser.id); // For Delegation
 
     // Alert Modal
     const [showAlertModal, setShowAlertModal] = useState(false);
@@ -50,10 +47,6 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
         if (activeTab === 'ALERTES') {
             const res = await fetch(`/api/chantiers/${chantier.id}/alerts`);
             if (res.ok) setAlerts(await res.json());
-        }
-        if ((activeTab === 'EQUIPE' || showEditModal || showEntryModal) && availableUsers.length === 0) {
-            const resUsers = await fetch('/api/users');
-            if (resUsers.ok) setAvailableUsers(await resUsers.json());
         }
     };
 
@@ -83,7 +76,7 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                user_id: selectedUserId,
+                user_id: currentUser.id,
                 chantier_id: chantier.id,
                 date: entryDate,
                 heures: h,
@@ -98,16 +91,6 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
         }
     };
 
-    // --- Team Logic ---
-    const toggleMember = async (userId: number, isMember: boolean) => {
-        const method = isMember ? 'DELETE' : 'POST';
-        const res = await fetch(`/api/chantiers/${chantier.id}/members`, {
-            method,
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ user_id: userId })
-        });
-        if (res.ok) fetchDetails();
-    };
 
     // --- Alert Logic ---
     const handleCreateAlert = async (e: React.FormEvent) => {
@@ -165,7 +148,6 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
                     {[
                         { id: 'SUIVI', icon: Clock, label: 'Suivi' },
                         { id: 'INFO', icon: Info, label: 'Infos' },
-                        { id: 'EQUIPE', icon: Users, label: 'Équipe' },
                         { id: 'ALERTES', icon: Bell, label: 'Alertes' },
                     ].map(tab => {
                         const Icon = tab.icon;
@@ -208,8 +190,9 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
                                 <thead className="bg-slate-900/50 text-gray-500 font-bold uppercase text-xs">
                                     <tr>
                                         <th className="p-4">Date</th>
-                                        <th className="p-4">Quoi</th>
-                                        <th className="p-4 text-right">Valeur</th>
+                                        <th className="p-4">Qui</th>
+                                        <th className="p-4 text-right">Heures</th>
+                                        <th className="p-4 text-right">Matériel</th>
                                         <th className="p-4 text-right">Statut</th>
                                     </tr>
                                 </thead>
@@ -218,11 +201,13 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
                                         <tr key={e.id} className="hover:bg-white/5">
                                             <td className="p-4 text-gray-300 font-mono">{e.date}</td>
                                             <td className="p-4 text-white font-medium">
-                                                {e.heures > 0 ? 'Heures' : 'Matériel'}
-                                                {currentUser.role === 'admin' && <div className="text-xs text-gray-500">{e.user_name}</div>}
+                                                {e.user_name}
                                             </td>
-                                            <td className="p-4 text-right font-mono font-bold">
-                                                {e.heures > 0 ? `${e.heures}h` : `${e.materiel}.-`}
+                                            <td className="p-4 text-right font-mono font-bold text-white">
+                                                {e.heures > 0 ? `${e.heures}h` : '-'}
+                                            </td>
+                                            <td className="p-4 text-right font-mono font-bold text-blue-400">
+                                                {e.materiel > 0 ? `${e.materiel}.-` : '-'}
                                             </td>
                                             <td className="p-4 text-right">
                                                 <StatusBadge status={e.status} type="entry" />
@@ -275,46 +260,7 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
                     </div>
                 )}
 
-                {/* EQUIPE TAB */}
-                {activeTab === 'EQUIPE' && (
-                    <div className="space-y-6 animate-slide-up">
-                        <div className="card">
-                            <h3 className="font-bold text-white mb-4 uppercase text-sm tracking-wider">Membres du chantier</h3>
-                            <div className="flex flex-wrap gap-3">
-                                {availableUsers.filter(u => chantier.members.includes(u.id)).map(u => (
-                                    <div key={u.id} className="flex items-center gap-2 px-3 py-2 bg-slate-700 rounded-lg border border-slate-600">
-                                        <div className="w-6 h-6 rounded-full bg-ohm-primary text-ohm-bg flex items-center justify-center font-bold text-xs">{u.username[0]}</div>
-                                        <span className="text-white text-sm font-medium">{u.username}</span>
-                                        {currentUser.role === 'admin' && (
-                                            <button onClick={() => toggleMember(u.id, true)} className="text-gray-400 hover:text-red-400 ml-2">
-                                                <X size={14} />
-                                            </button>
-                                        )}
-                                    </div>
-                                ))}
-                                {chantier.members.length === 0 && <span className="text-gray-500 italic">Aucun membre assigné</span>}
-                            </div>
-                        </div>
 
-                        {currentUser.role === 'admin' && (
-                            <div className="card">
-                                <h3 className="font-bold text-white mb-4 uppercase text-sm tracking-wider">Ajouter un membre</h3>
-                                <div className="flex flex-wrap gap-3">
-                                    {availableUsers.filter(u => !chantier.members.includes(u.id) && u.role !== 'admin').map(u => (
-                                        <button
-                                            key={u.id}
-                                            onClick={() => toggleMember(u.id, false)}
-                                            className="flex items-center gap-2 px-3 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg border border-slate-700 border-dashed hover:border-solid transition-all"
-                                        >
-                                            <Plus size={14} className="text-gray-400" />
-                                            <span className="text-gray-300 text-sm">{u.username}</span>
-                                        </button>
-                                    ))}
-                                </div>
-                            </div>
-                        )}
-                    </div>
-                )}
 
                 {/* ALERTES TAB */}
                 {activeTab === 'ALERTES' && (
@@ -360,17 +306,10 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
                                 </div>
                                 <div>
                                     <label className="text-xs font-bold text-gray-500 uppercase">Ouvrier</label>
-                                    <select
-                                        className="input-field mt-1"
-                                        value={selectedUserId}
-                                        onChange={e => setSelectedUserId(parseInt(e.target.value))}
-                                        disabled={currentUser.role !== 'admin'}
-                                    >
-                                        <option value={currentUser.id}>Moi-même ({currentUser.username})</option>
-                                        {currentUser.role === 'admin' && availableUsers.filter(u => u.id !== currentUser.id).map(u => (
-                                            <option key={u.id} value={u.id}>{u.username}</option>
-                                        ))}
-                                    </select>
+                                    <div className="input-field mt-1 flex items-center gap-2 text-gray-400">
+                                        <span>{currentUser.username}</span>
+                                        <span className="text-xs px-2 py-0.5 rounded bg-ohm-primary/20 text-ohm-primary border border-ohm-primary/30">Moi-même</span>
+                                    </div>
                                 </div>
                             </div>
 

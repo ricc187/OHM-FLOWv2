@@ -341,8 +341,6 @@ def trigger_backup():
 @app.route('/api/chantiers', methods=['GET', 'POST'])
 def manage_chantiers():
     if request.method == 'GET':
-        user_id = request.args.get('user_id', type=int)
-        role = request.args.get('role', 'user')
         status = request.args.get('status') # 'FUTURE', 'ACTIVE', 'DONE' or 'ALL'
 
         query = Chantier.query
@@ -351,9 +349,7 @@ def manage_chantiers():
         if status and status != 'ALL':
             query = query.filter(Chantier.status == status)
         
-        # Access Rule: User sees only their chantiers, Admin sees all
-        if role != 'admin' and user_id:
-             query = query.join(chantier_members).join(User).filter(User.id == user_id)
+        # Everyone sees all chantiers now (Requirement change)
         
         chantiers = query.all()
         return jsonify([c.to_dict() for c in chantiers])
@@ -372,12 +368,7 @@ def manage_chantiers():
             status=data.get('status', 'FUTURE')
         )
         
-        # Handle initial members
-        if 'members' in data:
-            for uid in data['members']:
-                u = db.session.get(User, uid)
-                if u:
-                    new_chantier.members.append(u)
+        # Members assignment removed
 
         db.session.add(new_chantier)
         db.session.commit()
@@ -433,16 +424,8 @@ def manage_chantier_members(chantier_id):
 
 @app.route('/api/chantiers/<int:chantier_id>/entries', methods=['GET'])
 def get_chantier_entries(chantier_id):
-    role = request.args.get('role') 
-    user_id = request.args.get('user_id')
-
-    if role == 'admin':
-        entries = Entry.query.filter_by(chantier_id=chantier_id).all()
-    elif role == 'user' and user_id:
-        entries = Entry.query.filter_by(chantier_id=chantier_id, user_id=user_id).all()
-    else:
-        return jsonify({'error': 'Unauthorized or missing params'}), 403
-        
+    # Everyone can see all entries for a chantier
+    entries = Entry.query.filter_by(chantier_id=chantier_id).all()
     return jsonify([e.to_dict() for e in entries])
 
 @app.route('/api/entries', methods=['POST'])

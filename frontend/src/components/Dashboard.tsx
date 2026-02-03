@@ -15,7 +15,6 @@ export const Dashboard: React.FC<Props> = ({ currentUser, onSelectChantier }) =>
     const [showCreate, setShowCreate] = useState(false);
 
     // Create Form State
-    const [availableUsers, setAvailableUsers] = useState<User[]>([]);
     const [newChantier, setNewChantier] = useState({
         nom: '',
         annee: new Date().getFullYear(),
@@ -24,19 +23,12 @@ export const Dashboard: React.FC<Props> = ({ currentUser, onSelectChantier }) =>
         address_billing: '',
         date_start: '',
         date_end: '',
-        remarque: '',
-        members: [] as number[]
+        remarque: ''
     });
 
     useEffect(() => {
         fetchChantiers();
-        if (currentUser.role === 'admin') fetchUsers();
     }, []);
-
-    const fetchUsers = async () => {
-        const res = await fetch('/api/users');
-        if (res.ok) setAvailableUsers(await res.json());
-    };
 
     useEffect(() => {
         if (filterStatus === 'ALL') {
@@ -47,7 +39,7 @@ export const Dashboard: React.FC<Props> = ({ currentUser, onSelectChantier }) =>
     }, [filterStatus, chantiers]);
 
     const fetchChantiers = async () => {
-        const res = await fetch(`/api/chantiers?user_id=${currentUser.id}&role=${currentUser.role}`);
+        const res = await fetch(`/api/chantiers?status=ALL`);
         if (res.ok) setChantiers(await res.json());
     };
 
@@ -67,8 +59,7 @@ export const Dashboard: React.FC<Props> = ({ currentUser, onSelectChantier }) =>
                 address_billing: '',
                 date_start: '',
                 date_end: '',
-                remarque: '',
-                members: []
+                remarque: ''
             });
             setShowCreate(false);
             fetchChantiers();
@@ -110,10 +101,13 @@ export const Dashboard: React.FC<Props> = ({ currentUser, onSelectChantier }) =>
 
             {/* Status Filter Tabs */}
             <div className="flex p-1 bg-ohm-surface border border-slate-700 rounded-xl w-full md:w-auto self-start">
-                {(['ACTIVE', 'FUTURE', 'DONE', 'ALL'] as const).map(status => (
+                {(currentUser.role === 'admin'
+                    ? ['ACTIVE', 'FUTURE', 'DONE', 'ALL']
+                    : ['ACTIVE', 'ALL']
+                ).map(status => (
                     <button
                         key={status}
-                        onClick={() => setFilterStatus(status)}
+                        onClick={() => setFilterStatus(status as any)}
                         className={`px-6 py-2 rounded-lg text-sm font-bold transition-all ${filterStatus === status
                             ? 'bg-slate-700 text-white shadow-lg'
                             : 'text-gray-400 hover:text-white'
@@ -192,33 +186,6 @@ export const Dashboard: React.FC<Props> = ({ currentUser, onSelectChantier }) =>
                         <div>
                             <label className="text-xs font-bold text-gray-400 uppercase">Remarques</label>
                             <textarea className="input-field mt-1 min-h-[80px]" value={newChantier.remarque} onChange={e => setNewChantier({ ...newChantier, remarque: e.target.value })} />
-                        </div>
-
-                        <div>
-                            <label className="text-xs font-bold text-gray-400 uppercase mb-2 block">Assigner des membres</label>
-                            <div className="flex flex-wrap gap-2">
-                                {availableUsers.filter(u => u.role !== 'admin').map(u => (
-                                    <button
-                                        key={u.id}
-                                        type="button"
-                                        onClick={() => {
-                                            const isSelected = newChantier.members.includes(u.id);
-                                            setNewChantier(prev => ({
-                                                ...prev,
-                                                members: isSelected
-                                                    ? prev.members.filter(id => id !== u.id)
-                                                    : [...prev.members, u.id]
-                                            }));
-                                        }}
-                                        className={`px-3 py-1 rounded-full text-xs font-bold border transition-all ${newChantier.members.includes(u.id)
-                                            ? 'bg-ohm-primary text-ohm-bg border-ohm-primary'
-                                            : 'bg-transparent text-gray-400 border-gray-600 hover:border-gray-400'
-                                            }`}
-                                    >
-                                        {u.username}
-                                    </button>
-                                ))}
-                            </div>
                         </div>
 
                         <div className="flex justify-end pt-4">
