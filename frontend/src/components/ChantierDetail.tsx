@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Chantier, Entry, User, Alert } from '../types';
-import { Plus, X, Check, ArrowLeft, Clock, Calendar, Bell, Info, Pencil } from 'lucide-react';
+import { Plus, Minus, X, Check, ArrowLeft, Clock, Calendar, Bell, Info, Pencil } from 'lucide-react';
 import { StatusBadge } from './StatusBadge';
 
 interface Props {
@@ -292,60 +292,109 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
 
             {/* ENTRY MODAL */}
             {showEntryModal && (
-                <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-end sm:items-center justify-center z-50 p-0 sm:p-4">
-                    <div className="w-full max-w-sm bg-surface sm:rounded-3xl border-t sm:border border-slate-700 shadow-2xl overflow-hidden animate-slide-up">
-                        <div className="flex justify-between items-center mb-6">
-                            <h3 className="text-xl font-bold text-white uppercase">Nouvelle Saisie</h3>
-                            <button onClick={() => setShowEntryModal(false)}><X className="text-gray-400" /></button>
+                <div className="fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center z-50 p-4">
+                    <div className="w-full max-w-2xl bg-slate-900 rounded-3xl border border-slate-700 shadow-2xl overflow-hidden animate-fade-in ring-1 ring-white/10">
+                        <div className="p-8 border-b border-white/5 flex justify-between items-center bg-gradient-to-r from-slate-900 to-slate-800">
+                            <div>
+                                <h3 className="text-2xl font-black text-white uppercase tracking-tight">Nouvelle Saisie</h3>
+                                <div className="text-gray-400 text-sm mt-1">Ajoutez des heures ou du matériel pour ce chantier.</div>
+                            </div>
+                            <button onClick={() => setShowEntryModal(false)} className="p-2 rounded-full hover:bg-white/10 text-gray-400 hover:text-white transition-colors">
+                                <X size={24} />
+                            </button>
                         </div>
-                        <form onSubmit={handleEntrySubmit} className="space-y-4">
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                <div>
-                                    <label className="text-xs font-bold text-gray-500 uppercase">Date</label>
-                                    <input type="date" required className="input-field mt-1" value={entryDate} onChange={e => setEntryDate(e.target.value)} />
+
+                        <form onSubmit={handleEntrySubmit} className="p-8 space-y-8">
+
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                                <div className="space-y-2">
+                                    <label className="text-xs font-bold text-ohm-primary uppercase tracking-widest">Date</label>
+                                    <input
+                                        type="date"
+                                        required
+                                        className="w-full bg-black/20 border border-slate-700 rounded-xl px-4 py-4 text-white font-mono text-lg focus:ring-2 focus:ring-ohm-primary/50 focus:border-ohm-primary transition-all outline-none"
+                                        value={entryDate}
+                                        onChange={e => setEntryDate(e.target.value)}
+                                    />
                                 </div>
-                                <div>
-                                    <label className="text-xs font-bold text-gray-500 uppercase">Ouvrier</label>
-                                    <div className="input-field mt-1 flex items-center gap-2 text-gray-400">
+                                <div className="space-y-2">
+                                    <label className="text-xs font-bold text-ohm-primary uppercase tracking-widest">Ouvrier</label>
+                                    <div className="w-full bg-black/20 border border-slate-700 rounded-xl px-4 py-4 text-gray-300 font-medium flex items-center justify-between">
                                         <span>{currentUser.username}</span>
-                                        <span className="text-xs px-2 py-0.5 rounded bg-ohm-primary/20 text-ohm-primary border border-ohm-primary/30">Moi-même</span>
+                                        <div className="px-2 py-1 bg-ohm-primary/10 text-ohm-primary text-xs font-bold rounded uppercase">Moi-même</div>
                                     </div>
                                 </div>
                             </div>
 
-                            <div className="grid grid-cols-2 gap-4">
-                                <div>
-                                    <label className="text-xs font-bold text-gray-500 uppercase">Heures</label>
-                                    <div className="relative mt-1">
-                                        <input
-                                            type="number"
-                                            step="0.5"
-                                            className="input-field pr-8"
-                                            placeholder="0"
-                                            value={entryForm.heures}
-                                            onChange={e => setEntryForm({ ...entryForm, heures: e.target.value })}
-                                        />
-                                        <span className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 font-bold text-sm">h</span>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                                <div className="bg-slate-800/50 p-6 rounded-2xl border border-slate-700/50 hover:border-ohm-primary/50 transition-colors group">
+                                    <label className="flex items-center gap-2 text-sm font-bold text-gray-400 uppercase mb-4 group-hover:text-white transition-colors">
+                                        <Clock size={18} className="text-ohm-primary" />
+                                        Heures Travaillées
+                                    </label>
+                                    <div className="flex items-center gap-4">
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                const current = parseFloat(entryForm.heures) || 0;
+                                                setEntryForm({ ...entryForm, heures: Math.max(0, current - 0.5).toString() });
+                                            }}
+                                            className="w-12 h-12 rounded-xl bg-slate-700 hover:bg-red-500/20 text-white hover:text-red-400 flex items-center justify-center transition-colors shadow-lg"
+                                        >
+                                            <Minus size={20} strokeWidth={3} />
+                                        </button>
+
+                                        <div className="relative flex-1">
+                                            <input
+                                                type="number"
+                                                step="0.5"
+                                                className="w-full bg-transparent text-center text-4xl font-black text-white py-2 focus:outline-none placeholder-slate-700 appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                                                placeholder="0"
+                                                value={entryForm.heures}
+                                                onChange={e => setEntryForm({ ...entryForm, heures: e.target.value })}
+                                            />
+                                            <span className="absolute right-0 bottom-4 text-gray-500 font-bold text-xs uppercase tracking-wider">HRS</span>
+                                        </div>
+
+                                        <button
+                                            type="button"
+                                            onClick={() => {
+                                                const current = parseFloat(entryForm.heures) || 0;
+                                                setEntryForm({ ...entryForm, heures: (current + 0.5).toString() });
+                                            }}
+                                            className="w-12 h-12 rounded-xl bg-slate-700 hover:bg-ohm-primary text-white hover:text-ohm-bg flex items-center justify-center transition-colors shadow-lg"
+                                        >
+                                            <Plus size={20} strokeWidth={3} />
+                                        </button>
                                     </div>
                                 </div>
-                                <div>
-                                    <label className="text-xs font-bold text-gray-500 uppercase">Matériel</label>
-                                    <div className="relative mt-1">
+
+                                <div className="bg-slate-800/50 p-6 rounded-2xl border border-slate-700/50 hover:border-blue-500/50 transition-colors group">
+                                    <label className="flex items-center gap-2 text-sm font-bold text-gray-400 uppercase mb-4 group-hover:text-white transition-colors">
+                                        <div className="w-4 h-4 rounded-full border-2 border-blue-500"></div>
+                                        Matériel / Frais
+                                    </label>
+                                    <div className="relative">
                                         <input
                                             type="number"
                                             step="0.01"
-                                            className="input-field pr-12"
+                                            className="w-full bg-transparent text-center text-4xl font-black text-white py-2 focus:outline-none placeholder-slate-700 appearance-none [&::-webkit-inner-spin-button]:appearance-none border-b-2 border-transparent focus:border-blue-500 transition-all"
                                             placeholder="0.00"
                                             value={entryForm.materiel}
                                             onChange={e => setEntryForm({ ...entryForm, materiel: e.target.value })}
                                         />
-                                        <span className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 font-bold text-sm">CHF</span>
+                                        <span className="absolute right-0 bottom-4 text-gray-500 font-bold text-xs uppercase tracking-wider">CHF</span>
                                     </div>
                                 </div>
                             </div>
 
-                            <div className="pt-2">
-                                <button type="submit" className="w-full py-4 bg-ohm-primary text-ohm-bg font-black rounded-xl hover:bg-yellow-300">VALIDER</button>
+                            <div className="pt-4">
+                                <button
+                                    type="submit"
+                                    className="w-full py-5 bg-ohm-primary text-ohm-bg font-black text-lg rounded-2xl hover:bg-yellow-300 hover:scale-[1.01] active:scale-[0.99] transition-all shadow-xl shadow-primary/20 uppercase tracking-widest"
+                                >
+                                    Valider la Saisie
+                                </button>
                             </div>
                         </form>
                     </div>

@@ -1,6 +1,6 @@
-
 import React from 'react';
-import { Logo } from './Icons';
+import { OhmIcon } from './Icons';
+import { LayoutDashboard, Calendar, Users, ClipboardCheck, LogOut } from 'lucide-react';
 
 interface User {
     username: string;
@@ -16,59 +16,105 @@ interface LayoutProps {
 
 export const Layout: React.FC<LayoutProps> = ({ children, user, onLogout, onNavigate }) => {
     return (
-        <div className="min-h-screen bg-ohm-bg flex flex-col">
-            <header className="sticky top-0 z-50 bg-ohm-surface/80 backdrop-blur-md border-b border-slate-800 px-4 py-3 shadow-lg">
-                <div className="max-w-6xl mx-auto flex items-center justify-between">
-                    <button onClick={() => onNavigate('dashboard')} className="hover:opacity-80 transition-opacity">
-                        <Logo />
-                    </button>
-                    <button onClick={() => onNavigate('planning')} className="ml-4 md:ml-8 text-sm font-bold text-gray-400 hover:text-white transition-colors uppercase tracking-widest flex items-center gap-2">
-                        <span className="hidden md:inline">Planning & Congés</span>
-                        <span className="md:hidden">Planning</span>
-                    </button>
+        <div className="flex min-h-screen bg-ohm-bg">
+            {/* Sidebar */}
+            <aside className="fixed left-0 top-0 z-50 h-screen w-20 hover:w-64 bg-ohm-surface/95 backdrop-blur-md border-r border-slate-800 shadow-2xl transition-all duration-300 group flex flex-col overflow-hidden">
 
-                    <div className="flex items-center gap-3 md:gap-6">
-                        <div className="hidden md:flex flex-col items-end">
-                            <span className="text-sm font-semibold text-ohm-text-main">{user?.username || 'Guest'}</span>
-                            <span className="text-[10px] uppercase tracking-widest text-ohm-primary">{user?.role || 'Visitor'}</span>
+                {/* Logo Area */}
+                <div className="h-20 flex items-center justify-start border-b border-white/5 transition-all w-full overflow-hidden shrink-0">
+                    <button onClick={() => onNavigate('dashboard')} className="flex items-center w-full h-full px-4 group-hover:px-6 transition-all duration-300">
+                        {/* Fixed width container for icon */}
+                        <div className="w-12 h-12 flex items-center justify-center flex-shrink-0">
+                            <OhmIcon />
                         </div>
+                        {/* Text Container with Width Transition */}
+                        <div className="w-0 overflow-hidden group-hover:w-40 transition-all duration-500 ease-in-out flex flex-col justify-center ml-0 group-hover:ml-4">
+                            <span className="opacity-0 group-hover:opacity-100 transition-opacity duration-300 delay-100 font-extrabold text-2xl tracking-tighter text-white whitespace-nowrap">
+                                OHM<span className="text-ohm-primary">FLOW</span>
+                            </span>
+                        </div>
+                    </button>
+                </div>
 
-                        <div className="flex items-center gap-2">
-                            {user?.role === 'admin' && (
-                                <>
-                                    <button
-                                        onClick={() => onNavigate('admin-users')}
-                                        className="p-2 bg-slate-800 rounded-lg hover:bg-slate-700 transition-colors text-xs font-bold text-gray-400 hover:text-white flex items-center gap-2"
-                                    >
-                                        <span className="md:hidden">USR</span>
-                                        <span className="hidden md:inline">GESTION USERS</span>
-                                    </button>
-                                    <button
-                                        onClick={() => onNavigate('admin-entries')}
-                                        className="p-2 bg-slate-700 rounded-lg hover:bg-slate-600 transition-colors text-xs font-bold text-ohm-text-main flex items-center gap-2"
-                                    >
-                                        <span className="md:hidden">VAL</span>
-                                        <span className="hidden md:inline">VALIDATION SAISIES</span>
-                                    </button>
-                                </>
-                            )}
-                            <button
-                                onClick={onLogout}
-                                className="p-2 text-red-400 hover:text-red-300 transition-colors"
-                                title="Déconnexion"
-                            >
-                                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
-                                </svg>
-                            </button>
+                {/* Navigation Items */}
+                <nav className="flex-1 py-8 px-3 space-y-2 flex flex-col items-center group-hover:items-stretch">
+
+                    <NavItem
+                        icon={<LayoutDashboard size={24} />}
+                        label="Tableau de bord"
+                        onClick={() => onNavigate('dashboard')}
+                    />
+
+                    <NavItem
+                        icon={<Calendar size={24} />}
+                        label="Planning & Congés"
+                        onClick={() => onNavigate('planning')}
+                    />
+
+                    {user?.role === 'admin' && (
+                        <>
+                            <div className="w-full h-px bg-white/10 my-4" />
+                            <div className="hidden group-hover:block px-4 text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-2 animate-fade-in delay-200">
+                                Administration
+                            </div>
+
+                            <NavItem
+                                icon={<Users size={24} />}
+                                label="Gestion Utilisateurs"
+                                onClick={() => onNavigate('admin-users')}
+                            />
+
+                            <NavItem
+                                icon={<ClipboardCheck size={24} />}
+                                label="Validation Saisies"
+                                onClick={() => onNavigate('admin-entries')}
+                            />
+                        </>
+                    )}
+
+                </nav>
+
+                {/* User & Logout */}
+                <div className="p-4 border-t border-white/5 bg-black/20 mt-auto">
+                    <div className="flex items-center gap-3 min-w-max">
+                        <div className="w-10 h-10 rounded-full bg-gradient-to-br from-ohm-primary to-yellow-600 flex items-center justify-center font-bold text-ohm-bg shadow-lg shrink-0">
+                            {user?.username?.[0].toUpperCase() || 'G'}
                         </div>
+                        <div className="w-0 overflow-hidden group-hover:w-32 transition-all duration-300 flex flex-col justify-center">
+                            <div className="font-bold text-white text-sm truncate opacity-0 group-hover:opacity-100 transition-opacity duration-300 delay-75">{user?.username || 'Guest'}</div>
+                            <div className="text-[10px] uppercase text-ohm-primary font-bold tracking-wider truncate opacity-0 group-hover:opacity-100 transition-opacity duration-300 delay-75">{user?.role || 'Visiteur'}</div>
+                        </div>
+                        <button
+                            onClick={onLogout}
+                            className="p-2 rounded-lg hover:bg-red-500/10 text-gray-400 hover:text-red-400 transition-colors opacity-0 group-hover:opacity-100 duration-300 ml-auto"
+                            title="Déconnexion"
+                        >
+                            <LogOut size={20} />
+                        </button>
                     </div>
                 </div>
-            </header>
 
-            <main className="flex-1 w-full max-w-6xl mx-auto p-4 md:p-8">
+            </aside>
+
+            {/* Main Content Area */}
+            <main className="flex-1 ml-20 transition-all duration-300 p-8 w-full max-w-[1600px]">
                 {children}
             </main>
         </div>
     );
 };
+
+// Helper Component for Nav Items
+const NavItem = ({ icon, label, onClick }: { icon: React.ReactNode, label: string, onClick: () => void }) => (
+    <button
+        onClick={onClick}
+        className="w-full h-12 flex items-center gap-4 px-3 rounded-xl text-gray-400 hover:text-white hover:bg-white/5 transition-all group/item relative overflow-hidden"
+    >
+        <div className="w-8 flex justify-center flex-shrink-0">
+            {icon}
+        </div>
+        <span className="opacity-0 group-hover:opacity-100 transition-opacity duration-300 font-bold text-sm whitespace-nowrap delay-75">
+            {label}
+        </span>
+    </button>
+);

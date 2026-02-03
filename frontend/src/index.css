@@ -11,19 +11,54 @@
   ::-webkit-scrollbar {
     width: 8px;
   }
+
   ::-webkit-scrollbar-track {
     @apply bg-surface;
   }
+
   ::-webkit-scrollbar-thumb {
     @apply bg-white/10 rounded-full hover:bg-white/20 transition-colors;
   }
 }
 
 @layer components {
-    .card {
-        @apply bg-surface rounded-lg p-6 shadow-lg border border-slate-700;
+  .card {
+    @apply bg-surface rounded-lg p-6 shadow-lg border border-slate-700;
+  }
+
+  .input-field {
+    @apply bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white focus:outline-none focus:border-primary w-full;
+  }
+}
+
+@layer utilities {
+  .animate-fade-in {
+    animation: fadeIn 0.3s ease-out;
+  }
+
+  .animate-slide-up {
+    animation: slideUp 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  @keyframes fadeIn {
+    from {
+      opacity: 0;
     }
-    .input-field {
-        @apply bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white focus:outline-none focus:border-primary w-full;
+
+    to {
+      opacity: 1;
     }
+  }
+
+  @keyframes slideUp {
+    from {
+      transform: translateY(20px);
+      opacity: 0;
+    }
+
+    to {
+      transform: translateY(0);
+      opacity: 1;
+    }
+  }
 }
