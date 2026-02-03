@@ -1,7 +1,6 @@
 import React from 'react';
 import { OhmIcon } from './Icons';
-import { LayoutDashboard, Calendar, Users, ClipboardCheck, LogOut } from 'lucide-react';
-
+import { LayoutDashboard, Calendar, Users, ClipboardCheck, LogOut, BarChart3 } from 'lucide-react';
 interface User {
     username: string;
     role: string;
@@ -57,6 +56,12 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, onLogout, onNavi
                             <div className="hidden group-hover:block px-4 text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-2 animate-fade-in delay-200">
                                 Administration
                             </div>
+
+                            <NavItem
+                                icon={<BarChart3 size={24} />}
+                                label="Statistiques"
+                                onClick={() => onNavigate('stats')}
+                            />
 
                             <NavItem
                                 icon={<Users size={24} />}

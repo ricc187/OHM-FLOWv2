@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Chantier, Entry, User, Alert } from '../types';
-import { Plus, Minus, X, Check, ArrowLeft, Clock, Calendar, Bell, Info, Pencil } from 'lucide-react';
+import { Plus, Minus, X, Check, ArrowLeft, Clock, Calendar, Bell, Info, Pencil, Download } from 'lucide-react';
 import { StatusBadge } from './StatusBadge';
 
 interface Props {
@@ -116,6 +116,10 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
         fetchDetails();
     };
 
+    const handleExport = () => {
+        window.open(`/api/export?chantier_id=${chantier.id}`, '_blank');
+    };
+
     const totalHeures = entries.reduce((acc, curr) => acc + curr.heures, 0);
     const totalMateriel = entries.reduce((acc, curr) => acc + curr.materiel, 0);
 
@@ -143,28 +147,39 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
                     </div>
                 </div>
 
-                {/* Tags Navigation */}
-                <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
-                    {[
-                        { id: 'SUIVI', icon: Clock, label: 'Suivi' },
-                        { id: 'INFO', icon: Info, label: 'Infos' },
-                        { id: 'ALERTES', icon: Bell, label: 'Alertes' },
-                    ].map(tab => {
-                        const Icon = tab.icon;
-                        const isActive = activeTab === tab.id;
-                        return (
-                            <button
-                                key={tab.id}
-                                onClick={() => setActiveTab(tab.id as Tab)}
-                                className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm font-bold transition-all whitespace-nowrap ${isActive
-                                    ? 'bg-ohm-primary text-ohm-bg shadow-lg shadow-primary/20'
-                                    : 'bg-surface text-gray-400 hover:text-white border border-slate-700'
-                                    }`}
-                            >
-                                <Icon size={16} /> {tab.label}
-                            </button>
-                        )
-                    })}
+                {/* Tags Navigation & Export */}
+                <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
+                        {[
+                            { id: 'SUIVI', icon: Clock, label: 'Suivi' },
+                            { id: 'INFO', icon: Info, label: 'Infos' },
+                            { id: 'ALERTES', icon: Bell, label: 'Alertes' },
+                        ].map(tab => {
+                            const Icon = tab.icon;
+                            const isActive = activeTab === tab.id;
+                            return (
+                                <button
+                                    key={tab.id}
+                                    onClick={() => setActiveTab(tab.id as Tab)}
+                                    className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm font-bold transition-all whitespace-nowrap ${isActive
+                                        ? 'bg-ohm-primary text-ohm-bg shadow-lg shadow-primary/20'
+                                        : 'bg-surface text-gray-400 hover:text-white border border-slate-700'
+                                        }`}
+                                >
+                                    <Icon size={16} /> {tab.label}
+                                </button>
+                            )
+                        })}
+                    </div>
+
+                    <button
+                        onClick={handleExport}
+                        className="flex items-center gap-2 px-4 py-2 rounded-lg bg-slate-800 text-gray-400 hover:text-white hover:bg-slate-700 transition-colors border border-slate-700 group"
+                        title="Exporter en CSV"
+                    >
+                        <Download size={18} className="group-hover:text-ohm-primary transition-colors" />
+                        <span className="hidden sm:inline font-bold text-xs uppercase tracking-wider">Export</span>
+                    </button>
                 </div>
             </div>
 

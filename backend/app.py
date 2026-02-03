@@ -574,18 +574,24 @@ def manage_single_alert(alert_id):
 
 @app.route('/api/export', methods=['GET'])
 def export_data():
-    # Export all entries to CSV
+    # Export entries to CSV
     import csv
     import io
     from flask import make_response
-
-    entries = Entry.query.all()
+    
+    chantier_id = request.args.get('chantier_id')
+    query = Entry.query
+    
+    if chantier_id:
+        query = query.filter_by(chantier_id=chantier_id)
+        
+    entries = query.all()
     
     # Create CSV in memory
     si = io.StringIO()
     cw = csv.writer(si)
     # Headers
-    cw.writerow(['ID', 'Date', 'Chantier', 'Ouvrier', 'Heures', 'Materiel'])
+    cw.writerow(['ID', 'Date', 'Chantier', 'Ouvrier', 'Heures', 'Materiel', 'Statut'])
     
     for e in entries:
         cw.writerow([
@@ -594,13 +600,63 @@ def export_data():
             e.chantier.nom, 
             e.user.username, 
             e.heures, 
-            e.materiel
+            e.materiel,
+            e.status
         ])
     
     output = make_response(si.getvalue())
-    output.headers["Content-Disposition"] = "attachment; filename=export_entries.csv"
+    filename = f"export_chantier_{chantier_id}.csv" if chantier_id else "export_global.csv"
+    output.headers["Content-Disposition"] = f"attachment; filename={filename}"
     output.headers["Content-type"] = "text/csv"
     return output
+
+@app.route('/api/stats', methods=['GET'])
+def get_stats():
+    from sqlalchemy import func
+    from datetime import datetime, timedelta
+    from collections import defaultdict
+    
+    total_entries = db.session.query(func.count(Entry.id)).scalar() or 0
+    total_hours = db.session.query(func.sum(Entry.heures)).scalar() or 0
+    total_material = db.session.query(func.sum(Entry.materiel)).scalar() or 0
+    
+    # Active chantiers count
+    active_chantiers = db.session.query(func.count(Chantier.id)).filter(Chantier.status == 'ACTIVE').scalar() or 0
+    
+    # History Processing (Last 6 Months)
+    # Fetch all entries - for a larger app, we would use SQL grouping
+    entries = Entry.query.all()
+    
+    # Group by Month
+    monthly_data = defaultdict(lambda: {'hours': 0, 'material': 0})
+    
+    for e in entries:
+        try:
+            # Assumes e.date is YYYY-MM-DD
+            month_key = e.date[:7] # YYYY-MM
+            monthly_data[month_key]['hours'] += e.heures
+            monthly_data[month_key]['material'] += e.materiel
+        except:
+            continue
+            
+    # Format for Frontend (Sorted keys)
+    sorted_months = sorted(monthly_data.keys())[-6:] # Last 6 months
+    
+    history = []
+    for m in sorted_months:
+        history.append({
+            'month': m,
+            'hours': round(monthly_data[m]['hours'], 1),
+            'material': round(monthly_data[m]['material'], 2)
+        })
+
+    return jsonify({
+        'total_entries': total_entries,
+        'total_hours': round(total_hours, 1),
+        'total_material': round(total_material, 2),
+        'active_chantiers': active_chantiers,
+        'history': history
+    })
 
 if __name__ == '__main__':
     init_db()
