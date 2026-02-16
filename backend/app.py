@@ -24,6 +24,14 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db.init_app(app)
 
+# Enable WAL mode for SQLite (Better concurrency)
+with app.app_context():
+    try:
+        db.engine.connect().execute(text("PRAGMA journal_mode=WAL;"))
+        logger.info("SQLite WAL mode enabled.")
+    except Exception as e:
+        logger.warning(f"Could not enable WAL mode: {e}")
+
 # --- Models ---
 
 # --- Models ---
@@ -623,24 +631,39 @@ def get_stats():
     # Active chantiers count
     active_chantiers = db.session.query(func.count(Chantier.id)).filter(Chantier.status == 'ACTIVE').scalar() or 0
     
-    # History Processing (Last 6 Months)
-    # Fetch all entries - for a larger app, we would use SQL grouping
+    # History Processing (Last 12 Months)
     entries = Entry.query.all()
     
-    # Group by Month
+    # Group by Month and Year for Comparison
     monthly_data = defaultdict(lambda: {'hours': 0, 'material': 0})
+    current_year = datetime.now().year
+    last_year = current_year - 1
     
+    total_hours_curr = 0
+    total_hours_last = 0
+    total_mat_curr = 0
+    total_mat_last = 0
+
     for e in entries:
         try:
             # Assumes e.date is YYYY-MM-DD
+            year = int(e.date[:4])
             month_key = e.date[:7] # YYYY-MM
+            
             monthly_data[month_key]['hours'] += e.heures
             monthly_data[month_key]['material'] += e.materiel
+            
+            if year == current_year:
+                total_hours_curr += e.heures
+                total_mat_curr += e.materiel
+            elif year == last_year:
+                total_hours_last += e.heures
+                total_mat_last += e.materiel
         except:
             continue
             
     # Format for Frontend (Sorted keys)
-    sorted_months = sorted(monthly_data.keys())[-6:] # Last 6 months
+    sorted_months = sorted(monthly_data.keys())[-12:] # Last 12 months
     
     history = []
     for m in sorted_months:
@@ -650,12 +673,27 @@ def get_stats():
             'material': round(monthly_data[m]['material'], 2)
         })
 
+    # Calculate Growth
+    hours_growth = 0
+    if total_hours_last > 0:
+        hours_growth = ((total_hours_curr - total_hours_last) / total_hours_last) * 100
+        
+    mat_growth = 0
+    if total_mat_last > 0:
+        mat_growth = ((total_mat_curr - total_mat_last) / total_mat_last) * 100
+
     return jsonify({
         'total_entries': total_entries,
         'total_hours': round(total_hours, 1),
         'total_material': round(total_material, 2),
         'active_chantiers': active_chantiers,
-        'history': history
+        'history': history,
+        'comparison': {
+            'hours_growth': round(hours_growth, 1),
+            'material_growth': round(mat_growth, 1),
+            'hours_curr': round(total_hours_curr, 1),
+            'hours_last': round(total_hours_last, 1)
+        }
     })
 
 if __name__ == '__main__':

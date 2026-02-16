@@ -124,32 +124,34 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
     const totalMateriel = entries.reduce((acc, curr) => acc + curr.materiel, 0);
 
     return (
-        <div className="animate-fade-in relative pb-24 min-h-screen">
-            {/* Header */}
-            <div className="sticky top-0 z-30 bg-ohm-bg/95 backdrop-blur-md pt-4 pb-4 border-b border-slate-800 mb-6">
-                <div className="flex items-center gap-4 mb-4">
-                    <button onClick={onBack} className="p-2 rounded-lg bg-surface border border-slate-700 hover:border-ohm-primary text-gray-400 hover:text-white transition-all">
-                        <ArrowLeft size={20} />
-                    </button>
-                    <div className="flex-1">
-                        <div className="flex items-center gap-3">
-                            <h1 className="text-2xl sm:text-3xl font-black text-white uppercase tracking-tight">{chantier.nom}</h1>
-                            <StatusBadge status={chantier.status} type="chantier" />
-                        </div>
-                        <div className="flex items-center gap-2 text-sm text-gray-400 font-mono">
-                            <span>{chantier.annee}</span>
-                            {currentUser.role === 'admin' && (
-                                <button onClick={() => { setEditForm(chantier); setShowEditModal(true); }} className="p-1 hover:text-white transition-colors">
-                                    <Pencil size={14} />
-                                </button>
-                            )}
+        <div className="animate-fade-in relative pb-40 min-h-screen">
+            {/* Header - Completely transparent as requested */}
+            <div className="sticky top-0 z-30 pt-4 pb-4 mb-6">
+                <div className="flex flex-col sm:flex-row sm:items-center gap-4 mb-4">
+                    <div className="flex items-center gap-4 w-full">
+                        <button onClick={onBack} className="p-2 rounded-lg bg-surface border border-slate-700 hover:border-ohm-primary text-gray-400 hover:text-white transition-all shrink-0">
+                            <ArrowLeft size={20} />
+                        </button>
+                        <div className="flex-1 min-w-0">
+                            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                                <h1 className="text-2xl sm:text-3xl font-black text-white uppercase tracking-tight truncate">{chantier.nom}</h1>
+                                <StatusBadge status={chantier.status} type="chantier" />
+                            </div>
+                            <div className="flex items-center gap-2 text-sm text-gray-400 font-mono mt-1">
+                                <span>{chantier.annee}</span>
+                                {currentUser.role === 'admin' && (
+                                    <button onClick={() => { setEditForm(chantier); setShowEditModal(true); }} className="p-1 hover:text-white transition-colors">
+                                        <Pencil size={14} />
+                                    </button>
+                                )}
+                            </div>
                         </div>
                     </div>
                 </div>
 
                 {/* Tags Navigation & Export */}
-                <div className="flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                    <div className="flex items-center gap-2 overflow-x-auto no-scrollbar pb-1 sm:pb-0 w-full sm:w-auto">
                         {[
                             { id: 'SUIVI', icon: Clock, label: 'Suivi' },
                             { id: 'INFO', icon: Info, label: 'Infos' },
@@ -172,14 +174,16 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
                         })}
                     </div>
 
-                    <button
-                        onClick={handleExport}
-                        className="flex items-center gap-2 px-4 py-2 rounded-lg bg-slate-800 text-gray-400 hover:text-white hover:bg-slate-700 transition-colors border border-slate-700 group"
-                        title="Exporter en CSV"
-                    >
-                        <Download size={18} className="group-hover:text-ohm-primary transition-colors" />
-                        <span className="hidden sm:inline font-bold text-xs uppercase tracking-wider">Export</span>
-                    </button>
+                    <div className="flex justify-end w-full sm:w-auto">
+                        <button
+                            onClick={handleExport}
+                            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-slate-800 text-gray-400 hover:text-white hover:bg-slate-700 transition-colors border border-slate-700 group w-full sm:w-auto justify-center"
+                            title="Exporter en CSV"
+                        >
+                            <Download size={18} className="group-hover:text-ohm-primary transition-colors" />
+                            <span className="font-bold text-xs uppercase tracking-wider">Export</span>
+                        </button>
+                    </div>
                 </div>
             </div>
 
@@ -189,18 +193,34 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
                 {/* SUIVI TAB */}
                 {activeTab === 'SUIVI' && (
                     <div className="space-y-6 animate-slide-up">
-                        <div className="grid grid-cols-2 gap-4">
-                            <div className="card bg-gradient-to-br from-surface to-slate-900 border-l-4 border-l-ohm-primary">
-                                <span className="text-xs font-bold text-gray-400 uppercase">Heures</span>
-                                <div className="text-3xl font-black text-white mt-1">{totalHeures} <span className="text-sm text-gray-500 font-normal">h</span></div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <div className="card bg-gradient-to-br from-surface to-slate-900 border-l-4 border-l-ohm-primary relative overflow-hidden group flex flex-col items-center justify-center text-center py-8">
+                                {/* Permanent subtle gold background */}
+                                <div className="absolute inset-0 bg-ohm-primary/5"></div>
+                                {/* Stronger on hover */}
+                                <div className="absolute inset-0 bg-ohm-mix opacity-0 group-hover:opacity-20 transition-opacity duration-500"></div>
+                                <span className="text-xs font-bold text-ohm-primary uppercase relative z-10 tracking-widest mb-2">Heures Totales</span>
+                                <div className="text-4xl font-black text-white relative z-10">{totalHeures} <span className="text-lg text-gray-400 font-normal">h</span></div>
                             </div>
-                            <div className="card bg-gradient-to-br from-surface to-slate-900 border-l-4 border-l-blue-500">
-                                <span className="text-xs font-bold text-gray-400 uppercase">Matériel</span>
-                                <div className="text-3xl font-black text-white mt-1">{totalMateriel} <span className="text-sm text-gray-500 font-normal">CHF</span></div>
+                            <div className="card bg-gradient-to-br from-surface to-slate-900 border-l-4 border-l-secondary relative overflow-hidden group flex flex-col items-center justify-center text-center py-8">
+                                {/* Permanent subtle blue background */}
+                                <div className="absolute inset-0 bg-secondary/10"></div>
+                                {/* Stronger on hover */}
+                                <div className="absolute inset-0 bg-blue-500/20 opacity-0 group-hover:opacity-30 transition-opacity duration-500"></div>
+                                <span className="text-xs font-bold text-blue-400 uppercase relative z-10 tracking-widest mb-2">Matériel & Frais</span>
+                                <div className="text-4xl font-black text-white relative z-10">{totalMateriel} <span className="text-lg text-gray-400 font-normal">CHF</span></div>
                             </div>
                         </div>
 
-                        <div className="card overflow-hidden p-0">
+                        {/* Static Add Button (Moved from FAB) */}
+                        <button
+                            onClick={() => setShowEntryModal(true)}
+                            className="w-full py-3 bg-primary text-black font-black uppercase tracking-widest rounded-xl shadow-md hover:bg-yellow-400 hover:scale-[1.01] active:scale-[0.99] transition-all flex items-center justify-center gap-2 text-sm"
+                        >
+                            <span className="text-lg">+</span> AJOUTER UNE ENTRÉE
+                        </button>
+
+                        <div className="card overflow-hidden p-0 overflow-x-auto">
                             <table className="w-full text-left text-sm">
                                 <thead className="bg-slate-900/50 text-gray-500 font-bold uppercase text-xs">
                                     <tr>
@@ -234,15 +254,7 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
                             {entries.length === 0 && <div className="p-8 text-center text-gray-500 italic">Aucune saisie</div>}
                         </div>
 
-                        {/* FAB - Allower for ACTIVE and FUTURE if user is assigned */}
-                        {(chantier.status === 'ACTIVE' || chantier.status === 'FUTURE') && (
-                            <button
-                                onClick={() => { setShowEntryModal(true); setEntryForm({ heures: '', materiel: '' }); }}
-                                className="fixed bottom-8 right-8 w-14 h-14 bg-ohm-primary text-ohm-bg rounded-full shadow-lg shadow-primary/30 flex items-center justify-center hover:scale-110 active:scale-95 transition-all z-30"
-                            >
-                                <Plus size={28} />
-                            </button>
-                        )}
+                        {/* FAB Removed */}
                     </div>
                 )}
 
@@ -308,8 +320,8 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
             {/* ENTRY MODAL */}
             {showEntryModal && (
                 <div className="fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center z-50 p-4">
-                    <div className="w-full max-w-2xl bg-slate-900 rounded-3xl border border-slate-700 shadow-2xl overflow-hidden animate-fade-in ring-1 ring-white/10">
-                        <div className="p-8 border-b border-white/5 flex justify-between items-center bg-gradient-to-r from-slate-900 to-slate-800">
+                    <div className="w-full max-w-2xl bg-slate-900 rounded-3xl border border-slate-700 shadow-2xl overflow-hidden animate-fade-in ring-1 ring-white/10 max-h-[90vh] flex flex-col">
+                        <div className="p-8 border-b border-white/5 flex justify-between items-center bg-gradient-to-r from-slate-900 to-slate-800 shrink-0">
                             <div>
                                 <h3 className="text-2xl font-black text-white uppercase tracking-tight">Nouvelle Saisie</h3>
                                 <div className="text-gray-400 text-sm mt-1">Ajoutez des heures ou du matériel pour ce chantier.</div>
@@ -319,7 +331,7 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
                             </button>
                         </div>
 
-                        <form onSubmit={handleEntrySubmit} className="p-8 space-y-8">
+                        <form onSubmit={handleEntrySubmit} className="p-8 space-y-8 overflow-y-auto">
 
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                                 <div className="space-y-2">

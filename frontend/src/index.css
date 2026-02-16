@@ -1,64 +1,106 @@
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap');
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 @layer base {
   body {
-    @apply bg-background text-text antialiased font-sans selection:bg-primary/30 selection:text-white;
+    @apply bg-background text-text antialiased font-sans selection:bg-primary/50 selection:text-black;
+    /* Rich Midnight Blue Background */
+    background-color: #001233;
+    background-image:
+      radial-gradient(circle at 50% -20%, #002855 0%, #001233 60%);
   }
 
   /* Custom Scrollbar */
   ::-webkit-scrollbar {
-    width: 8px;
+    width: 6px;
+    height: 6px;
   }
 
   ::-webkit-scrollbar-track {
-    @apply bg-surface;
+    @apply bg-black/40;
   }
 
   ::-webkit-scrollbar-thumb {
-    @apply bg-white/10 rounded-full hover:bg-white/20 transition-colors;
+    @apply bg-white/20 rounded-full hover:bg-primary transition-colors;
   }
 }
 
 @layer components {
+
+  /* Aggressive Glass Panel */
+  .glass-panel {
+    @apply bg-glass backdrop-blur-2xl border border-white/10 shadow-lg rounded-2xl relative overflow-hidden;
+    box-shadow: 0 4px 30px rgba(0, 0, 0, 0.5), inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+  }
+
+  /* Universal Card Style */
   .card {
-    @apply bg-surface rounded-lg p-6 shadow-lg border border-slate-700;
+    @apply bg-glass border border-white/10 rounded-2xl p-6 shadow-lg backdrop-blur-md relative overflow-hidden;
+  }
+
+  /* Interactive Card with Spotlight intent (handled via hover for now) */
+  .hover-card {
+    @apply transition-all duration-300 hover:scale-[1.02] hover:border-primary/50 hover:shadow-neon relative;
+  }
+
+  .hover-card::before {
+    content: '';
+    @apply absolute inset-0 bg-gradient-to-r from-transparent via-white/5 to-transparent opacity-0 transition-opacity duration-500 pointer-events-none;
+    transform: skewX(-20deg) translateX(-150%);
+  }
+
+  .hover-card:hover::before {
+    @apply opacity-100;
+    animation: shine 1.5s forwards;
+  }
+
+  /* Neon Text */
+  .text-neon {
+    text-shadow: 0 0 10px rgba(255, 215, 0, 0.5);
+  }
+
+  .text-neon-blue {
+    text-shadow: 0 0 10px rgba(0, 240, 255, 0.5);
+  }
+
+  /* Gradient Text */
+  .text-gradient {
+    @apply bg-clip-text text-transparent bg-gradient-to-r from-white via-white/90 to-white/70;
+  }
+
+  .text-gradient-gold {
+    @apply bg-clip-text text-transparent bg-gradient-to-r from-primary via-yellow-200 to-primary-dark drop-shadow-sm;
+    filter: drop-shadow(0 0 2px rgba(255, 215, 0, 0.3));
+  }
+
+  .text-gradient-mix {
+    @apply bg-clip-text text-transparent bg-gradient-to-r from-primary via-white to-secondary drop-shadow-sm;
   }
 
   .input-field {
-    @apply bg-slate-800 border border-slate-600 rounded px-3 py-2 text-white focus:outline-none focus:border-primary w-full;
+    @apply bg-black/40 border border-white/10 rounded-xl px-4 py-3 text-white placeholder-white/20 focus:outline-none focus:border-primary/80 focus:ring-1 focus:ring-primary/80 focus:bg-black/60 focus:shadow-neon transition-all duration-200 w-full font-mono text-sm;
+  }
+
+  /* Button Styles */
+  .btn-primary {
+    @apply bg-primary text-black font-black uppercase tracking-wider py-3 px-6 rounded-xl shadow-neon hover:shadow-neon-hover hover:scale-105 active:scale-95 transition-all duration-200 relative overflow-hidden;
   }
 }
 
 @layer utilities {
-  .animate-fade-in {
-    animation: fadeIn 0.3s ease-out;
+  .text-glow {
+    text-shadow: 0 0 5px currentColor;
   }
 
-  .animate-slide-up {
-    animation: slideUp 0.4s cubic-bezier(0.16, 1, 0.3, 1);
-  }
-
-  @keyframes fadeIn {
-    from {
-      opacity: 0;
+  @keyframes shine {
+    0% {
+      transform: skewX(-20deg) translateX(-150%);
     }
 
-    to {
-      opacity: 1;
-    }
-  }
-
-  @keyframes slideUp {
-    from {
-      transform: translateY(20px);
-      opacity: 0;
-    }
-
-    to {
-      transform: translateY(0);
-      opacity: 1;
+    100% {
+      transform: skewX(-20deg) translateX(150%);
     }
   }
 }

@@ -1,7 +1,138 @@
 import React, { useEffect, useState } from 'react';
 import { User, Leave } from '../types';
-import { Calendar, Plus, Clock } from 'lucide-react';
+import { Calendar, Plus, Clock, ChevronLeft, ChevronRight } from 'lucide-react';
 import { StatusBadge } from './StatusBadge';
+
+// Helper to get days in month
+const getDaysInMonth = (year: number, month: number) => new Date(year, month + 1, 0).getDate();
+
+// Helper to check if a date is within a range (inclusive)
+const isWithinRange = (checkDate: Date, start: string, end: string) => {
+    const s = new Date(start);
+    const e = new Date(end);
+    // Reset hours to avoid timezone issues/miscalculations for full days
+    s.setHours(0, 0, 0, 0);
+    e.setHours(0, 0, 0, 0);
+    checkDate.setHours(0, 0, 0, 0);
+    return checkDate >= s && checkDate <= e;
+};
+
+const CalendarView = ({ leaves }: { leaves: Leave[] }) => {
+    const [currentDate, setCurrentDate] = useState(new Date());
+
+    const year = currentDate.getFullYear();
+    const month = currentDate.getMonth();
+
+    const daysInMonth = getDaysInMonth(year, month);
+    const firstDay = new Date(year, month, 1).getDay(); // 0=Sun, 1=Mon
+    // Adjust for Monday start (Mon=0, ..., Sun=6)
+    const startOffset = firstDay === 0 ? 6 : firstDay - 1;
+
+    const monthNames = ["Janvier", "Février", "Mars", "Avril", "Mai", "Juin", "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre"];
+
+    const prevMonth = () => setCurrentDate(new Date(year, month - 1, 1));
+    const nextMonth = () => setCurrentDate(new Date(year, month + 1, 1));
+
+    const renderDays = () => {
+        const days = [];
+        // Empty cells for offset
+        for (let i = 0; i < startOffset; i++) {
+            days.push(<div key={`empty-${i}`} className="h-24 bg-slate-900/30 border border-slate-800/50"></div>);
+        }
+
+        // Days of month
+        for (let d = 1; d <= daysInMonth; d++) {
+            const dateObj = new Date(year, month, d);
+            // dateStr removed as it was unused
+
+            // Find overlapping leaves
+            const dayLeaves = leaves
+                .filter(l => (l.status === 'APPROVED' || l.status === 'PENDING') && isWithinRange(new Date(year, month, d), l.date_start, l.date_end))
+                .sort((a, b) => a.id - b.id); // Sort by ID to keep consistent order across days
+
+            days.push(
+                <div key={d} className="min-h-[6rem] bg-slate-900/50 border border-slate-800 pt-2 px-0 flex flex-col gap-1 overflow-hidden hover:bg-slate-800/50 transition-colors p-0">
+                    <span className={`text-sm font-mono font-bold self-end mb-1 mr-2 ${new Date().toDateString() === dateObj.toDateString()
+                        ? 'bg-ohm-primary text-black w-6 h-6 rounded-full flex items-center justify-center'
+                        : 'text-gray-500'
+                        }`}>{d}</span>
+
+                    {dayLeaves.map(l => {
+                        const isStart = new Date(l.date_start).getTime() === dateObj.getTime();
+                        const isEnd = new Date(l.date_end).getTime() === dateObj.getTime();
+                        // Also check if it continues from yesterday (even if not start date, e.g. spanning months)
+                        const continuesFromPrev = !isStart && d > 1;
+                        // Check if continues to tomorrow
+                        const continuesToNext = !isEnd && d < daysInMonth;
+
+                        let roundedClass = 'rounded';
+                        let marginClass = 'mx-1';
+
+                        if (continuesFromPrev && continuesToNext) {
+                            roundedClass = 'rounded-none';
+                            marginClass = 'mx-0 border-l-0 border-r-0';
+                        } else if (continuesFromPrev) {
+                            roundedClass = 'rounded-l-none rounded-r';
+                            marginClass = 'ml-0 mr-1 border-l-0';
+                        } else if (continuesToNext) {
+                            roundedClass = 'rounded-l rounded-r-none';
+                            marginClass = 'ml-1 mr-0 border-r-0';
+                        }
+
+                        return (
+                            <div
+                                key={l.id}
+                                className={`py-1 text-[10px] font-bold truncate flex items-center gap-1 shadow-sm h-6 ${roundedClass} ${marginClass} ${l.status === 'APPROVED'
+                                    ? 'bg-green-500/20 text-green-400 border border-green-500/30'
+                                    : 'bg-orange-500/20 text-orange-400 border border-orange-500/30'
+                                    } ${continuesFromPrev ? 'pl-2' : 'pl-2'} ${continuesToNext ? 'pr-2' : 'pr-2'}`}
+                                title={`${l.user_name} - ${l.type}`}
+                            >
+                                {/* Only show dot on start or if space permits? Showing it always is fine for now */}
+                                {isStart && <span className="w-1.5 h-1.5 rounded-full shrink-0 bg-current"></span>}
+                                {/* Hide text if it's a middle segment to save space, or keep it for readability? Keeping it. */}
+                                {l.user_name}
+                            </div>
+                        );
+                    })}
+                </div>
+            );
+        }
+        return days;
+    };
+
+    return (
+        <div className="card p-0 overflow-hidden border border-slate-700">
+            {/* Calendar Header */}
+            <div className="p-4 flex items-center justify-between bg-slate-800 border-b border-slate-700">
+                <button onClick={prevMonth} className="p-2 hover:bg-slate-700 rounded-lg text-gray-400 hover:text-white transition-colors"><ChevronLeft /></button>
+                <h3 className="text-xl font-bold text-white uppercase tracking-wider">{monthNames[month]} {year}</h3>
+                <button onClick={nextMonth} className="p-2 hover:bg-slate-700 rounded-lg text-gray-400 hover:text-white transition-colors"><ChevronRight /></button>
+            </div>
+
+            {/* Days Header */}
+            <div className="grid grid-cols-7 bg-slate-900 border-b border-slate-700">
+                {['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'].map(d => (
+                    <div key={d} className="p-3 text-center text-xs font-bold text-gray-500 uppercase tracking-widest">{d}</div>
+                ))}
+            </div>
+
+            {/* Calendar Grid */}
+            <div className="grid grid-cols-7 bg-slate-950">
+                {renderDays()}
+            </div>
+
+            <div className="p-4 bg-slate-900 border-t border-slate-800 flex gap-6 text-xs text-gray-400 font-mono">
+                <div className="flex items-center gap-2">
+                    <span className="w-3 h-3 rounded bg-green-500/20 border border-green-500/30"></span> Validé
+                </div>
+                <div className="flex items-center gap-2">
+                    <span className="w-3 h-3 rounded bg-orange-500/20 border border-orange-500/30"></span> En Attente
+                </div>
+            </div>
+        </div>
+    );
+};
 
 interface Props {
     currentUser: User;
@@ -87,30 +218,9 @@ export const Planning: React.FC<Props> = ({ currentUser }) => {
                 </div>
             </div>
 
-            {/* GLOBAL PLANNING */}
+            {/* GLOBAL PLANNING (CALENDAR) */}
             {activeTab === 'GLOBAL' && (
-                <div className="card space-y-4">
-                    <h3 className="font-bold text-white uppercase tracking-wider mb-4">Absences à venir</h3>
-                    <div className="space-y-2">
-                        {leaves.filter(l => l.status === 'APPROVED').map(l => (
-                            <div key={l.id} className="flex items-center justify-between p-3 bg-slate-900 rounded-lg border-l-4 border-l-orange-400">
-                                <div className="flex items-center gap-3">
-                                    <div className="w-8 h-8 bg-slate-800 rounded-full flex items-center justify-center font-bold text-xs text-white">
-                                        {l.user_name?.[0]}
-                                    </div>
-                                    <div>
-                                        <div className="font-bold text-white">{l.user_name}</div>
-                                        <div className="text-xs text-gray-400 font-mono">{l.date_start} au {l.date_end}</div>
-                                    </div>
-                                </div>
-                                <div className="text-sm text-gray-500 font-medium uppercase">{renderLeaveType(l.type)}</div>
-                            </div>
-                        ))}
-                        {leaves.filter(l => l.status === 'APPROVED').length === 0 && (
-                            <div className="text-center py-8 text-gray-500 italic">Aucune absence prévue</div>
-                        )}
-                    </div>
-                </div>
+                <CalendarView leaves={leaves} />
             )}
 
             {/* MY LEAVES */}

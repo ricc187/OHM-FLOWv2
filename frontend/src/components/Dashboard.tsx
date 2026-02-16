@@ -70,37 +70,37 @@ export const Dashboard: React.FC<Props> = ({ currentUser, onSelectChantier }) =>
         <div className="space-y-8 animate-fade-in pb-12">
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                 <div>
-                    <h2 className="text-3xl font-bold text-white flex items-center gap-3">
-                        <Folder className="text-ohm-primary" size={32} />
-                        <span className="bg-gradient-to-r from-white to-gray-400 bg-clip-text text-transparent">Chantiers</span>
+                    <h2 className="text-5xl font-display font-black text-white flex items-center gap-4 tracking-tighter">
+                        <div className="p-4 bg-primary/10 rounded-3xl border border-primary/30 shadow-[0_0_30px_rgba(255,215,0,0.2)] relative overflow-hidden group">
+                            <div className="absolute inset-0 bg-primary/20 blur-xl opacity-0 group-hover:opacity-100 transition-opacity duration-500"></div>
+                            <Folder className="text-primary relative z-10 drop-shadow-[0_0_10px_rgba(255,215,0,0.5)]" size={40} />
+                        </div>
+                        <span className="text-gradient-gold text-glow">VOS CHANTIERS</span>
                     </h2>
-                    <p className="text-gray-400 mt-1">Gérez vos projets et suivez l'avancement</p>
+                    <p className="text-text-muted mt-3 text-xl font-light tracking-wide max-w-2xl">
+                        Interface de gestion <span className="text-primary font-bold">temps réel</span> pour vos projets.
+                    </p>
                 </div>
 
-                <div className="flex gap-3">
+                <div className="flex gap-4">
                     {currentUser.role === 'admin' && (
                         <>
                             <a
                                 href="/api/export"
                                 target="_blank"
-                                className="bg-white/5 hover:bg-white/10 text-white px-4 py-2 rounded-lg border border-white/10 flex items-center gap-2 transition-all hover:border-white/20"
+                                className="glass-panel px-6 py-4 rounded-xl flex items-center gap-3 transition-all hover:bg-white/5 hover:scale-105 active:scale-95 group text-white font-bold tracking-wide border-white/5"
                             >
-                                <Download size={18} />
-                                <span className="hidden sm:inline">Export CSV</span>
+                                <Download size={22} className="text-secondary group-hover:text-white transition-colors group-hover:drop-shadow-[0_0_8px_rgba(0,240,255,0.8)]" />
+                                <span className="hidden sm:inline">EXPORT CSV</span>
                             </a>
-                            <button
-                                onClick={() => setShowCreate(!showCreate)}
-                                className="bg-ohm-primary text-ohm-bg px-4 py-2 rounded-lg font-bold flex items-center gap-2 hover:bg-yellow-300 transition-colors shadow-lg shadow-primary/20"
-                            >
-                                <Plus size={20} /> Nouveau
-                            </button>
+                            {/* Old Button Removed */}
                         </>
                     )}
                 </div>
             </div>
 
             {/* Status Filter Tabs */}
-            <div className="flex p-1 bg-ohm-surface border border-slate-700 rounded-xl w-full md:w-auto self-start">
+            <div className="flex p-2 bg-black/40 backdrop-blur-2xl border border-white/10 rounded-2xl w-full md:w-auto self-start shadow-glass relative overload-hidden">
                 {(currentUser.role === 'admin'
                     ? ['ACTIVE', 'FUTURE', 'DONE', 'ALL']
                     : ['ACTIVE', 'ALL']
@@ -108,42 +108,61 @@ export const Dashboard: React.FC<Props> = ({ currentUser, onSelectChantier }) =>
                     <button
                         key={status}
                         onClick={() => setFilterStatus(status as any)}
-                        className={`px-6 py-2 rounded-lg text-sm font-bold transition-all ${filterStatus === status
-                            ? 'bg-slate-700 text-white shadow-lg'
-                            : 'text-gray-400 hover:text-white'
+                        className={`px-8 py-3 rounded-xl text-sm font-black tracking-wider transition-all duration-300 relative overflow-hidden ${filterStatus === status
+                            ? 'text-black shadow-neon'
+                            : 'text-text-muted hover:text-white hover:bg-white/5'
                             }`}
                     >
-                        {status === 'ALL' ? 'TOUS' : status === 'FUTURE' ? 'À VENIR' : status === 'ACTIVE' ? 'EN COURS' : 'TERMINÉS'}
+                        {filterStatus === status && (
+                            <div className="absolute inset-0 bg-gradient-to-r from-primary via-primary-glow to-primary animate-[shine_3s_infinite] z-0"></div>
+                        )}
+                        <span className="relative z-10">
+                            {status === 'ALL' ? 'TOUS' : status === 'FUTURE' ? 'À VENIR' : status === 'ACTIVE' ? 'EN COURS' : 'TERMINÉS'}
+                        </span>
                     </button>
                 ))}
             </div>
 
+            {/* Large Static Create Button */}
+            {currentUser.role === 'admin' && (
+                <button
+                    onClick={() => setShowCreate(!showCreate)}
+                    className="w-full py-4 bg-gradient-to-r from-primary to-yellow-500 text-black font-black uppercase tracking-widest rounded-2xl shadow-lg hover:shadow-neon hover:scale-[1.01] active:scale-[0.99] transition-all flex items-center justify-center gap-3 text-lg"
+                >
+                    <Plus size={24} strokeWidth={3} />
+                    <span>CRÉER UN NOUVEAU CHANTIER</span>
+                </button>
+            )}
+
             {/* Create Form */}
             {showCreate && (
-                <div className="card bg-slate-800/50 border-l-4 border-l-ohm-primary animate-slide-up relative">
+                <div className="glass-panel p-8 animate-slide-up relative bg-black/60 border-primary/30 shadow-glow">
                     <button
                         onClick={() => setShowCreate(false)}
-                        className="absolute top-4 right-4 text-gray-400 hover:text-white transition-colors"
+                        className="absolute top-4 right-4 bg-white/5 p-2 rounded-full text-gray-400 hover:text-white hover:bg-red-500/20 hover:text-red-400 transition-all"
                     >
                         <X size={20} />
                     </button>
-                    <form onSubmit={handleCreateChantier} className="space-y-4">
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <h3 className="text-xl font-bold text-white mb-6 border-l-4 border-primary pl-4">Nouveau Projet</h3>
+
+                    <form onSubmit={handleCreateChantier} className="space-y-6">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                             <div>
-                                <label className="text-xs font-bold text-gray-400 uppercase">Nom du chantier</label>
+                                <label className="text-xs font-bold text-primary/80 uppercase tracking-widest mb-2 block">Nom du chantier</label>
                                 <input
                                     type="text"
-                                    className="input-field mt-1"
+                                    className="input-field"
                                     value={newChantier.nom}
                                     onChange={e => setNewChantier({ ...newChantier, nom: e.target.value })}
                                     required
+                                    placeholder="Ex: Rénovation Villa..."
                                 />
                             </div>
                             <div>
-                                <label className="text-xs font-bold text-gray-400 uppercase">Année</label>
+                                <label className="text-xs font-bold text-primary/80 uppercase tracking-widest mb-2 block">Année</label>
                                 <input
                                     type="number"
-                                    className="input-field mt-1"
+                                    className="input-field"
                                     value={newChantier.annee}
                                     onChange={e => setNewChantier({ ...newChantier, annee: parseInt(e.target.value) })}
                                     required
@@ -151,45 +170,45 @@ export const Dashboard: React.FC<Props> = ({ currentUser, onSelectChantier }) =>
                             </div>
                         </div>
 
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                             <div>
-                                <label className="text-xs font-bold text-gray-400 uppercase">Dates (Début - Fin)</label>
-                                <div className="flex gap-2 mt-1">
+                                <label className="text-xs font-bold text-primary/80 uppercase tracking-widest mb-2 block">Période (Début - Fin)</label>
+                                <div className="flex gap-3">
                                     <input type="date" className="input-field" value={newChantier.date_start} onChange={e => setNewChantier({ ...newChantier, date_start: e.target.value })} />
                                     <input type="date" className="input-field" value={newChantier.date_end} onChange={e => setNewChantier({ ...newChantier, date_end: e.target.value })} />
                                 </div>
                             </div>
                             <div>
-                                <label className="text-xs font-bold text-gray-400 uppercase">Statut</label>
+                                <label className="text-xs font-bold text-primary/80 uppercase tracking-widest mb-2 block">Statut Initial</label>
                                 <select
-                                    className="input-field mt-1"
+                                    className="input-field appearance-none"
                                     value={newChantier.status}
                                     onChange={e => setNewChantier({ ...newChantier, status: e.target.value as ChantierStatus })}
                                 >
-                                    <option value="FUTURE">À venir</option>
-                                    <option value="ACTIVE">En cours</option>
+                                    <option value="FUTURE" className="bg-surface">À venir</option>
+                                    <option value="ACTIVE" className="bg-surface">En cours</option>
                                 </select>
                             </div>
                         </div>
 
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                             <div>
-                                <label className="text-xs font-bold text-gray-400 uppercase">Adresse Travaux</label>
-                                <input type="text" className="input-field mt-1" value={newChantier.address_work} onChange={e => setNewChantier({ ...newChantier, address_work: e.target.value })} />
+                                <label className="text-xs font-bold text-primary/80 uppercase tracking-widest mb-2 block">Adresse Travaux</label>
+                                <input type="text" className="input-field" value={newChantier.address_work} onChange={e => setNewChantier({ ...newChantier, address_work: e.target.value })} placeholder="Rue, Ville..." />
                             </div>
                             <div>
-                                <label className="text-xs font-bold text-gray-400 uppercase">Adresse Facturation</label>
-                                <input type="text" className="input-field mt-1" value={newChantier.address_billing} onChange={e => setNewChantier({ ...newChantier, address_billing: e.target.value })} />
+                                <label className="text-xs font-bold text-primary/80 uppercase tracking-widest mb-2 block">Adresse Facturation</label>
+                                <input type="text" className="input-field" value={newChantier.address_billing} onChange={e => setNewChantier({ ...newChantier, address_billing: e.target.value })} placeholder="Si différente..." />
                             </div>
                         </div>
 
                         <div>
-                            <label className="text-xs font-bold text-gray-400 uppercase">Remarques</label>
-                            <textarea className="input-field mt-1 min-h-[80px]" value={newChantier.remarque} onChange={e => setNewChantier({ ...newChantier, remarque: e.target.value })} />
+                            <label className="text-xs font-bold text-primary/80 uppercase tracking-widest mb-2 block">Remarques</label>
+                            <textarea className="input-field min-h-[100px]" value={newChantier.remarque} onChange={e => setNewChantier({ ...newChantier, remarque: e.target.value })} placeholder="Informations complémentaires..." />
                         </div>
 
                         <div className="flex justify-end pt-4">
-                            <button type="submit" className="w-full md:w-auto px-8 py-3 bg-ohm-primary text-ohm-bg font-bold rounded-lg hover:bg-yellow-300 transition-colors">
+                            <button type="submit" className="w-full md:w-auto px-8 py-3 bg-gradient-to-r from-primary to-yellow-600 text-black font-bold rounded-xl hover:shadow-glow hover:scale-[1.02] transition-all">
                                 CRÉER LE CHANTIER
                             </button>
                         </div>
@@ -197,7 +216,7 @@ export const Dashboard: React.FC<Props> = ({ currentUser, onSelectChantier }) =>
                 </div>
             )}
 
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
                 {filteredChantiers.map((c) => (
                     <ChantierCard
                         key={c.id}
@@ -208,9 +227,9 @@ export const Dashboard: React.FC<Props> = ({ currentUser, onSelectChantier }) =>
             </div>
 
             {filteredChantiers.length === 0 && (
-                <div className="text-center py-20 text-gray-500 border-2 border-dashed border-white/5 rounded-2xl">
-                    <Folder size={48} className="mx-auto mb-4 opacity-20" />
-                    <p>Aucun chantier dans cette catégorie</p>
+                <div className="text-center py-24 text-gray-500 border border-dashed border-white/10 rounded-3xl bg-white/5 backdrop-blur-sm">
+                    <Folder size={64} className="mx-auto mb-6 opacity-20 text-white" />
+                    <p className="text-xl font-medium">Aucun chantier dans cette catégorie</p>
                 </div>
             )}
         </div>

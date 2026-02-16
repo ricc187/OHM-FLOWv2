@@ -27,5 +27,6 @@ RUN mkdir -p data
 
 EXPOSE 5000
 
-# Run Flask
-CMD ["python", "backend/app.py"]
+# Run Flask with Gunicorn
+# 4 workers for concurrency
+CMD ["gunicorn", "-w", "4", "-b", "0.0.0.0:5000", "backend.app:app"]
