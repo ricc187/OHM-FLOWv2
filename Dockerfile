@@ -28,5 +28,6 @@ RUN mkdir -p data
 EXPOSE 5000
 
 # Run Flask with Gunicorn
-# 4 workers for concurrency
-CMD ["gunicorn", "-w", "4", "-b", "0.0.0.0:5000", "backend.app:app"]
+# Run Flask with Gunicorn
+# Using 1 worker to prevent SQLite database locking issues
+CMD ["gunicorn", "-w", "1", "-b", "0.0.0.0:5000", "backend.app:app"]

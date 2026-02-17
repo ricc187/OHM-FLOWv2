@@ -20,7 +20,7 @@ export const AdminUsers: React.FC = () => {
 
     const fetchUsers = async () => {
         try {
-            const res = await fetch('/api/users');
+            const res = await fetch('/api/users', { headers: { 'Authorization': `Bearer ${localStorage.getItem('ohm_token')}` } });
             if (res.ok) {
                 setUsers(await res.json());
             }
@@ -52,14 +52,20 @@ export const AdminUsers: React.FC = () => {
             if (editingUser) {
                 const res = await fetch(`/api/users/${editingUser.id}`, {
                     method: 'PUT',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${localStorage.getItem('ohm_token')}`
+                    },
                     body: JSON.stringify(formData)
                 });
                 if (!res.ok) throw new Error('Update failed');
             } else {
                 const res = await fetch('/api/users', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${localStorage.getItem('ohm_token')}`
+                    },
                     body: JSON.stringify(formData)
                 });
                 if (!res.ok) throw new Error('Create failed');
@@ -74,8 +80,35 @@ export const AdminUsers: React.FC = () => {
 
     const handleDelete = async (id: number) => {
         if (confirm('Supprimer définitivement cet utilisateur ?')) {
-            const res = await fetch(`/api/users/${id}`, { method: 'DELETE' });
+            const res = await fetch(`/api/users/${id}`, {
+                method: 'DELETE',
+                headers: { 'Authorization': `Bearer ${localStorage.getItem('ohm_token')}` }
+            });
             if (res.ok) fetchUsers();
+        }
+    };
+
+    const handleBackup = async () => {
+        try {
+            const res = await fetch('/api/backup', {
+                headers: { 'Authorization': `Bearer ${localStorage.getItem('ohm_token')}` }
+            });
+            if (res.ok) {
+                const blob = await res.blob();
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `backup_${new Date().toISOString().slice(0, 10)}.db`;
+                document.body.appendChild(a);
+                a.click();
+                window.URL.revokeObjectURL(url);
+                document.body.removeChild(a);
+            } else {
+                alert('Erreur lors de la sauvegarde');
+            }
+        } catch (error) {
+            console.error(error);
+            alert('Erreur réseau');
         }
     };
 
@@ -86,15 +119,26 @@ export const AdminUsers: React.FC = () => {
                     <h1 className="text-3xl font-black text-ohm-text-main uppercase tracking-tighter">Équipe</h1>
                     <p className="text-ohm-text-muted text-sm mt-1">Gestion des accès sécurisés</p>
                 </div>
-                <button
-                    onClick={handleOpenCreate}
-                    className="bg-ohm-primary text-ohm-bg font-black px-6 py-3 rounded-xl shadow-lg hover:bg-yellow-300 transition-all flex items-center gap-2 uppercase text-xs tracking-wider"
-                >
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M12 4v16m8-8H4" />
-                    </svg>
-                    Ajouter
-                </button>
+                <div className="flex gap-3">
+                    <button
+                        onClick={handleBackup}
+                        className="bg-slate-700 text-ohm-text-main font-bold px-4 py-3 rounded-xl shadow-lg hover:bg-slate-600 transition-all flex items-center gap-2 uppercase text-xs tracking-wider"
+                    >
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                        </svg>
+                        Backup BDD
+                    </button>
+                    <button
+                        onClick={handleOpenCreate}
+                        className="bg-ohm-primary text-ohm-bg font-black px-6 py-3 rounded-xl shadow-lg hover:bg-yellow-300 transition-all flex items-center gap-2 uppercase text-xs tracking-wider"
+                    >
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M12 4v16m8-8H4" />
+                        </svg>
+                        Ajouter
+                    </button>
+                </div>
             </div>
 
             <div className="bg-ohm-surface border border-slate-800 rounded-2xl shadow-xl overflow-hidden">

@@ -14,7 +14,7 @@ export const AdminEntries: React.FC<Props> = () => {
     }, []);
 
     const fetchPendingEntries = async () => {
-        const res = await fetch('/api/entries/pending');
+        const res = await fetch('/api/entries/pending', { headers: { 'Authorization': `Bearer ${localStorage.getItem('ohm_token')}` } });
         if (res.ok) {
             setEntries(await res.json());
         }
@@ -22,7 +22,8 @@ export const AdminEntries: React.FC<Props> = () => {
 
     const handleValidate = async (entryId: number) => {
         const res = await fetch(`/api/entries/${entryId}/validate`, {
-            method: 'PUT'
+            method: 'PUT',
+            headers: { 'Authorization': `Bearer ${localStorage.getItem('ohm_token')}` }
         });
         if (res.ok) {
             fetchPendingEntries();
@@ -38,7 +39,8 @@ export const AdminEntries: React.FC<Props> = () => {
         // I'll stick to Delete for now as "Refuser" implies it's wrong.
         if (confirm('Refuser et supprimer cette saisie ?')) {
             const res = await fetch(`/api/entries/${entryId}`, {
-                method: 'DELETE'
+                method: 'DELETE',
+                headers: { 'Authorization': `Bearer ${localStorage.getItem('ohm_token')}` }
             });
             if (res.ok) {
                 fetchPendingEntries();

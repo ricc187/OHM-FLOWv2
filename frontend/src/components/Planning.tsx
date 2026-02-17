@@ -156,7 +156,7 @@ export const Planning: React.FC<Props> = ({ currentUser }) => {
         const url = activeTab === 'MY_LEAVES'
             ? `/api/leaves?user_id=${currentUser.id}`
             : '/api/leaves';
-        const res = await fetch(url);
+        const res = await fetch(url, { headers: { 'Authorization': `Bearer ${localStorage.getItem('ohm_token')}` } });
         if (res.ok) setLeaves(await res.json());
     };
 
@@ -164,7 +164,10 @@ export const Planning: React.FC<Props> = ({ currentUser }) => {
         e.preventDefault();
         const res = await fetch('/api/leaves', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${localStorage.getItem('ohm_token')}`
+            },
             body: JSON.stringify({
                 user_id: currentUser.id,
                 type: newLeave.type,
@@ -183,7 +186,10 @@ export const Planning: React.FC<Props> = ({ currentUser }) => {
     const handleValidation = async (leaveId: number, status: 'APPROVED' | 'REJECTED') => {
         const res = await fetch(`/api/leaves/${leaveId}/status`, {
             method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${localStorage.getItem('ohm_token')}`
+            },
             body: JSON.stringify({ status })
         });
         if (res.ok) fetchLeaves();

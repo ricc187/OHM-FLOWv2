@@ -1,7 +1,9 @@
 import os
 import shutil
 import datetime
-from flask import Flask, request, jsonify, send_from_directory
+import functools
+from itsdangerous import URLSafeTimedSerializer
+from flask import Flask, request, jsonify, send_from_directory, send_file
 from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
 from sqlalchemy.orm import DeclarativeBase
@@ -21,8 +23,35 @@ app = Flask(__name__, static_folder='../dist', static_url_path='/')
 CORS(app)  # Enable CORS for development
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.join(os.getcwd(), 'data', 'chantier.db')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['UPLOAD_FOLDER'] = os.path.join(os.getcwd(), 'data', 'uploads')
+os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+
+
+# Security Config
+app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'ohm-flow-secure-key-change-me-in-prod')
+serializer = URLSafeTimedSerializer(app.config['SECRET_KEY'])
 
 db.init_app(app)
+
+def token_required(f):
+    @functools.wraps(f)
+    def decorated(*args, **kwargs):
+        auth_header = request.headers.get('Authorization')
+        if not auth_header:
+            return jsonify({'error': 'Token is missing'}), 401
+        
+        try:
+            # Format: Bearer <token>
+            token = auth_header.split(" ")[1]
+            data = serializer.loads(token, max_age=86400) # Valid for 24h
+            current_user = User.query.get(data['user_id'])
+            if not current_user:
+                raise Exception('User not found')
+        except Exception as e:
+            return jsonify({'error': 'Token is invalid or expired'}), 401
+            
+        return f(current_user, *args, **kwargs)
+    return decorated
 
 # Enable WAL mode for SQLite (Better concurrency)
 with app.app_context():
@@ -63,6 +92,7 @@ class Chantier(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     nom = db.Column(db.String(100), nullable=False)
     annee = db.Column(db.Integer, nullable=False)
+    plan_pdf_path = db.Column(db.String(255), nullable=True)
     pdf_path = db.Column(db.String(200), nullable=True)
     
     # New fields
@@ -82,6 +112,7 @@ class Chantier(db.Model):
             'id': self.id,
             'nom': self.nom,
             'annee': self.annee,
+            'plan_pdf_path': self.plan_pdf_path,
             'pdf_path': self.pdf_path,
             'address_work': self.address_work,
             'address_billing': self.address_billing,
@@ -201,7 +232,8 @@ def init_db():
                     'date_start': 'VARCHAR(20)',
                     'date_end': 'VARCHAR(20)',
                     'remarque': 'TEXT',
-                    'status': "VARCHAR(20) DEFAULT 'FUTURE'"
+                    'status': "VARCHAR(20) DEFAULT 'FUTURE'",
+                    'plan_pdf_path': "VARCHAR(255)"
                 }
                 for col_name, col_type in new_cols.items():
                     if col_name not in cols:
@@ -245,31 +277,30 @@ def login():
     data = request.json
     pin = data.get('pin')
     
-    # Simple PIN auth: check if ANY user has this PIN? 
-    # Or username + pin? 
-    # User said: "pour me loguer on mette simplement un pin a 6 chiffre... permet d'accéder".
-    # This implies NO username field on login. Just PIN.
-    # What if 2 users have same PIN? Assume uniqueness or strict enforcement.
-    
+    # Simple PIN auth
     user = User.query.filter_by(pin=pin).first()
     if user:
-        return jsonify(user.to_dict())
+        token = serializer.dumps({'user_id': user.id})
+        return jsonify({**user.to_dict(), 'token': token})
     return jsonify({'error': 'Invalid PIN'}), 401
 
 @app.route('/api/users', methods=['GET', 'POST', 'DELETE'])
-def manage_users():
+@token_required
+def manage_users(current_user):
+    # Only Admin can manage users
+    if current_user.role != 'admin':
+         return jsonify({'error': 'Admin access required'}), 403
+
     if request.method == 'GET':
         users = User.query.all()
-        # Should we return PINs? Maybe unsafe but requested "on pourra creer... avec un pin".
-        # For admin view, showing PIN might be useful/requested.
-        return jsonify([{**u.to_dict(), 'pin': u.pin} for u in users])
+        # Security: Mask PINs
+        return jsonify([{**u.to_dict(), 'pin': '******'} for u in users])
 
     if request.method == 'POST':
         data = request.json
         if User.query.filter_by(username=data['username']).first():
              return jsonify({'error': 'Username exists'}), 400
         
-        # Enforce PIN uniqueness? Maybe.
         if User.query.filter_by(pin=data['pin']).first():
             return jsonify({'error': 'PIN already in use'}), 400
 
@@ -281,7 +312,11 @@ def manage_users():
     return jsonify({'error': 'Method not allowed on this endpoint, use /api/users/<id>'}), 405
 
 @app.route('/api/users/<int:user_id>', methods=['PUT', 'DELETE'])
-def user_operations(user_id):
+@token_required
+def user_operations(current_user, user_id):
+    if current_user.role != 'admin':
+         return jsonify({'error': 'Admin access required'}), 403
+
     user = db.session.get(User, user_id)
     if not user:
         return jsonify({'error': 'User not found'}), 404
@@ -303,11 +338,11 @@ def user_operations(user_id):
                 return jsonify({'error': 'Username exists'}), 400
             user.username = new_username
         
-        if new_pin and new_pin != user.pin:
-             # Validate PIN format (6 digits) - although frontend should handle, backend must enforce
+        if new_pin and new_pin != '******': # Ignore masked PIN
+             # Validate PIN format (6 digits)
             if len(new_pin) != 6 or not new_pin.isdigit():
                  return jsonify({'error': 'Invalid PIN format'}), 400
-            if User.query.filter_by(pin=new_pin).first():
+            if new_pin != user.pin and User.query.filter_by(pin=new_pin).first():
                 return jsonify({'error': 'PIN already in use'}), 400
             user.pin = new_pin
             
@@ -321,7 +356,10 @@ def user_operations(user_id):
 
 
 @app.route('/api/backup', methods=['POST'])
-def trigger_backup():
+@token_required
+def trigger_backup(current_user):
+    if current_user.role != 'admin':
+         return jsonify({'error': 'Admin access required'}), 403
     # Level 1: Local Backup
     try:
         backup_dir = os.path.join(os.getcwd(), 'backup')
@@ -347,7 +385,8 @@ def trigger_backup():
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/chantiers', methods=['GET', 'POST'])
-def manage_chantiers():
+@token_required
+def manage_chantiers(current_user):
     if request.method == 'GET':
         status = request.args.get('status') # 'FUTURE', 'ACTIVE', 'DONE' or 'ALL'
 
@@ -383,7 +422,8 @@ def manage_chantiers():
         return jsonify(new_chantier.to_dict()), 201
 
 @app.route('/api/chantiers/<int:chantier_id>', methods=['PUT', 'GET'])
-def chantier_detail(chantier_id):
+@token_required
+def chantier_detail(current_user, chantier_id):
     chantier = db.session.get(Chantier, chantier_id)
     if not chantier:
         return jsonify({'error': 'Chantier not found'}), 404
@@ -405,8 +445,37 @@ def chantier_detail(chantier_id):
         db.session.commit()
         return jsonify(chantier.to_dict())
 
+@app.route('/api/chantiers/<int:id>/pdf', methods=['POST'])
+@token_required
+def upload_chantier_pdf(current_user, id):
+    chantier = Chantier.query.get_or_404(id)
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file part'}), 400
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({'error': 'No selected file'}), 400
+    
+    if file and file.filename.lower().endswith('.pdf'):
+        filename = f"chantier_{id}_plan.pdf"
+        file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
+        chantier.plan_pdf_path = filename
+        db.session.commit()
+        return jsonify(chantier.to_dict())
+    
+    return jsonify({'error': 'Only PDF files are allowed'}), 400
+
+@app.route('/api/chantiers/<int:id>/pdf', methods=['GET'])
+@token_required
+def get_chantier_pdf(current_user, id):
+    chantier = Chantier.query.get_or_404(id)
+    if not chantier.plan_pdf_path:
+        return jsonify({'error': 'No PDF uploaded'}), 404
+    
+    return send_file(os.path.join(app.config['UPLOAD_FOLDER'], chantier.plan_pdf_path), as_attachment=False)
+
 @app.route('/api/chantiers/<int:chantier_id>/members', methods=['POST', 'DELETE'])
-def manage_chantier_members(chantier_id):
+@token_required
+def manage_chantier_members(current_user, chantier_id):
     chantier = db.session.get(Chantier, chantier_id)
     if not chantier:
         return jsonify({'error': 'Chantier not found'}), 404
@@ -431,13 +500,15 @@ def manage_chantier_members(chantier_id):
 
 
 @app.route('/api/chantiers/<int:chantier_id>/entries', methods=['GET'])
-def get_chantier_entries(chantier_id):
+@token_required
+def get_chantier_entries(current_user, chantier_id):
     # Everyone can see all entries for a chantier
     entries = Entry.query.filter_by(chantier_id=chantier_id).all()
     return jsonify([e.to_dict() for e in entries])
 
 @app.route('/api/entries', methods=['POST'])
-def add_entry():
+@token_required
+def add_entry(current_user):
     data = request.json
     
     # Delegation Logic:
@@ -459,13 +530,15 @@ def add_entry():
     return jsonify(new_entry.to_dict()), 201
 
 @app.route('/api/entries/pending', methods=['GET'])
-def get_pending_entries():
+@token_required
+def get_pending_entries(current_user):
     # Admin only (frontend check generally, backend should check role ideally)
     entries = Entry.query.filter_by(status='PENDING').all()
     return jsonify([e.to_dict() for e in entries])
 
 @app.route('/api/entries/<int:entry_id>/validate', methods=['PUT'])
-def validate_entry(entry_id):
+@token_required
+def validate_entry(current_user, entry_id):
     entry = Entry.query.get(entry_id)
     if not entry:
         return jsonify({'error': 'Entry not found'}), 404
@@ -474,7 +547,8 @@ def validate_entry(entry_id):
     return jsonify(entry.to_dict())
 
 @app.route('/api/entries/<int:entry_id>', methods=['PUT', 'DELETE'])
-def manage_entry(entry_id):
+@token_required
+def manage_entry(current_user, entry_id):
     entry = Entry.query.get(entry_id)
     if not entry:
         return jsonify({'error': 'Entry not found'}), 404
@@ -497,7 +571,8 @@ def manage_entry(entry_id):
         return jsonify(entry.to_dict())
 
 @app.route('/api/leaves', methods=['GET', 'POST'])
-def manage_leaves():
+@token_required
+def manage_leaves(current_user):
     if request.method == 'GET':
         user_id = request.args.get('user_id')
         if user_id:
@@ -521,7 +596,8 @@ def manage_leaves():
         return jsonify(new_leave.to_dict()), 201
 
 @app.route('/api/leaves/<int:leave_id>/status', methods=['PUT'])
-def update_leave_status(leave_id):
+@token_required
+def update_leave_status(current_user, leave_id):
     leave = Leave.query.get(leave_id)
     if not leave:
         return jsonify({'error': 'Leave not found'}), 404
@@ -545,7 +621,8 @@ def update_leave_status(leave_id):
     return jsonify(leave.to_dict())
 
 @app.route('/api/chantiers/<int:chantier_id>/alerts', methods=['GET', 'POST'])
-def manage_alerts(chantier_id):
+@token_required
+def manage_alerts(current_user, chantier_id):
     if request.method == 'GET':
         alerts = Alert.query.filter_by(chantier_id=chantier_id).all()
         return jsonify([a.to_dict() for a in alerts])
@@ -564,7 +641,8 @@ def manage_alerts(chantier_id):
         return jsonify(new_alert.to_dict()), 201
 
 @app.route('/api/alerts/<int:alert_id>', methods=['PUT', 'DELETE'])
-def manage_single_alert(alert_id):
+@token_required
+def manage_single_alert(current_user, alert_id):
     alert = Alert.query.get(alert_id)
     if not alert:
          return jsonify({'error': 'Alert not found'}), 404
@@ -581,13 +659,17 @@ def manage_single_alert(alert_id):
         return jsonify(alert.to_dict())
 
 @app.route('/api/export', methods=['GET'])
-def export_data():
+@token_required
+def export_data(current_user):
     # Export entries to CSV
     import csv
     import io
     from flask import make_response
     
     chantier_id = request.args.get('chantier_id')
+    year = request.args.get('year')
+    semester = request.args.get('semester') # S1, S2
+    
     query = Entry.query
     
     if chantier_id:
@@ -595,31 +677,65 @@ def export_data():
         
     entries = query.all()
     
+    # Filter in Python for simplicity with string dates
+    filtered_entries = []
+    for e in entries:
+        include = True
+        
+        # Date format YYYY-MM-DD
+        if year:
+            if not e.date.startswith(str(year)):
+                include = False
+                
+        if semester and include:
+            try:
+                month = int(e.date.split('-')[1])
+                if semester == 'S1':
+                    if month > 6: include = False
+                elif semester == 'S2':
+                    if month <= 6: include = False
+            except:
+                pass # potentially malformed date
+                
+        if include:
+            filtered_entries.append(e)
+    
     # Create CSV in memory
     si = io.StringIO()
     cw = csv.writer(si)
     # Headers
     cw.writerow(['ID', 'Date', 'Chantier', 'Ouvrier', 'Heures', 'Materiel', 'Statut'])
     
-    for e in entries:
+    for e in filtered_entries:
         cw.writerow([
             e.id, 
             e.date, 
-            e.chantier.nom, 
-            e.user.username, 
+            e.chantier.nom if e.chantier else 'Supprimé', 
+            e.user.username if e.user else 'Inconnu', 
             e.heures, 
             e.materiel,
             e.status
         ])
     
     output = make_response(si.getvalue())
-    filename = f"export_chantier_{chantier_id}.csv" if chantier_id else "export_global.csv"
+    
+    # Filename construction
+    parts = ["export"]
+    if chantier_id: parts.append(f"chantier_{chantier_id}")
+    else: parts.append("global")
+    
+    if year: parts.append(str(year))
+    if semester: parts.append(semester)
+    
+    filename = "_".join(parts) + ".csv"
+    
     output.headers["Content-Disposition"] = f"attachment; filename={filename}"
     output.headers["Content-type"] = "text/csv"
     return output
 
 @app.route('/api/stats', methods=['GET'])
-def get_stats():
+@token_required
+def get_stats(current_user):
     from sqlalchemy import func
     from datetime import datetime, timedelta
     from collections import defaultdict
@@ -696,6 +812,8 @@ def get_stats():
         }
     })
 
+# Initialize Database (Run migration)
+init_db()
+
 if __name__ == '__main__':
-    init_db()
     app.run(host='0.0.0.0', port=5000, debug=True)

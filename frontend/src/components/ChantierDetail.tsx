@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Chantier, Entry, User, Alert } from '../types';
-import { Plus, Minus, X, Check, ArrowLeft, Clock, Calendar, Bell, Info, Pencil, Download } from 'lucide-react';
+import { Plus, Minus, X, Check, ArrowLeft, Clock, Calendar, Bell, Info, Pencil, Download, FileText, Upload, Eye } from 'lucide-react';
 import { StatusBadge } from './StatusBadge';
 
 interface Props {
@@ -31,21 +31,25 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
     const [showEditModal, setShowEditModal] = useState(false);
     const [editForm, setEditForm] = useState(initialChantier);
 
+    // PDF Modal
+    const [showPdfModal, setShowPdfModal] = useState(false);
+    const [isUploadingPdf, setIsUploadingPdf] = useState(false);
+
     useEffect(() => {
         fetchDetails();
     }, [activeTab]);
 
     const fetchDetails = async () => {
         // Always refresh chantier to get latest status/members
-        const resChantier = await fetch(`/api/chantiers/${chantier.id}`);
+        const resChantier = await fetch(`/api/chantiers/${chantier.id}`, { headers: { 'Authorization': `Bearer ${localStorage.getItem('ohm_token')}` } });
         if (resChantier.ok) setChantier(await resChantier.json());
 
         if (activeTab === 'SUIVI') {
-            const res = await fetch(`/api/chantiers/${chantier.id}/entries?role=${currentUser.role}&user_id=${currentUser.id}`);
+            const res = await fetch(`/api/chantiers/${chantier.id}/entries?role=${currentUser.role}&user_id=${currentUser.id}`, { headers: { 'Authorization': `Bearer ${localStorage.getItem('ohm_token')}` } });
             if (res.ok) setEntries(await res.json());
         }
         if (activeTab === 'ALERTES') {
-            const res = await fetch(`/api/chantiers/${chantier.id}/alerts`);
+            const res = await fetch(`/api/chantiers/${chantier.id}/alerts`, { headers: { 'Authorization': `Bearer ${localStorage.getItem('ohm_token')}` } });
             if (res.ok) setAlerts(await res.json());
         }
     };
@@ -54,7 +58,10 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
         e.preventDefault();
         const res = await fetch(`/api/chantiers/${chantier.id}`, {
             method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${localStorage.getItem('ohm_token')}`
+            },
             body: JSON.stringify(editForm)
         });
         if (res.ok) {
@@ -74,7 +81,10 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
 
         const res = await fetch('/api/entries', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${localStorage.getItem('ohm_token')}`
+            },
             body: JSON.stringify({
                 user_id: currentUser.id,
                 chantier_id: chantier.id,
@@ -97,7 +107,10 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
         e.preventDefault();
         const res = await fetch(`/api/chantiers/${chantier.id}/alerts`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${localStorage.getItem('ohm_token')}`
+            },
             body: JSON.stringify(newAlert)
         });
         if (res.ok) {
@@ -110,7 +123,10 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
     const toggleAlert = async (alert: Alert) => {
         await fetch(`/api/alerts/${alert.id}`, {
             method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${localStorage.getItem('ohm_token')}`
+            },
             body: JSON.stringify({ is_resolved: !alert.is_resolved })
         });
         fetchDetails();
@@ -118,6 +134,50 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
 
     const handleExport = () => {
         window.open(`/api/export?chantier_id=${chantier.id}`, '_blank');
+    };
+
+    const handlePdfUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        if (!e.target.files?.[0]) return;
+        setIsUploadingPdf(true);
+        const formData = new FormData();
+        formData.append('file', e.target.files[0]);
+
+        try {
+            const res = await fetch(`/api/chantiers/${chantier.id}/pdf`, {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${localStorage.getItem('ohm_token')}` },
+                body: formData
+            });
+            if (res.ok) {
+                const updated = await res.json();
+                setChantier(updated);
+                alert('Plan importé avec succès');
+            } else {
+                alert('Erreur lors de l\'import');
+            }
+        } catch (err) {
+            console.error(err);
+            alert('Erreur réseau');
+        } finally {
+            setIsUploadingPdf(false);
+        }
+    };
+
+    const handlePdfView = async () => {
+        try {
+            const res = await fetch(`/api/chantiers/${chantier.id}/pdf`, {
+                headers: { 'Authorization': `Bearer ${localStorage.getItem('ohm_token')}` }
+            });
+            if (res.ok) {
+                const blob = await res.blob();
+                const url = window.URL.createObjectURL(blob);
+                window.open(url, '_blank');
+            } else {
+                alert('Plan introuvable');
+            }
+        } catch (err) {
+            console.error(err);
+        }
     };
 
     const totalHeures = entries.reduce((acc, curr) => acc + curr.heures, 0);
@@ -175,6 +235,15 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
                     </div>
 
                     <div className="flex justify-end w-full sm:w-auto">
+                        <button
+                            onClick={() => setShowPdfModal(true)}
+                            className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors border border-slate-700 group w-full sm:w-auto justify-center mr-2
+                                ${chantier.plan_pdf_path ? 'bg-slate-800 text-ohm-primary border-ohm-primary/30' : 'bg-slate-800 text-gray-400 hover:text-white'}`}
+                            title="Gérer le Plan PDF"
+                        >
+                            <FileText size={18} />
+                            <span className="font-bold text-xs uppercase tracking-wider">{chantier.plan_pdf_path ? 'Plan Dispo' : 'Ajouter Plan'}</span>
+                        </button>
                         <button
                             onClick={handleExport}
                             className="flex items-center gap-2 px-4 py-2 rounded-lg bg-slate-800 text-gray-400 hover:text-white hover:bg-slate-700 transition-colors border border-slate-700 group w-full sm:w-auto justify-center"
@@ -502,6 +571,60 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
                                 <button type="submit" className="px-6 py-3 rounded-lg font-bold bg-ohm-primary text-ohm-bg hover:bg-yellow-300">ENREGISTRER</button>
                             </div>
                         </form>
+                    </div>
+                </div>
+            )}
+            {/* PDF MODAL */}
+            {showPdfModal && (
+                <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+                    <div className="card w-full max-w-md space-y-6 animate-slide-up">
+                        <div className="flex justify-between items-center">
+                            <h3 className="text-xl font-bold text-white uppercase flex items-center gap-2">
+                                <FileText className="text-ohm-primary" /> Plan du Chantier
+                            </h3>
+                            <button onClick={() => setShowPdfModal(false)}><X className="text-gray-400 hover:text-white" /></button>
+                        </div>
+
+                        <div className="space-y-4">
+                            {chantier.plan_pdf_path ? (
+                                <div className="p-4 bg-green-500/10 border border-green-500/30 rounded-xl flex items-center gap-3">
+                                    <Check className="text-green-500" />
+                                    <div>
+                                        <div className="text-green-400 font-bold text-sm">Plan disponible</div>
+                                        <div className="text-xs text-gray-400 break-all">{chantier.plan_pdf_path}</div>
+                                    </div>
+                                </div>
+                            ) : (
+                                <div className="p-4 bg-slate-800 rounded-xl text-center text-gray-400 text-sm italic">
+                                    Aucun plan associé à ce chantier.
+                                </div>
+                            )}
+
+                            <div className="grid grid-cols-1 gap-3">
+                                {chantier.plan_pdf_path && (
+                                    <button
+                                        onClick={handlePdfView}
+                                        className="w-full py-3 bg-slate-700 hover:bg-slate-600 text-white font-bold rounded-xl flex items-center justify-center gap-2 transition-all"
+                                    >
+                                        <Eye size={20} /> Voir / Télécharger le Plan
+                                    </button>
+                                )}
+
+                                <div className="relative">
+                                    <input
+                                        type="file"
+                                        accept="application/pdf"
+                                        onChange={handlePdfUpload}
+                                        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+                                        disabled={isUploadingPdf}
+                                    />
+                                    <button className={`w-full py-3 ${chantier.plan_pdf_path ? 'bg-slate-800 border-dashed border-2 border-slate-600' : 'bg-ohm-primary text-ohm-bg'} font-bold rounded-xl flex items-center justify-center gap-2 transition-all`}>
+                                        <Upload size={20} />
+                                        {isUploadingPdf ? 'Importation...' : (chantier.plan_pdf_path ? 'Remplacer le fichier PDF' : 'Importer un fichier PDF')}
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
             )}

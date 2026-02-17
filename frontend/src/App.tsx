@@ -24,6 +24,7 @@ function App() {
             if (res.ok) {
                 const userData = await res.json();
                 setUser(userData);
+                localStorage.setItem('ohm_token', userData.token);
             } else {
                 alert('Invalid PIN');
             }
@@ -35,6 +36,7 @@ function App() {
 
     const handleLogout = () => {
         setUser(null);
+        localStorage.removeItem('ohm_token');
         setView('dashboard');
         setSelectedChantier(null);
     };

@@ -14,6 +14,11 @@ export const Dashboard: React.FC<Props> = ({ currentUser, onSelectChantier }) =>
     const [filterStatus, setFilterStatus] = useState<ChantierStatus | 'ALL'>('ACTIVE');
     const [showCreate, setShowCreate] = useState(false);
 
+    // Export State
+    const [showExport, setShowExport] = useState(false);
+    const [exportYear, setExportYear] = useState<number | null>(new Date().getFullYear());
+    const [exportSemester, setExportSemester] = useState<'ALL' | 'S1' | 'S2'>('ALL');
+
     // Create Form State
     const [newChantier, setNewChantier] = useState({
         nom: '',
@@ -39,7 +44,7 @@ export const Dashboard: React.FC<Props> = ({ currentUser, onSelectChantier }) =>
     }, [filterStatus, chantiers]);
 
     const fetchChantiers = async () => {
-        const res = await fetch(`/api/chantiers?status=ALL`);
+        const res = await fetch(`/api/chantiers?status=ALL`, { headers: { 'Authorization': `Bearer ${localStorage.getItem('ohm_token')}` } });
         if (res.ok) setChantiers(await res.json());
     };
 
@@ -47,7 +52,10 @@ export const Dashboard: React.FC<Props> = ({ currentUser, onSelectChantier }) =>
         e.preventDefault();
         const res = await fetch('/api/chantiers', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${localStorage.getItem('ohm_token')}`
+            },
             body: JSON.stringify(newChantier)
         });
         if (res.ok) {
@@ -82,18 +90,71 @@ export const Dashboard: React.FC<Props> = ({ currentUser, onSelectChantier }) =>
                     </p>
                 </div>
 
-                <div className="flex gap-4">
+                <div className="flex gap-4 relative">
                     {currentUser.role === 'admin' && (
                         <>
-                            <a
-                                href="/api/export"
-                                target="_blank"
-                                className="glass-panel px-6 py-4 rounded-xl flex items-center gap-3 transition-all hover:bg-white/5 hover:scale-105 active:scale-95 group text-white font-bold tracking-wide border-white/5"
-                            >
-                                <Download size={22} className="text-secondary group-hover:text-white transition-colors group-hover:drop-shadow-[0_0_8px_rgba(0,240,255,0.8)]" />
-                                <span className="hidden sm:inline">EXPORT CSV</span>
-                            </a>
-                            {/* Old Button Removed */}
+                            {/* Export Button & Popover */}
+                            <div className="relative group">
+                                <button
+                                    onClick={() => setShowExport(!showExport)}
+                                    className={`glass-panel px-6 py-4 rounded-xl flex items-center gap-3 transition-all hover:bg-white/5 hover:scale-105 active:scale-95 text-white font-bold tracking-wide border-white/5 ${showExport ? 'bg-primary/20 border-primary/50 text-primary shadow-glow' : ''}`}
+                                >
+                                    <Download size={22} className={showExport ? "text-primary" : "text-secondary group-hover:text-white transition-colors"} />
+                                    <span className="hidden sm:inline">EXPORT CSV</span>
+                                </button>
+
+                                {/* Export Configuration Popup */}
+                                {showExport && (
+                                    <div className="absolute top-full right-0 mt-2 w-72 glass-panel bg-black/90 border border-white/10 p-4 rounded-xl shadow-2xl z-50 animate-slide-up">
+                                        <div className="space-y-4">
+                                            <div>
+                                                <label className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-1 block">Année</label>
+                                                <div className="grid grid-cols-3 gap-2">
+                                                    {[new Date().getFullYear(), new Date().getFullYear() - 1, new Date().getFullYear() - 2].map(y => (
+                                                        <button
+                                                            key={y}
+                                                            onClick={() => setExportYear(y)}
+                                                            className={`py-1.5 rounded-lg text-xs font-bold transition-all ${exportYear === y ? 'bg-primary text-black' : 'bg-white/5 text-gray-400 hover:bg-white/10 hover:text-white'}`}
+                                                        >
+                                                            {y}
+                                                        </button>
+                                                    ))}
+                                                    <button
+                                                        onClick={() => setExportYear(null)}
+                                                        className={`py-1.5 rounded-lg text-xs font-bold transition-all ${exportYear === null ? 'bg-primary text-black' : 'bg-white/5 text-gray-400 hover:bg-white/10 hover:text-white'}`}
+                                                    >
+                                                        TOUS
+                                                    </button>
+                                                </div>
+                                            </div>
+
+                                            <div>
+                                                <label className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-1 block">Période</label>
+                                                <div className="grid grid-cols-3 gap-2">
+                                                    {(['ALL', 'S1', 'S2'] as const).map(p => (
+                                                        <button
+                                                            key={p}
+                                                            onClick={() => setExportSemester(p)}
+                                                            className={`py-1.5 rounded-lg text-xs font-bold transition-all ${exportSemester === p ? 'bg-primary text-black' : 'bg-white/5 text-gray-400 hover:bg-white/10 hover:text-white'}`}
+                                                        >
+                                                            {p === 'ALL' ? 'TOUS' : p}
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                            </div>
+
+                                            <a
+                                                href={`/api/export?${exportYear ? `year=${exportYear}&` : ''}${exportSemester !== 'ALL' ? `semester=${exportSemester}` : ''}`}
+                                                target="_blank"
+                                                onClick={() => setShowExport(false)}
+                                                className="block w-full py-3 bg-white text-black font-black uppercase tracking-widest text-center rounded-lg hover:shadow-glow hover:scale-[1.02] active:scale-[0.98] transition-all text-xs"
+                                            >
+                                                TÉLÉCHARGER LE FICHIER
+                                            </a>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
                         </>
                     )}
                 </div>

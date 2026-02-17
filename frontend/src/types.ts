@@ -12,7 +12,8 @@ export interface Chantier {
     id: number;
     nom: string;
     annee: number;
-    pdf_path?: string;
+    pdf_path?: string; // Legacy?
+    plan_pdf_path?: string; // New PDF
     address_work?: string;
     address_billing?: string;
     date_start?: string;
