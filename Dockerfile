@@ -22,8 +22,8 @@ COPY backend/ ./backend/
 # Copy built frontend assets
 COPY --from=build /app/dist ./dist
 
-# Create data directory
-RUN mkdir -p data
+# Create data directory structure
+RUN mkdir -p data/uploads
 
 EXPOSE 5000
 

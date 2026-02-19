@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Chantier, Entry, User, Alert } from '../types';
-import { Plus, Minus, X, Check, ArrowLeft, Clock, Calendar, Bell, Info, Pencil, Download, FileText, Upload, Eye } from 'lucide-react';
+import { Plus, Minus, X, Check, ArrowLeft, Clock, Calendar, Bell, Info, Pencil, Download, FileText, Upload, Eye, Lock, Unlock } from 'lucide-react';
 import { StatusBadge } from './StatusBadge';
 
 interface Props {
@@ -71,6 +71,22 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
         }
     };
 
+    const handleToggleStatus = async () => {
+        const newStatus = chantier.status === 'DONE' ? 'ACTIVE' : 'DONE';
+        const res = await fetch(`/api/chantiers/${chantier.id}`, {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${localStorage.getItem('ohm_token')}`
+            },
+            body: JSON.stringify({ ...chantier, status: newStatus })
+        });
+        if (res.ok) {
+            const updated = await res.json();
+            setChantier(updated);
+        }
+    };
+
     // --- Entry Logic (Suivi) ---
     const handleEntrySubmit = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -132,8 +148,25 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
         fetchDetails();
     };
 
-    const handleExport = () => {
-        window.open(`/api/export?chantier_id=${chantier.id}`, '_blank');
+    const handleExport = async () => {
+        try {
+            const res = await fetch(`/api/export?chantier_id=${chantier.id}`, {
+                headers: { 'Authorization': `Bearer ${localStorage.getItem('ohm_token')}` }
+            });
+            if (!res.ok) { alert('Erreur lors de l\'export'); return; }
+            const blob = await res.blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `export_chantier_${chantier.id}.csv`;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            window.URL.revokeObjectURL(url);
+        } catch (err) {
+            console.error(err);
+            alert('Erreur réseau lors de l\'export');
+        }
     };
 
     const handlePdfUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -200,9 +233,24 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
                             <div className="flex items-center gap-2 text-sm text-gray-400 font-mono mt-1">
                                 <span>{chantier.annee}</span>
                                 {currentUser.role === 'admin' && (
-                                    <button onClick={() => { setEditForm(chantier); setShowEditModal(true); }} className="p-1 hover:text-white transition-colors">
-                                        <Pencil size={14} />
-                                    </button>
+                                    <>
+                                        <button onClick={() => { setEditForm(chantier); setShowEditModal(true); }} className="p-1 hover:text-white transition-colors" title="Modifier">
+                                            <Pencil size={14} />
+                                        </button>
+                                        <button
+                                            onClick={handleToggleStatus}
+                                            title={chantier.status === 'DONE' ? 'Ré-ouvrir le chantier' : 'Clôturer le chantier'}
+                                            className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold transition-all border ${chantier.status === 'DONE'
+                                                ? 'border-green-500/50 text-green-400 hover:bg-green-500/10'
+                                                : 'border-red-500/50 text-red-400 hover:bg-red-500/10'
+                                                }`}
+                                        >
+                                            {chantier.status === 'DONE'
+                                                ? <><Unlock size={12} /> Ré-ouvrir</>
+                                                : <><Lock size={12} /> Clôturer</>
+                                            }
+                                        </button>
+                                    </>
                                 )}
                             </div>
                         </div>

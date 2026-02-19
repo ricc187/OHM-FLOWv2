@@ -1,7 +1,7 @@
 export interface User {
     id: number;
     username: string;
-    role: 'admin' | 'user';
+    role: 'admin' | 'user' | 'depanneur';
     pin?: string; // Optional for security in list views
     vacation_balance: number;
 }

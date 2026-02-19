@@ -24,7 +24,10 @@ CORS(app)  # Enable CORS for development
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.join(os.getcwd(), 'data', 'chantier.db')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['UPLOAD_FOLDER'] = os.path.join(os.getcwd(), 'data', 'uploads')
-os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+try:
+    os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+except OSError as e:
+    logger.warning(f"Could not create upload folder {app.config['UPLOAD_FOLDER']}: {e}")
 
 
 # Security Config
@@ -347,7 +350,7 @@ def user_operations(current_user, user_id):
             user.pin = new_pin
             
         if new_role:
-            if new_role not in ['admin', 'user']:
+            if new_role not in ['admin', 'user', 'depanneur']:
                 return jsonify({'error': 'Invalid role'}), 400
             user.role = new_role
 

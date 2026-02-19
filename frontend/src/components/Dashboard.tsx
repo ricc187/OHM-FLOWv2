@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Chantier, User, ChantierStatus } from '../types';
-import { Folder, Plus, Download, X } from 'lucide-react';
+import { Folder, Plus, Download, X, Search } from 'lucide-react';
 import { ChantierCard } from './ChantierCard';
 
 interface Props {
@@ -12,6 +12,7 @@ export const Dashboard: React.FC<Props> = ({ currentUser, onSelectChantier }) =>
     const [chantiers, setChantiers] = useState<Chantier[]>([]);
     const [filteredChantiers, setFilteredChantiers] = useState<Chantier[]>([]);
     const [filterStatus, setFilterStatus] = useState<ChantierStatus | 'ALL'>('ACTIVE');
+    const [searchQuery, setSearchQuery] = useState('');
     const [showCreate, setShowCreate] = useState(false);
 
     // Export State
@@ -36,16 +37,45 @@ export const Dashboard: React.FC<Props> = ({ currentUser, onSelectChantier }) =>
     }, []);
 
     useEffect(() => {
-        if (filterStatus === 'ALL') {
-            setFilteredChantiers(chantiers);
-        } else {
-            setFilteredChantiers(chantiers.filter(c => c.status === filterStatus));
-        }
-    }, [filterStatus, chantiers]);
+        const statusFiltered = filterStatus === 'ALL'
+            ? chantiers
+            : chantiers.filter(c => c.status === filterStatus);
+        const q = searchQuery.trim().toLowerCase();
+        setFilteredChantiers(
+            q ? statusFiltered.filter(c => c.nom.toLowerCase().includes(q)) : statusFiltered
+        );
+    }, [filterStatus, chantiers, searchQuery]);
 
     const fetchChantiers = async () => {
         const res = await fetch(`/api/chantiers?status=ALL`, { headers: { 'Authorization': `Bearer ${localStorage.getItem('ohm_token')}` } });
         if (res.ok) setChantiers(await res.json());
+    };
+
+    const handleExport = async () => {
+        const params = new URLSearchParams();
+        if (exportYear) params.set('year', exportYear.toString());
+        if (exportSemester !== 'ALL') params.set('semester', exportSemester);
+        try {
+            const res = await fetch(`/api/export?${params.toString()}`, {
+                headers: { 'Authorization': `Bearer ${localStorage.getItem('ohm_token')}` }
+            });
+            if (!res.ok) { alert('Erreur lors de l\'export'); return; }
+            const blob = await res.blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            const parts = ['export', exportYear ? exportYear.toString() : 'tous'];
+            if (exportSemester !== 'ALL') parts.push(exportSemester);
+            a.download = parts.join('_') + '.csv';
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            window.URL.revokeObjectURL(url);
+            setShowExport(false);
+        } catch (err) {
+            console.error(err);
+            alert('Erreur réseau lors de l\'export');
+        }
     };
 
     const handleCreateChantier = async (e: React.FormEvent) => {
@@ -143,14 +173,12 @@ export const Dashboard: React.FC<Props> = ({ currentUser, onSelectChantier }) =>
                                                 </div>
                                             </div>
 
-                                            <a
-                                                href={`/api/export?${exportYear ? `year=${exportYear}&` : ''}${exportSemester !== 'ALL' ? `semester=${exportSemester}` : ''}`}
-                                                target="_blank"
-                                                onClick={() => setShowExport(false)}
+                                            <button
+                                                onClick={handleExport}
                                                 className="block w-full py-3 bg-white text-black font-black uppercase tracking-widest text-center rounded-lg hover:shadow-glow hover:scale-[1.02] active:scale-[0.98] transition-all text-xs"
                                             >
                                                 TÉLÉCHARGER LE FICHIER
-                                            </a>
+                                            </button>
                                         </div>
                                     </div>
                                 )}
@@ -184,8 +212,28 @@ export const Dashboard: React.FC<Props> = ({ currentUser, onSelectChantier }) =>
                 ))}
             </div>
 
+            {/* Search Bar */}
+            <div className="relative">
+                <Search size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-500 pointer-events-none" />
+                <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={e => setSearchQuery(e.target.value)}
+                    placeholder={`Rechercher parmi les chantiers${filterStatus !== 'ALL' ? ` « ${filterStatus === 'ACTIVE' ? 'En cours' : filterStatus === 'FUTURE' ? 'À venir' : 'Terminés'} »` : ''}…`}
+                    className="w-full bg-black/40 backdrop-blur-xl border border-white/10 rounded-2xl pl-12 pr-10 py-4 text-white placeholder-gray-500 focus:outline-none focus:border-primary/50 focus:bg-black/60 transition-all text-sm font-medium"
+                />
+                {searchQuery && (
+                    <button
+                        onClick={() => setSearchQuery('')}
+                        className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-500 hover:text-white transition-colors"
+                    >
+                        <X size={16} />
+                    </button>
+                )}
+            </div>
+
             {/* Large Static Create Button */}
-            {currentUser.role === 'admin' && (
+            {(currentUser.role === 'admin' || currentUser.role === 'depanneur') && (
                 <button
                     onClick={() => setShowCreate(!showCreate)}
                     className="w-full py-4 bg-gradient-to-r from-primary to-yellow-500 text-black font-black uppercase tracking-widest rounded-2xl shadow-lg hover:shadow-neon hover:scale-[1.01] active:scale-[0.99] transition-all flex items-center justify-center gap-3 text-lg"

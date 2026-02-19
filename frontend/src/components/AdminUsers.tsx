@@ -9,7 +9,7 @@ export const AdminUsers: React.FC = () => {
     const [formData, setFormData] = useState({
         username: '',
         pin: '',
-        role: 'user' as 'admin' | 'user'
+        role: 'user' as 'admin' | 'user' | 'depanneur'
     });
 
 
@@ -162,9 +162,13 @@ export const AdminUsers: React.FC = () => {
                                     </td>
                                     <td className="px-6 py-4 text-center font-mono text-ohm-primary text-lg tracking-[0.2em]">{user.pin}</td>
                                     <td className="px-6 py-4">
-                                        <span className={`text-[10px] font-black uppercase px-2 py-0.5 rounded ${user.role === 'admin' ? 'bg-ohm-primary/20 text-ohm-primary border border-ohm-primary/30' : 'bg-slate-700 text-slate-400'
+                                        <span className={`text-[10px] font-black uppercase px-2 py-0.5 rounded ${user.role === 'admin'
+                                                ? 'bg-ohm-primary/20 text-ohm-primary border border-ohm-primary/30'
+                                                : user.role === 'depanneur'
+                                                    ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
+                                                    : 'bg-slate-700 text-slate-400'
                                             }`}>
-                                            {user.role}
+                                            {user.role === 'admin' ? 'Admin' : user.role === 'depanneur' ? 'Dépanneur' : 'Employé'}
                                         </span>
                                     </td>
                                     <td className="px-6 py-4 text-right">
@@ -234,10 +238,11 @@ export const AdminUsers: React.FC = () => {
                                 <label className="block text-[10px] font-black uppercase text-ohm-text-muted mb-2 tracking-widest">Rôle</label>
                                 <select
                                     value={formData.role}
-                                    onChange={(e) => setFormData({ ...formData, role: e.target.value as 'user' | 'admin' })}
+                                    onChange={(e) => setFormData({ ...formData, role: e.target.value as 'user' | 'admin' | 'depanneur' })}
                                     className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-ohm-text-main focus:ring-2 focus:ring-ohm-primary/50 transition-all outline-none"
                                 >
-                                    <option value="user">Ouvrier/Employé</option>
+                                    <option value="user">Ouvrier / Employé</option>
+                                    <option value="depanneur">Dépanneur</option>
                                     <option value="admin">Administrateur</option>
                                 </select>
                             </div>
