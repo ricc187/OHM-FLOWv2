@@ -9,6 +9,7 @@ services:
       - ./data:/app/data
     environment:
       - FLASK_ENV=production
+      - SECRET_KEY=je mappelle riccardo et je suis informaticien jadore les voitures et les pates
     restart: always
 
   backup:
