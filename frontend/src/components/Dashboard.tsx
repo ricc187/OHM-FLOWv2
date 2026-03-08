@@ -12,7 +12,7 @@ export const Dashboard: React.FC<Props> = ({ currentUser, onSelectChantier }) =>
     const [chantiers, setChantiers] = useState<Chantier[]>([]);
     const [filteredChantiers, setFilteredChantiers] = useState<Chantier[]>([]);
     const [filterStatus, setFilterStatus] = useState<ChantierStatus | 'ALL'>('ACTIVE');
-    const [searchQuery, setSearchQuery] = useState('');
+    const [selectedChantierId, setSelectedChantierId] = useState('');
     const [showCreate, setShowCreate] = useState(false);
 
     // Export State
@@ -40,11 +40,17 @@ export const Dashboard: React.FC<Props> = ({ currentUser, onSelectChantier }) =>
         const statusFiltered = filterStatus === 'ALL'
             ? chantiers
             : chantiers.filter(c => c.status === filterStatus);
-        const q = searchQuery.trim().toLowerCase();
+        
+        if (selectedChantierId && !statusFiltered.some(c => c.id.toString() === selectedChantierId)) {
+            setSelectedChantierId('');
+            setFilteredChantiers(statusFiltered);
+            return;
+        }
+
         setFilteredChantiers(
-            q ? statusFiltered.filter(c => c.nom.toLowerCase().includes(q)) : statusFiltered
+            selectedChantierId ? statusFiltered.filter(c => c.id.toString() === selectedChantierId) : statusFiltered
         );
-    }, [filterStatus, chantiers, searchQuery]);
+    }, [filterStatus, chantiers, selectedChantierId]);
 
     const fetchChantiers = async () => {
         const res = await fetch(`/api/chantiers?status=ALL`, { headers: { 'Authorization': `Bearer ${localStorage.getItem('ohm_token')}` } });
@@ -80,13 +86,32 @@ export const Dashboard: React.FC<Props> = ({ currentUser, onSelectChantier }) =>
 
     const handleCreateChantier = async (e: React.FormEvent) => {
         e.preventDefault();
+
+        const today = new Date().toISOString().split('T')[0];
+        let calculatedStatus: ChantierStatus = 'FUTURE';
+
+        if (newChantier.date_start) {
+            if (!newChantier.date_end && today >= newChantier.date_start) {
+                calculatedStatus = 'ACTIVE';
+            } else if (today >= newChantier.date_start) {
+                // If the start date is today or in the past, it's active.
+                // We no longer automatically set it to 'DONE' even if date_end has passed.
+                calculatedStatus = 'ACTIVE';
+            }
+        }
+
+        const payload = {
+            ...newChantier,
+            status: calculatedStatus
+        };
+
         const res = await fetch('/api/chantiers', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${localStorage.getItem('ohm_token')}`
             },
-            body: JSON.stringify(newChantier)
+            body: JSON.stringify(payload)
         });
         if (res.ok) {
             setNewChantier({
@@ -212,24 +237,35 @@ export const Dashboard: React.FC<Props> = ({ currentUser, onSelectChantier }) =>
                 ))}
             </div>
 
-            {/* Search Bar */}
+            {/* Search Dropdown */}
             <div className="relative">
-                <Search size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-500 pointer-events-none" />
-                <input
-                    type="text"
-                    value={searchQuery}
-                    onChange={e => setSearchQuery(e.target.value)}
-                    placeholder={`Rechercher parmi les chantiers${filterStatus !== 'ALL' ? ` « ${filterStatus === 'ACTIVE' ? 'En cours' : filterStatus === 'FUTURE' ? 'À venir' : 'Terminés'} »` : ''}…`}
-                    className="w-full bg-black/40 backdrop-blur-xl border border-white/10 rounded-2xl pl-12 pr-10 py-4 text-white placeholder-gray-500 focus:outline-none focus:border-primary/50 focus:bg-black/60 transition-all text-sm font-medium"
-                />
-                {searchQuery && (
+                <Search size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-500 pointer-events-none z-10" />
+                <select
+                    value={selectedChantierId}
+                    onChange={e => setSelectedChantierId(e.target.value)}
+                    className="w-full bg-black/40 backdrop-blur-xl border border-white/10 rounded-2xl pl-12 pr-10 py-4 text-white appearance-none focus:outline-none focus:border-primary/50 focus:bg-black/60 transition-all text-sm font-medium cursor-pointer"
+                >
+                    <option value="" className="bg-surface text-gray-400">
+                        Sélectionner un chantier{filterStatus !== 'ALL' ? ` « ${filterStatus === 'ACTIVE' ? 'En cours' : filterStatus === 'FUTURE' ? 'À venir' : 'Terminés'} »` : ''}…
+                    </option>
+                    {(filterStatus === 'ALL' ? chantiers : chantiers.filter(c => c.status === filterStatus))
+                        .map(c => (
+                            <option key={c.id} value={c.id.toString()} className="bg-surface text-white">
+                                {c.nom}
+                            </option>
+                        ))}
+                </select>
+                {selectedChantierId && (
                     <button
-                        onClick={() => setSearchQuery('')}
-                        className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-500 hover:text-white transition-colors"
+                        onClick={(e) => { e.preventDefault(); setSelectedChantierId(''); }}
+                        className="absolute right-12 top-1/2 -translate-y-1/2 text-gray-500 hover:text-white transition-colors z-10"
                     >
                         <X size={16} />
                     </button>
                 )}
+                <div className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-500 pointer-events-none">
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7"></path></svg>
+                </div>
             </div>
 
             {/* Large Static Create Button */}
@@ -283,28 +319,17 @@ export const Dashboard: React.FC<Props> = ({ currentUser, onSelectChantier }) =>
                             <div>
                                 <label className="text-xs font-bold text-primary/80 uppercase tracking-widest mb-2 block">Période (Début - Fin)</label>
                                 <div className="flex gap-3">
-                                    <input type="date" className="input-field" value={newChantier.date_start} onChange={e => setNewChantier({ ...newChantier, date_start: e.target.value })} />
-                                    <input type="date" className="input-field" value={newChantier.date_end} onChange={e => setNewChantier({ ...newChantier, date_end: e.target.value })} />
+                                    <input type="date" className="input-field" value={newChantier.date_start} onChange={e => setNewChantier({ ...newChantier, date_start: e.target.value })} required />
+                                    <input type="date" className="input-field" value={newChantier.date_end} onChange={e => setNewChantier({ ...newChantier, date_end: e.target.value })} required />
                                 </div>
                             </div>
-                            <div>
-                                <label className="text-xs font-bold text-primary/80 uppercase tracking-widest mb-2 block">Statut Initial</label>
-                                <select
-                                    className="input-field appearance-none"
-                                    value={newChantier.status}
-                                    onChange={e => setNewChantier({ ...newChantier, status: e.target.value as ChantierStatus })}
-                                >
-                                    <option value="FUTURE" className="bg-surface">À venir</option>
-                                    <option value="ACTIVE" className="bg-surface">En cours</option>
-                                </select>
-                            </div>
-                        </div>
-
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                             <div>
                                 <label className="text-xs font-bold text-primary/80 uppercase tracking-widest mb-2 block">Adresse Travaux</label>
                                 <input type="text" className="input-field" value={newChantier.address_work} onChange={e => setNewChantier({ ...newChantier, address_work: e.target.value })} placeholder="Rue, Ville..." />
                             </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                             <div>
                                 <label className="text-xs font-bold text-primary/80 uppercase tracking-widest mb-2 block">Adresse Facturation</label>
                                 <input type="text" className="input-field" value={newChantier.address_billing} onChange={e => setNewChantier({ ...newChantier, address_billing: e.target.value })} placeholder="Si différente..." />

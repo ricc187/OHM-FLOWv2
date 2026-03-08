@@ -10,3 +10,10 @@ services:
     environment:
       - FLASK_ENV=production
     restart: always
+
+  backup:
+    build: ./backup
+    volumes:
+      - ./data:/data:ro
+      - ./backups:/backups
+    restart: always

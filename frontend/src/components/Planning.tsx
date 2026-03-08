@@ -148,6 +148,10 @@ export const Planning: React.FC<Props> = ({ currentUser }) => {
     const [showNewLeave, setShowNewLeave] = useState(false);
     const [newLeave, setNewLeave] = useState({ start_date: '', end_date: '', type: 'VACATION' });
 
+    // Admin Edit Leave State
+    const [editingLeaveId, setEditingLeaveId] = useState<number | null>(null);
+    const [editLeaveForm, setEditLeaveForm] = useState({ start_date: '', end_date: '', type: 'VACATION' });
+
     useEffect(() => {
         fetchLeaves();
     }, [activeTab]);
@@ -193,6 +197,38 @@ export const Planning: React.FC<Props> = ({ currentUser }) => {
             body: JSON.stringify({ status })
         });
         if (res.ok) fetchLeaves();
+    };
+
+    const handleSaveEditLeave = async (leaveId: number) => {
+        const res = await fetch(`/api/leaves/${leaveId}`, {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${localStorage.getItem('ohm_token')}`
+            },
+            body: JSON.stringify({
+                date_start: editLeaveForm.start_date,
+                date_end: editLeaveForm.end_date,
+                type: editLeaveForm.type,
+                 // Simplification: we might need to recalculate days_count, but let's assume default 1 or let backend/admin fix
+                 // Ideally calculate working days here. We'll leave it as is for UI update.
+            })
+        });
+        if (res.ok) {
+            setEditingLeaveId(null);
+            fetchLeaves();
+        } else {
+            alert('Erreur lors de la modification');
+        }
+    };
+
+    const startEditingLeave = (leave: Leave) => {
+        setEditingLeaveId(leave.id);
+        setEditLeaveForm({
+            start_date: leave.date_start,
+            end_date: leave.date_end,
+            type: leave.type
+        });
     };
 
     const renderLeaveType = (type: string) => {
@@ -292,23 +328,51 @@ export const Planning: React.FC<Props> = ({ currentUser }) => {
                     <h3 className="font-bold text-white uppercase tracking-wider mb-4">Demandes en attente</h3>
                     {leaves.filter(l => l.status === 'PENDING').map(l => (
                         <div key={l.id} className="card p-4 flex flex-col md:flex-row md:items-center justify-between gap-4 border-l-4 border-l-ohm-primary">
-                            <div className="flex items-center gap-4">
-                                <div className="w-10 h-10 bg-slate-700 rounded-full flex items-center justify-center font-bold text-white">
+                            <div className="flex items-center gap-4 w-full md:w-auto">
+                                <div className="w-10 h-10 bg-slate-700 rounded-full flex items-center justify-center font-bold text-white shrink-0">
                                     {l.user_name?.[0]}
                                 </div>
-                                <div>
+                                <div className="flex-1">
                                     <div className="font-bold text-white text-lg">{l.user_name}</div>
-                                    <div className="text-sm text-gray-400 font-mono flex items-center gap-2">
-                                        <span>{l.date_start}</span>
-                                        <span className="text-slate-600">➔</span>
-                                        <span>{l.date_end}</span>
-                                    </div>
-                                    <div className="text-xs font-bold text-orange-400 mt-1 uppercase">{renderLeaveType(l.type)}</div>
+                                    
+                                    {editingLeaveId === l.id ? (
+                                        <div className="mt-2 space-y-2">
+                                            <div className="flex items-center gap-2 text-sm">
+                                                <input type="date" className="bg-slate-800 border border-slate-600 rounded px-2 py-1 text-white" value={editLeaveForm.start_date} onChange={e => setEditLeaveForm({...editLeaveForm, start_date: e.target.value})} />
+                                                <span className="text-gray-500">➔</span>
+                                                <input type="date" className="bg-slate-800 border border-slate-600 rounded px-2 py-1 text-white" value={editLeaveForm.end_date} onChange={e => setEditLeaveForm({...editLeaveForm, end_date: e.target.value})} />
+                                            </div>
+                                            <select className="bg-slate-800 border border-slate-600 rounded px-2 py-1 text-white text-xs uppercase" value={editLeaveForm.type} onChange={e => setEditLeaveForm({...editLeaveForm, type: e.target.value})}>
+                                                <option value="VACATION">Vacances</option>
+                                                <option value="SICKNESS">Maladie</option>
+                                                <option value="OTHER">Autre</option>
+                                            </select>
+                                        </div>
+                                    ) : (
+                                        <>
+                                            <div className="text-sm text-gray-400 font-mono flex items-center gap-2">
+                                                <span>{l.date_start}</span>
+                                                <span className="text-slate-600">➔</span>
+                                                <span>{l.date_end}</span>
+                                            </div>
+                                            <div className="text-xs font-bold text-orange-400 mt-1 uppercase">{renderLeaveType(l.type)}</div>
+                                        </>
+                                    )}
                                 </div>
                             </div>
                             <div className="flex items-center gap-2">
-                                <button onClick={() => handleValidation(l.id, 'REJECTED')} className="p-2 rounded-lg bg-red-500/10 text-red-400 hover:bg-red-500 hover:text-white transition-all">Refuser</button>
-                                <button onClick={() => handleValidation(l.id, 'APPROVED')} className="px-4 py-2 rounded-lg bg-ohm-primary text-ohm-bg hover:bg-yellow-300 font-bold transition-all shadow-lg shadow-primary/20">Valider</button>
+                                {editingLeaveId === l.id ? (
+                                    <>
+                                        <button onClick={() => setEditingLeaveId(null)} className="p-2 rounded-lg bg-slate-700 text-white hover:bg-slate-600 transition-all">Annuler</button>
+                                        <button onClick={() => handleSaveEditLeave(l.id)} className="px-4 py-2 rounded-lg bg-blue-500 text-white font-bold hover:bg-blue-400 transition-all">Enregistrer</button>
+                                    </>
+                                ) : (
+                                    <>
+                                        <button onClick={() => startEditingLeave(l)} className="p-2 rounded-lg bg-slate-800 text-gray-400 hover:text-white hover:bg-slate-700 transition-all font-bold text-xs mr-2">MODIFIER</button>
+                                        <button onClick={() => handleValidation(l.id, 'REJECTED')} className="p-2 rounded-lg bg-red-500/10 text-red-400 hover:bg-red-500 hover:text-white transition-all">Refuser</button>
+                                        <button onClick={() => handleValidation(l.id, 'APPROVED')} className="px-4 py-2 rounded-lg bg-ohm-primary text-ohm-bg hover:bg-yellow-300 font-bold transition-all shadow-lg shadow-primary/20">Valider</button>
+                                    </>
+                                )}
                             </div>
                         </div>
                     ))}

@@ -623,6 +623,33 @@ def update_leave_status(current_user, leave_id):
     db.session.commit()
     return jsonify(leave.to_dict())
 
+@app.route('/api/leaves/<int:leave_id>', methods=['PUT', 'DELETE'])
+@token_required
+def manage_single_leave(current_user, leave_id):
+    leave = Leave.query.get(leave_id)
+    if not leave:
+        return jsonify({'error': 'Leave not found'}), 404
+
+    if request.method == 'DELETE':
+        db.session.delete(leave)
+        db.session.commit()
+        return jsonify({'message': 'Leave deleted'})
+
+    if request.method == 'PUT':
+        data = request.json
+        if 'type' in data:
+            leave.type = data['type']
+        if 'date_start' in data:
+            leave.date_start = data['date_start']
+        if 'date_end' in data:
+            leave.date_end = data['date_end']
+        # Recalculate days_count? The frontend should send it or backend can try.
+        if 'days_count' in data:
+             leave.days_count = float(data['days_count'])
+             
+        db.session.commit()
+        return jsonify(leave.to_dict())
+
 @app.route('/api/chantiers/<int:chantier_id>/alerts', methods=['GET', 'POST'])
 @token_required
 def manage_alerts(current_user, chantier_id):

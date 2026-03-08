@@ -8,6 +8,13 @@ interface Props {
 
 export const AdminEntries: React.FC<Props> = () => {
     const [entries, setEntries] = useState<Entry[]>([]);
+    
+    // Edit state
+    const [editingId, setEditingId] = useState<number | null>(null);
+    const [editForm, setEditForm] = useState({
+        heures: '',
+        materiel: ''
+    });
 
     useEffect(() => {
         fetchPendingEntries();
@@ -26,8 +33,38 @@ export const AdminEntries: React.FC<Props> = () => {
             headers: { 'Authorization': `Bearer ${localStorage.getItem('ohm_token')}` }
         });
         if (res.ok) {
+            setEditingId(null);
             fetchPendingEntries();
         }
+    };
+
+    const handleSaveEdit = async (entryId: number) => {
+        const res = await fetch(`/api/entries/${entryId}`, {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${localStorage.getItem('ohm_token')}`
+            },
+            body: JSON.stringify({
+                heures: parseFloat(editForm.heures) || 0,
+                materiel: parseFloat(editForm.materiel) || 0
+            })
+        });
+        
+        if (res.ok) {
+            setEditingId(null);
+            fetchPendingEntries();
+        } else {
+            alert('Erreur lors de la modification');
+        }
+    };
+
+    const startEditing = (entry: Entry) => {
+        setEditingId(entry.id);
+        setEditForm({
+            heures: entry.heures.toString(),
+            materiel: entry.materiel.toString()
+        });
     };
 
     const handleReject = async (entryId: number) => {
@@ -93,27 +130,75 @@ export const AdminEntries: React.FC<Props> = () => {
                                     {e.chantier_nom}
                                 </td>
                                 <td className="p-4 text-right font-mono font-bold text-white">
-                                    {e.heures > 0 ? `${e.heures} h` : '-'}
+                                    {editingId === e.id ? (
+                                        <input 
+                                            type="number" 
+                                            step="0.5" 
+                                            className="w-20 bg-black/40 border border-white/20 rounded px-2 py-1 text-right focus:outline-none focus:border-ohm-primary" 
+                                            value={editForm.heures} 
+                                            onChange={ev => setEditForm({...editForm, heures: ev.target.value})}
+                                        />
+                                    ) : (
+                                        e.heures > 0 ? `${e.heures} h` : '-'
+                                    )}
                                 </td>
                                 <td className="p-4 text-right font-mono font-bold text-blue-400">
-                                    {e.materiel > 0 ? `${e.materiel} .-` : '-'}
+                                    {editingId === e.id ? (
+                                        <input 
+                                            type="number" 
+                                            step="0.01" 
+                                            className="w-20 bg-black/40 border border-white/20 rounded px-2 py-1 text-right focus:outline-none focus:border-blue-500 text-white" 
+                                            value={editForm.materiel} 
+                                            onChange={ev => setEditForm({...editForm, materiel: ev.target.value})}
+                                        />
+                                    ) : (
+                                        e.materiel > 0 ? `${e.materiel} .-` : '-'
+                                    )}
                                 </td>
                                 <td className="p-4 text-right">
                                     <div className="flex items-center justify-end gap-2">
-                                        <button
-                                            onClick={() => handleReject(e.id)}
-                                            className="p-2 rounded-lg bg-red-500/10 text-red-400 hover:bg-red-500 hover:text-white transition-all"
-                                            title="Refuser"
-                                        >
-                                            <X size={18} />
-                                        </button>
-                                        <button
-                                            onClick={() => handleValidate(e.id)}
-                                            className="p-2 rounded-lg bg-ohm-primary text-ohm-bg hover:bg-yellow-300 transition-all shadow-lg shadow-primary/20"
-                                            title="Valider"
-                                        >
-                                            <Check size={18} strokeWidth={3} />
-                                        </button>
+                                        {editingId === e.id ? (
+                                            <>
+                                                <button
+                                                    onClick={() => setEditingId(null)}
+                                                    className="p-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-white transition-all"
+                                                    title="Annuler"
+                                                >
+                                                    <X size={18} />
+                                                </button>
+                                                <button
+                                                    onClick={() => handleSaveEdit(e.id)}
+                                                    className="p-2 rounded-lg bg-blue-500/20 text-blue-400 hover:bg-blue-500 hover:text-white transition-all"
+                                                    title="Enregistrer"
+                                                >
+                                                    <Check size={18} />
+                                                </button>
+                                            </>
+                                        ) : (
+                                            <>
+                                                <button
+                                                    onClick={() => startEditing(e)}
+                                                    className="p-2 rounded-lg bg-slate-800 text-gray-400 hover:text-white hover:bg-slate-700 transition-all font-bold text-xs"
+                                                    title="Modifier"
+                                                >
+                                                    MODIFIER
+                                                </button>
+                                                <button
+                                                    onClick={() => handleReject(e.id)}
+                                                    className="p-2 rounded-lg bg-red-500/10 text-red-400 hover:bg-red-500 hover:text-white transition-all"
+                                                    title="Refuser"
+                                                >
+                                                    <X size={18} />
+                                                </button>
+                                                <button
+                                                    onClick={() => handleValidate(e.id)}
+                                                    className="p-2 rounded-lg bg-ohm-primary text-ohm-bg hover:bg-yellow-300 transition-all shadow-lg shadow-primary/20"
+                                                    title="Valider"
+                                                >
+                                                    <Check size={18} strokeWidth={3} />
+                                                </button>
+                                            </>
+                                        )}
                                     </div>
                                 </td>
                             </tr>
