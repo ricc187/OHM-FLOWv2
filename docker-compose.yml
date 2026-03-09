@@ -7,9 +7,8 @@ services:
       - "5000:5000"
     volumes:
       - ./data:/app/data
-    environment:
-      - FLASK_ENV=production
-      - SECRET_KEY=je mappelle riccardo et je suis informaticien jadore les voitures et les pates
+    env_file:
+      - .env
     restart: always
 
   backup:
