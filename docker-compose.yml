@@ -3,8 +3,6 @@ version: '3.8'
 services:
   web:
     build: .
-    ports:
-      - "5000:5000"
     volumes:
       - ./data:/app/data
     env_file:
@@ -17,3 +15,16 @@ services:
       - ./data:/data:ro
       - ./backups:/backups
     restart: always
+
+  npm:
+    image: 'jc21/nginx-proxy-manager:latest'
+    restart: always
+    ports:
+      - '80:80'
+      - '443:443'
+      - '81:81'
+    volumes:
+      - ./npm/data:/data
+      - ./npm/letsencrypt:/etc/letsencrypt
+    depends_on:
+      - web
