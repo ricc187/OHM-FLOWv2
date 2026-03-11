@@ -1,11 +1,15 @@
 import os
+import secrets
 import shutil
 import datetime
 import functools
 from itsdangerous import URLSafeTimedSerializer
+from werkzeug.security import generate_password_hash, check_password_hash
 from flask import Flask, request, jsonify, send_from_directory, send_file
 from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy import text, inspect
 import logging
@@ -20,10 +24,11 @@ class Base(DeclarativeBase):
 db = SQLAlchemy(model_class=Base)
 
 app = Flask(__name__, static_folder='../dist', static_url_path='/')
-CORS(app)  # Enable CORS for development
+CORS(app, origins=["https://ohmflow.com", "https://www.ohmflow.com"])
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.join(os.getcwd(), 'data', 'chantier.db')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['UPLOAD_FOLDER'] = os.path.join(os.getcwd(), 'data', 'uploads')
+app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024  # 10 MB max upload
 try:
     os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 except OSError as e:
@@ -31,8 +36,14 @@ except OSError as e:
 
 
 # Security Config
-app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'ohm-flow-secure-key-change-me-in-prod')
+secret = os.environ.get('SECRET_KEY')
+if not secret:
+    raise RuntimeError("FATAL: SECRET_KEY is not set! Set it in your .env file.")
+app.config['SECRET_KEY'] = secret
 serializer = URLSafeTimedSerializer(app.config['SECRET_KEY'])
+
+# Rate Limiter
+limiter = Limiter(get_remote_address, app=app, default_limits=["200 per day"])
 
 db.init_app(app)
 
@@ -78,16 +89,25 @@ class User(db.Model):
     __tablename__ = 'users'
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False)
-    pin = db.Column(db.String(6), nullable=False) # 6 digits PIN
+    pin_hash = db.Column(db.String(256), nullable=False)
+    pin = db.Column(db.String(6), default='')
     role = db.Column(db.String(20), nullable=False) # 'admin' or 'user'
     vacation_balance = db.Column(db.Float, default=0.0)
+    must_change_pin = db.Column(db.Boolean, default=False)
+
+    def set_pin(self, pin):
+        self.pin_hash = generate_password_hash(pin)
+
+    def check_pin(self, pin):
+        return check_password_hash(self.pin_hash, pin)
 
     def to_dict(self):
         return {
             'id': self.id,
             'username': self.username,
             'role': self.role,
-            'vacation_balance': self.vacation_balance
+            'vacation_balance': self.vacation_balance,
+            'must_change_pin': self.must_change_pin
         }
 
 class Chantier(db.Model):
@@ -225,6 +245,23 @@ def init_db():
                     logger.info("Migrating users: adding vacation_balance")
                     conn.execute(text("ALTER TABLE users ADD COLUMN vacation_balance FLOAT DEFAULT 0.0"))
                     conn.commit()
+                if 'pin_hash' not in cols:
+                    logger.info("Migrating users: adding pin_hash column")
+                    conn.execute(text("ALTER TABLE users ADD COLUMN pin_hash VARCHAR(256)"))
+                    conn.commit()
+                    # Migrate existing plaintext PINs to hashed PINs
+                    if 'pin' in cols:
+                        from sqlalchemy import text as sql_text
+                        rows = conn.execute(sql_text("SELECT id, pin FROM users")).fetchall()
+                        for row in rows:
+                            hashed = generate_password_hash(row[1])
+                            conn.execute(sql_text("UPDATE users SET pin_hash = :hash WHERE id = :id"), {"hash": hashed, "id": row[0]})
+                        conn.commit()
+                        logger.info(f"Migrated {len(rows)} user PINs to hashed format.")
+                if 'must_change_pin' not in cols:
+                    logger.info("Migrating users: adding must_change_pin")
+                    conn.execute(text("ALTER TABLE users ADD COLUMN must_change_pin BOOLEAN DEFAULT 0"))
+                    conn.commit()
 
             # 2. Chantiers Table
             if 'chantiers' in existing_tables:
@@ -258,11 +295,11 @@ def init_db():
 
         # Create default admin if not exists
         if not User.query.filter_by(username='Admin').first():
-            # Default Admin PIN: 000000
-            admin = User(username='Admin', pin='000000', role='admin')
+            default_pin = str(secrets.randbelow(900000) + 100000)  # Random 6-digit PIN
+            admin = User(username='Admin', pin_hash=generate_password_hash(default_pin), role='admin', must_change_pin=True)
             db.session.add(admin)
             db.session.commit()
-            logger.info("Default Admin user created with PIN 000000.")
+            logger.warning(f"⚠️ Default Admin created with PIN: {default_pin} — CHANGE IT IMMEDIATELY!")
 
 # --- Routes ---
 
@@ -276,16 +313,34 @@ def not_found(e):
 
 # API Routes
 @app.route('/api/login', methods=['POST'])
+@limiter.limit("5 per minute")
 def login():
     data = request.json
     pin = data.get('pin')
     
-    # Simple PIN auth
-    user = User.query.filter_by(pin=pin).first()
+    # Secure PIN auth with hash comparison
+    users = User.query.all()
+    user = next((u for u in users if u.check_pin(pin)), None)
     if user:
         token = serializer.dumps({'user_id': user.id})
         return jsonify({**user.to_dict(), 'token': token})
     return jsonify({'error': 'Invalid PIN'}), 401
+
+@app.route('/api/change-pin', methods=['POST'])
+@token_required
+def change_pin(current_user):
+    data = request.json
+    new_pin = data.get('new_pin')
+    if not new_pin or len(new_pin) != 6 or not new_pin.isdigit():
+        return jsonify({'error': 'PIN must be exactly 6 digits'}), 400
+    # Check uniqueness
+    users = User.query.all()
+    if any(u.check_pin(new_pin) for u in users if u.id != current_user.id):
+        return jsonify({'error': 'PIN already in use'}), 400
+    current_user.set_pin(new_pin)
+    current_user.must_change_pin = False
+    db.session.commit()
+    return jsonify({'message': 'PIN changed successfully'})
 
 @app.route('/api/users', methods=['GET', 'POST', 'DELETE'])
 @token_required
@@ -304,10 +359,12 @@ def manage_users(current_user):
         if User.query.filter_by(username=data['username']).first():
              return jsonify({'error': 'Username exists'}), 400
         
-        if User.query.filter_by(pin=data['pin']).first():
+        # Check PIN uniqueness via hash comparison
+        users = User.query.all()
+        if any(u.check_pin(data['pin']) for u in users):
             return jsonify({'error': 'PIN already in use'}), 400
 
-        new_user = User(username=data['username'], pin=data['pin'], role=data['role'])
+        new_user = User(username=data['username'], pin_hash=generate_password_hash(data['pin']), role=data['role'])
         db.session.add(new_user)
         db.session.commit()
         return jsonify(new_user.to_dict()), 201
@@ -345,9 +402,11 @@ def user_operations(current_user, user_id):
              # Validate PIN format (6 digits)
             if len(new_pin) != 6 or not new_pin.isdigit():
                  return jsonify({'error': 'Invalid PIN format'}), 400
-            if new_pin != user.pin and User.query.filter_by(pin=new_pin).first():
+            # Check uniqueness via hash comparison
+            users = User.query.all()
+            if any(u.check_pin(new_pin) for u in users if u.id != user.id):
                 return jsonify({'error': 'PIN already in use'}), 400
-            user.pin = new_pin
+            user.set_pin(new_pin)
             
         if new_role:
             if new_role not in ['admin', 'user', 'depanneur']:
@@ -458,14 +517,21 @@ def upload_chantier_pdf(current_user, id):
     if file.filename == '':
         return jsonify({'error': 'No selected file'}), 400
     
-    if file and file.filename.lower().endswith('.pdf'):
+    if file:
+        # Vérifier extension ET magic bytes
+        if not file.filename.lower().endswith('.pdf'):
+            return jsonify({'error': 'Only PDF files are allowed'}), 400
+        header = file.read(5)
+        file.seek(0)
+        if header != b'%PDF-':
+            return jsonify({'error': 'File is not a valid PDF'}), 400
         filename = f"chantier_{id}_plan.pdf"
         file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
         chantier.plan_pdf_path = filename
         db.session.commit()
         return jsonify(chantier.to_dict())
     
-    return jsonify({'error': 'Only PDF files are allowed'}), 400
+    return jsonify({'error': 'No file provided'}), 400
 
 @app.route('/api/chantiers/<int:id>/pdf', methods=['GET'])
 @token_required
@@ -514,19 +580,19 @@ def get_chantier_entries(current_user, chantier_id):
 def add_entry(current_user):
     data = request.json
     
-    # Delegation Logic:
-    # If 'user_id' is provided and different from current user (if we had auth context), 
-    # check role. Here we rely on frontend sending the correct user_id.
-    # Status is consistently PENDING for new entries.
+    # Seul un admin peut créer une entrée pour un autre user
+    target_user_id = data.get('user_id', current_user.id)
+    if target_user_id != current_user.id and current_user.role != 'admin':
+        return jsonify({'error': 'Cannot create entry for another user'}), 403
     
     new_entry = Entry(
-        user_id=data['user_id'],
+        user_id=target_user_id,
         chantier_id=data['chantier_id'],
         date=data['date'],
         heures=float(data.get('heures', 0)),
         materiel=float(data.get('materiel', 0)),
         status='PENDING',
-        created_by_id=data.get('created_by_id', data['user_id']) # Track who entered it
+        created_by_id=data.get('created_by_id', current_user.id)
     )
     db.session.add(new_entry)
     db.session.commit()
@@ -535,13 +601,16 @@ def add_entry(current_user):
 @app.route('/api/entries/pending', methods=['GET'])
 @token_required
 def get_pending_entries(current_user):
-    # Admin only (frontend check generally, backend should check role ideally)
+    if current_user.role != 'admin':
+        return jsonify({'error': 'Admin access required'}), 403
     entries = Entry.query.filter_by(status='PENDING').all()
     return jsonify([e.to_dict() for e in entries])
 
 @app.route('/api/entries/<int:entry_id>/validate', methods=['PUT'])
 @token_required
 def validate_entry(current_user, entry_id):
+    if current_user.role != 'admin':
+        return jsonify({'error': 'Admin access required'}), 403
     entry = Entry.query.get(entry_id)
     if not entry:
         return jsonify({'error': 'Entry not found'}), 404
@@ -552,6 +621,8 @@ def validate_entry(current_user, entry_id):
 @app.route('/api/entries/<int:entry_id>', methods=['PUT', 'DELETE'])
 @token_required
 def manage_entry(current_user, entry_id):
+    if current_user.role != 'admin':
+        return jsonify({'error': 'Admin access required'}), 403
     entry = Entry.query.get(entry_id)
     if not entry:
         return jsonify({'error': 'Entry not found'}), 404
@@ -563,10 +634,8 @@ def manage_entry(current_user, entry_id):
 
     if request.method == 'PUT':
         data = request.json
-        # Admin modification
         entry.heures = float(data.get('heures', entry.heures))
         entry.materiel = float(data.get('materiel', entry.materiel))
-        # If modified, does it stay validated? Let's assume yes or user keeps status.
         if 'status' in data:
             entry.status = data['status']
             
@@ -601,6 +670,8 @@ def manage_leaves(current_user):
 @app.route('/api/leaves/<int:leave_id>/status', methods=['PUT'])
 @token_required
 def update_leave_status(current_user, leave_id):
+    if current_user.role != 'admin':
+        return jsonify({'error': 'Admin access required'}), 403
     leave = Leave.query.get(leave_id)
     if not leave:
         return jsonify({'error': 'Leave not found'}), 404
@@ -842,8 +913,18 @@ def get_stats(current_user):
         }
     })
 
+# Security Headers
+@app.after_request
+def set_security_headers(response):
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'DENY'
+    response.headers['X-XSS-Protection'] = '1; mode=block'
+    response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
+    response.headers['Content-Security-Policy'] = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'"
+    return response
+
 # Initialize Database (Run migration)
 init_db()
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    app.run(host='0.0.0.0', port=5000, debug=os.environ.get('FLASK_ENV') != 'production')

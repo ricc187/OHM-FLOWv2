@@ -20,3 +20,6 @@ backend/data/
 backend/backup/
 data/
 *.db
+backups/
+npm/
+*.pem
