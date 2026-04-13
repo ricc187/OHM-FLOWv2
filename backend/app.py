@@ -158,6 +158,7 @@ class Entry(db.Model):
     # New fields
     status = db.Column(db.String(20), default='PENDING') # PENDING, VALIDATED
     created_by_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    admin_note = db.Column(db.Text, nullable=True)
     
     user = db.relationship('User', foreign_keys=[user_id], backref='entries')
     created_by = db.relationship('User', foreign_keys=[created_by_id])
@@ -174,7 +175,8 @@ class Entry(db.Model):
             'heures': self.heures,
             'materiel': self.materiel,
             'status': self.status,
-            'created_by_id': self.created_by_id
+            'created_by_id': self.created_by_id,
+            'admin_note': self.admin_note
         }
 
 class Leave(db.Model):
@@ -186,6 +188,7 @@ class Leave(db.Model):
     date_end = db.Column(db.String(20), nullable=False)
     status = db.Column(db.String(20), default='PENDING') # PENDING, APPROVED, REJECTED
     days_count = db.Column(db.Float, default=0.0) 
+    admin_note = db.Column(db.Text, nullable=True)
 
     user = db.relationship('User', backref='leaves')
 
@@ -198,7 +201,8 @@ class Leave(db.Model):
             'date_start': self.date_start,
             'date_end': self.date_end,
             'status': self.status,
-            'days_count': self.days_count
+            'days_count': self.days_count,
+            'admin_note': self.admin_note
         }
 
 class Alert(db.Model):
@@ -291,6 +295,18 @@ def init_db():
                 if 'created_by_id' not in cols:
                     logger.info("Migrating entries: adding created_by_id")
                     conn.execute(text("ALTER TABLE entries ADD COLUMN created_by_id INTEGER REFERENCES users(id)"))
+                    conn.commit()
+                if 'admin_note' not in cols:
+                    logger.info("Migrating entries: adding admin_note")
+                    conn.execute(text("ALTER TABLE entries ADD COLUMN admin_note TEXT"))
+                    conn.commit()
+
+            # 4. Leaves Table
+            if 'leaves' in existing_tables:
+                cols = [c['name'] for c in inspector.get_columns('leaves')]
+                if 'admin_note' not in cols:
+                    logger.info("Migrating leaves: adding admin_note")
+                    conn.execute(text("ALTER TABLE leaves ADD COLUMN admin_note TEXT"))
                     conn.commit()
 
         # Create default admin if not exists
@@ -638,6 +654,8 @@ def manage_entry(current_user, entry_id):
         entry.materiel = float(data.get('materiel', entry.materiel))
         if 'status' in data:
             entry.status = data['status']
+        if 'admin_note' in data:
+            entry.admin_note = data['admin_note']
             
         db.session.commit()
         return jsonify(entry.to_dict())
@@ -714,6 +732,10 @@ def manage_single_leave(current_user, leave_id):
             leave.date_start = data['date_start']
         if 'date_end' in data:
             leave.date_end = data['date_end']
+        if 'admin_note' in data:
+            leave.admin_note = data['admin_note']
+        if 'status' in data:
+            leave.status = data['status']
         # Recalculate days_count? The frontend should send it or backend can try.
         if 'days_count' in data:
              leave.days_count = float(data['days_count'])

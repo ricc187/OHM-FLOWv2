@@ -34,17 +34,19 @@ export interface Entry {
     materiel: number;
     status: 'PENDING' | 'VALIDATED';
     created_by_id?: number;
+    admin_note?: string;
 }
 
 export interface Leave {
     id: number;
     user_id: number;
     user_name: string;
-    type: 'VACATION' | 'SICKNESS' | 'OTHER';
+    type: 'VACATION' | 'SICKNESS' | 'OTHER' | 'HOLIDAY';
     date_start: string;
     date_end: string;
     status: 'PENDING' | 'APPROVED' | 'REJECTED';
     days_count: number;
+    admin_note?: string;
 }
 
 export interface Alert {

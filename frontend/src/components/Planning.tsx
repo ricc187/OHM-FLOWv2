@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { User, Leave } from '../types';
 import { Calendar, Plus, Clock, ChevronLeft, ChevronRight } from 'lucide-react';
 import { StatusBadge } from './StatusBadge';
@@ -19,9 +19,31 @@ const isWithinRange = (checkDate: Date, start: string, end: string) => {
 
 const CalendarView = ({ leaves }: { leaves: Leave[] }) => {
     const [currentDate, setCurrentDate] = useState(new Date());
+    const [holidays, setHolidays] = useState<Record<string, string>>({});
 
     const year = currentDate.getFullYear();
     const month = currentDate.getMonth();
+
+    useEffect(() => {
+        fetch(`https://calendrier.api.gouv.fr/jours-feries/metropole/${year}.json`)
+            .then(res => res.json())
+            .then(data => setHolidays(data))
+            .catch(err => console.error("Erreur lors du chargement des jours fériés", err));
+    }, [year]);
+
+    const allLeaves = useMemo(() => {
+        const synthHolidays: Leave[] = Object.entries(holidays).map(([date, name], idx) => ({
+            id: -(idx + 1), // Negative IDs for synthetic items to avoid clash
+            user_id: 0,
+            user_name: `🌟 ${name}`,
+            type: 'HOLIDAY',
+            date_start: date,
+            date_end: date,
+            days_count: 1,
+            status: 'APPROVED'
+        }));
+        return [...leaves, ...synthHolidays];
+    }, [leaves, holidays]);
 
     const daysInMonth = getDaysInMonth(year, month);
     const firstDay = new Date(year, month, 1).getDay(); // 0=Sun, 1=Mon
@@ -43,12 +65,15 @@ const CalendarView = ({ leaves }: { leaves: Leave[] }) => {
         // Days of month
         for (let d = 1; d <= daysInMonth; d++) {
             const dateObj = new Date(year, month, d);
-            // dateStr removed as it was unused
 
             // Find overlapping leaves
-            const dayLeaves = leaves
+            const dayLeaves = allLeaves
                 .filter(l => (l.status === 'APPROVED' || l.status === 'PENDING') && isWithinRange(new Date(year, month, d), l.date_start, l.date_end))
-                .sort((a, b) => a.id - b.id); // Sort by ID to keep consistent order across days
+                .sort((a, b) => {
+                    if (a.type === 'HOLIDAY' && b.type !== 'HOLIDAY') return -1;
+                    if (a.type !== 'HOLIDAY' && b.type === 'HOLIDAY') return 1;
+                    return b.id - a.id; 
+                }); // Sort to keep holidays on top and keep consistent order
 
             days.push(
                 <div key={d} className="min-h-[6rem] bg-slate-900/50 border border-slate-800 pt-2 px-0 flex flex-col gap-1 overflow-hidden hover:bg-slate-800/50 transition-colors p-0">
@@ -56,6 +81,8 @@ const CalendarView = ({ leaves }: { leaves: Leave[] }) => {
                         ? 'bg-ohm-primary text-black w-6 h-6 rounded-full flex items-center justify-center'
                         : 'text-gray-500'
                         }`}>{d}</span>
+
+
 
                     {dayLeaves.map(l => {
                         const isStart = new Date(l.date_start).getTime() === dateObj.getTime();
@@ -78,18 +105,24 @@ const CalendarView = ({ leaves }: { leaves: Leave[] }) => {
                             roundedClass = 'rounded-l rounded-r-none';
                             marginClass = 'ml-1 mr-0 border-r-0';
                         }
+                        
+                        let extraClass = '';
+                        if (l.type === 'HOLIDAY') {
+                            extraClass = 'bg-purple-500/20 text-purple-300 border border-purple-500/30 font-extrabold uppercase italic tracking-wider shadow-purple-500/10 shadow-inner z-10 mx-0 mt-1 mb-1';
+                        } else if (l.status === 'APPROVED') {
+                            extraClass = 'bg-green-500/20 text-green-400 border border-green-500/30';
+                        } else {
+                            extraClass = 'bg-orange-500/20 text-orange-400 border border-orange-500/30';
+                        }
 
                         return (
                             <div
                                 key={l.id}
-                                className={`py-1 text-[10px] font-bold truncate flex items-center gap-1 shadow-sm h-6 ${roundedClass} ${marginClass} ${l.status === 'APPROVED'
-                                    ? 'bg-green-500/20 text-green-400 border border-green-500/30'
-                                    : 'bg-orange-500/20 text-orange-400 border border-orange-500/30'
-                                    } ${continuesFromPrev ? 'pl-2' : 'pl-2'} ${continuesToNext ? 'pr-2' : 'pr-2'}`}
+                                className={`py-1 text-[10px] truncate flex items-center gap-1 shadow-sm opacity-90 h-6 ${roundedClass} ${marginClass} ${extraClass} ${continuesFromPrev ? 'pl-2' : 'pl-2'} ${continuesToNext ? 'pr-2' : 'pr-2'} ${l.type === 'HOLIDAY' ? 'justify-center border-l border-r' : 'font-bold'}`}
                                 title={`${l.user_name} - ${l.type}`}
                             >
                                 {/* Only show dot on start or if space permits? Showing it always is fine for now */}
-                                {isStart && <span className="w-1.5 h-1.5 rounded-full shrink-0 bg-current"></span>}
+                                {isStart && l.type !== 'HOLIDAY' && <span className="w-1.5 h-1.5 rounded-full shrink-0 bg-current"></span>}
                                 {/* Hide text if it's a middle segment to save space, or keep it for readability? Keeping it. */}
                                 {l.user_name}
                             </div>
@@ -150,7 +183,7 @@ export const Planning: React.FC<Props> = ({ currentUser }) => {
 
     // Admin Edit Leave State
     const [editingLeaveId, setEditingLeaveId] = useState<number | null>(null);
-    const [editLeaveForm, setEditLeaveForm] = useState({ start_date: '', end_date: '', type: 'VACATION' });
+    const [editLeaveForm, setEditLeaveForm] = useState({ start_date: '', end_date: '', type: 'VACATION', admin_note: '' });
 
     useEffect(() => {
         fetchLeaves();
@@ -210,6 +243,7 @@ export const Planning: React.FC<Props> = ({ currentUser }) => {
                 date_start: editLeaveForm.start_date,
                 date_end: editLeaveForm.end_date,
                 type: editLeaveForm.type,
+                admin_note: editLeaveForm.admin_note
                  // Simplification: we might need to recalculate days_count, but let's assume default 1 or let backend/admin fix
                  // Ideally calculate working days here. We'll leave it as is for UI update.
             })
@@ -227,7 +261,8 @@ export const Planning: React.FC<Props> = ({ currentUser }) => {
         setEditLeaveForm({
             start_date: leave.date_start,
             end_date: leave.date_end,
-            type: leave.type
+            type: leave.type,
+            admin_note: leave.admin_note || ''
         });
     };
 
@@ -255,7 +290,7 @@ export const Planning: React.FC<Props> = ({ currentUser }) => {
                     <button onClick={() => setActiveTab('GLOBAL')} className={`px-4 py-2 rounded-md text-sm font-bold transition-all ${activeTab === 'GLOBAL' ? 'bg-slate-700 text-white shadow' : 'text-gray-400 hover:text-white'}`}>PLANNING</button>
                     <button onClick={() => setActiveTab('MY_LEAVES')} className={`px-4 py-2 rounded-md text-sm font-bold transition-all ${activeTab === 'MY_LEAVES' ? 'bg-slate-700 text-white shadow' : 'text-gray-400 hover:text-white'}`}>MES CONGÉS</button>
                     {currentUser.role === 'admin' && (
-                        <button onClick={() => setActiveTab('VALIDATION')} className={`px-4 py-2 rounded-md text-sm font-bold transition-all ${activeTab === 'VALIDATION' ? 'bg-slate-700 text-white shadow' : 'text-gray-400 hover:text-white'}`}>VALIDATION</button>
+                        <button onClick={() => setActiveTab('VALIDATION')} className={`px-4 py-2 rounded-md text-sm font-bold transition-all ${activeTab === 'VALIDATION' ? 'bg-slate-700 text-white shadow' : 'text-gray-400 hover:text-white'}`}>GESTION DES CONGÉS</button>
                     )}
                 </div>
             </div>
@@ -314,6 +349,12 @@ export const Planning: React.FC<Props> = ({ currentUser }) => {
                                         <span className="text-slate-600">➔</span>
                                         <span>{l.date_end}</span>
                                     </div>
+                                    {l.admin_note && (
+                                        <div className="mt-2 text-xs italic text-gray-400 bg-slate-800/50 p-2 rounded border border-slate-700">
+                                            <span className="font-bold text-ohm-primary mr-1">Note de l'admin:</span>
+                                            {l.admin_note}
+                                        </div>
+                                    )}
                                 </div>
                                 <StatusBadge status={l.status} type="leave" />
                             </div>
@@ -325,15 +366,22 @@ export const Planning: React.FC<Props> = ({ currentUser }) => {
             {/* ADMIN VALIDATION */}
             {activeTab === 'VALIDATION' && currentUser.role === 'admin' && (
                 <div className="space-y-4">
-                    <h3 className="font-bold text-white uppercase tracking-wider mb-4">Demandes en attente</h3>
-                    {leaves.filter(l => l.status === 'PENDING').map(l => (
-                        <div key={l.id} className="card p-4 flex flex-col md:flex-row md:items-center justify-between gap-4 border-l-4 border-l-ohm-primary">
-                            <div className="flex items-center gap-4 w-full md:w-auto">
-                                <div className="w-10 h-10 bg-slate-700 rounded-full flex items-center justify-center font-bold text-white shrink-0">
+                    <h3 className="font-bold text-white uppercase tracking-wider mb-4">Gestion des Congés</h3>
+                    {[...leaves].sort((a, b) => {
+                        if (a.status === 'PENDING' && b.status !== 'PENDING') return -1;
+                        if (a.status !== 'PENDING' && b.status === 'PENDING') return 1;
+                        return new Date(b.date_start).getTime() - new Date(a.date_start).getTime();
+                    }).map(l => (
+                        <div key={l.id} className={`card p-4 flex flex-col md:flex-row md:items-start justify-between gap-4 border-l-4 ${l.status === 'PENDING' ? 'border-l-ohm-primary' : 'border-l-slate-700'}`}>
+                            <div className="flex items-start gap-4 w-full md:w-auto">
+                                <div className="w-10 h-10 bg-slate-700 rounded-full flex items-center justify-center font-bold text-white shrink-0 mt-1">
                                     {l.user_name?.[0]}
                                 </div>
                                 <div className="flex-1">
-                                    <div className="font-bold text-white text-lg">{l.user_name}</div>
+                                    <div className="font-bold text-white text-lg flex items-center gap-3">
+                                        {l.user_name}
+                                        <StatusBadge status={l.status} type="leave" />
+                                    </div>
                                     
                                     {editingLeaveId === l.id ? (
                                         <div className="mt-2 space-y-2">
@@ -347,39 +395,56 @@ export const Planning: React.FC<Props> = ({ currentUser }) => {
                                                 <option value="SICKNESS">Maladie</option>
                                                 <option value="OTHER">Autre</option>
                                             </select>
+                                            <textarea 
+                                                className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-white text-sm mt-2" 
+                                                rows={2} 
+                                                placeholder="Ajouter une note administrative (visible par l'utilisateur)..."
+                                                value={editLeaveForm.admin_note} 
+                                                onChange={e => setEditLeaveForm({...editLeaveForm, admin_note: e.target.value})} 
+                                            />
                                         </div>
                                     ) : (
                                         <>
-                                            <div className="text-sm text-gray-400 font-mono flex items-center gap-2">
+                                            <div className="text-sm text-gray-400 font-mono flex items-center gap-2 mt-1">
                                                 <span>{l.date_start}</span>
                                                 <span className="text-slate-600">➔</span>
                                                 <span>{l.date_end}</span>
                                             </div>
                                             <div className="text-xs font-bold text-orange-400 mt-1 uppercase">{renderLeaveType(l.type)}</div>
+                                            {l.admin_note && (
+                                                <div className="mt-2 text-xs italic text-gray-400 bg-slate-800/50 p-2 rounded border border-slate-700">
+                                                    <span className="font-bold text-ohm-primary mr-1">Note:</span>
+                                                    {l.admin_note}
+                                                </div>
+                                            )}
                                         </>
                                     )}
                                 </div>
                             </div>
-                            <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-2 mt-4 md:mt-0 self-end md:self-auto flex-wrap justify-end">
                                 {editingLeaveId === l.id ? (
                                     <>
-                                        <button onClick={() => setEditingLeaveId(null)} className="p-2 rounded-lg bg-slate-700 text-white hover:bg-slate-600 transition-all">Annuler</button>
-                                        <button onClick={() => handleSaveEditLeave(l.id)} className="px-4 py-2 rounded-lg bg-blue-500 text-white font-bold hover:bg-blue-400 transition-all">Enregistrer</button>
+                                        <button onClick={() => setEditingLeaveId(null)} className="p-2 rounded-lg bg-slate-700 text-white hover:bg-slate-600 transition-all text-xs font-bold uppercase">Annuler</button>
+                                        <button onClick={() => handleSaveEditLeave(l.id)} className="px-4 py-2 rounded-lg bg-blue-500 text-white font-bold hover:bg-blue-400 transition-all text-xs uppercase">Enregistrer</button>
                                     </>
                                 ) : (
                                     <>
-                                        <button onClick={() => startEditingLeave(l)} className="p-2 rounded-lg bg-slate-800 text-gray-400 hover:text-white hover:bg-slate-700 transition-all font-bold text-xs mr-2">MODIFIER</button>
-                                        <button onClick={() => handleValidation(l.id, 'REJECTED')} className="p-2 rounded-lg bg-red-500/10 text-red-400 hover:bg-red-500 hover:text-white transition-all">Refuser</button>
-                                        <button onClick={() => handleValidation(l.id, 'APPROVED')} className="px-4 py-2 rounded-lg bg-ohm-primary text-ohm-bg hover:bg-yellow-300 font-bold transition-all shadow-lg shadow-primary/20">Valider</button>
+                                        <button onClick={() => startEditingLeave(l)} className="p-2 rounded-lg bg-slate-800 text-gray-400 hover:text-white hover:bg-slate-700 transition-all font-bold text-xs mr-2 border border-slate-700">MODIFIER</button>
+                                        {l.status === 'PENDING' && (
+                                            <>
+                                                <button onClick={() => handleValidation(l.id, 'REJECTED')} className="p-2 rounded-lg bg-red-500/10 text-red-400 hover:bg-red-500 hover:text-white transition-all text-xs font-bold uppercase">Refuser</button>
+                                                <button onClick={() => handleValidation(l.id, 'APPROVED')} className="px-4 py-2 rounded-lg bg-ohm-primary text-ohm-bg hover:bg-yellow-300 font-bold transition-all shadow-lg shadow-primary/20 text-xs uppercase">Valider</button>
+                                            </>
+                                        )}
                                     </>
                                 )}
                             </div>
                         </div>
                     ))}
-                    {leaves.filter(l => l.status === 'PENDING').length === 0 && (
+                    {leaves.length === 0 && (
                         <div className="p-12 text-center text-gray-500 italic flex flex-col items-center border-2 border-dashed border-slate-800 rounded-xl">
                             <Clock size={48} className="opacity-20 mb-4" />
-                            <p>Toutes les demandes ont été traitées.</p>
+                            <p>Aucune demande de congé.</p>
                         </div>
                     )}
                 </div>
