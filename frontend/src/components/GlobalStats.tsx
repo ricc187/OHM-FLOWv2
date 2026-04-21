@@ -28,10 +28,10 @@ const StatCard = ({ icon: Icon, label, value, unit, color, bg, border }: any) =>
             <div className={`p-3 ${bg} rounded-xl ${color} shadow-lg shadow-black/20`}>
                 <Icon size={24} />
             </div>
-            <span className="text-xs font-bold text-gray-400 uppercase tracking-widest">{label}</span>
+            <span className="text-xs font-bold text-slate-500 uppercase tracking-widest">{label}</span>
         </div>
-        <div className="text-4xl font-display font-bold text-white">
-            {value} <span className="text-sm font-bold text-gray-500">{unit}</span>
+        <div className="text-4xl font-display font-bold text-slate-900">
+            {value} <span className="text-sm font-bold text-slate-400">{unit}</span>
         </div>
     </div>
 );
@@ -154,11 +154,11 @@ const InteractiveLineChart = ({ data, dataKey, color, height = 250, unit = '' }:
                         transform: `translate(${hoverPos.x > containerRef.current!.getBoundingClientRect().width / 2 ? '-100%' : '0%'}, -120%)`
                     }}
                 >
-                    <div className="bg-slate-900/90 backdrop-blur border border-white/10 p-3 rounded-xl shadow-2xl min-w-[120px] ml-4 mt-4">
-                        <div className="text-gray-400 text-xs font-mono uppercase mb-1">{formatMonth(activePoint.original.month)}</div>
-                        <div className="text-white font-bold text-xl flex items-baseline gap-1">
+                    <div className="bg-white/90 backdrop-blur border border-black/5 p-3 rounded-xl shadow-2xl min-w-[120px] ml-4 mt-4">
+                        <div className="text-slate-500 text-xs font-mono uppercase mb-1">{formatMonth(activePoint.original.month)}</div>
+                        <div className="text-slate-900 font-bold text-xl flex items-baseline gap-1">
                             {activePoint.val}
-                            <span className="text-sm font-normal text-gray-500">{unit}</span>
+                            <span className="text-sm font-normal text-slate-400">{unit}</span>
                         </div>
                     </div>
                 </div>
@@ -208,7 +208,7 @@ export const GlobalStats: React.FC = () => {
         <div className="space-y-8 animate-fade-in pb-10">
             <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
                 <div>
-                    <h2 className="text-4xl font-display font-bold text-white flex items-center gap-3">
+                    <h2 className="text-4xl font-display font-bold text-slate-900 flex items-center gap-3">
                         <div className="p-3 bg-blue-500/10 rounded-2xl border border-blue-500/20 shadow-glow">
                             <Activity className="text-blue-400" size={32} />
                         </div>
@@ -218,14 +218,14 @@ export const GlobalStats: React.FC = () => {
                 </div>
 
                 {/* Date Controls */}
-                <div className="flex p-1 bg-black/40 backdrop-blur border border-white/10 rounded-xl overflow-hidden self-start md:self-auto">
+                <div className="flex p-1 bg-white/40 backdrop-blur border border-black/5 rounded-xl overflow-hidden self-start md:self-auto">
                     {(['3M', '6M', '1Y', 'ALL'] as const).map(range => (
                         <button
                             key={range}
                             onClick={() => setFilterRange(range)}
                             className={`px-4 py-2 text-xs font-bold transition-all ${filterRange === range
                                 ? 'bg-primary text-black shadow-lg'
-                                : 'text-gray-400 hover:text-white hover:bg-white/5'
+                                : 'text-slate-500 hover:text-slate-900 hover:bg-black/5'
                                 }`}
                         >
                             {range}
@@ -283,8 +283,8 @@ export const GlobalStats: React.FC = () => {
                                 <TrendingUp className="text-primary" size={20} />
                             </div>
                             <div>
-                                <h3 className="text-lg font-bold text-white">Tendance des Heures</h3>
-                                <p className="text-xs text-gray-500">Période: {filterRange}</p>
+                                <h3 className="text-lg font-bold text-slate-900">Tendance des Heures</h3>
+                                <p className="text-xs text-slate-400">Période: {filterRange}</p>
                             </div>
                         </div>
                         {stats.comparison && (
@@ -299,7 +299,7 @@ export const GlobalStats: React.FC = () => {
                     </div>
 
                     {/* X-Axis Labels */}
-                    <div className="flex justify-between mt-4 text-[10px] text-gray-500 font-mono uppercase tracking-widest px-2">
+                    <div className="flex justify-between mt-4 text-[10px] text-slate-400 font-mono uppercase tracking-widest px-2">
                         {filteredHistory.length > 0 && (
                             <>
                                 <span>{formatMonth(filteredHistory[0].month)}</span>
@@ -318,8 +318,8 @@ export const GlobalStats: React.FC = () => {
                                 <DollarSign className="text-blue-400" size={20} />
                             </div>
                             <div>
-                                <h3 className="text-lg font-bold text-white">Dépenses Matériel</h3>
-                                <p className="text-xs text-gray-500">Période: {filterRange}</p>
+                                <h3 className="text-lg font-bold text-slate-900">Dépenses Matériel</h3>
+                                <p className="text-xs text-slate-400">Période: {filterRange}</p>
                             </div>
                         </div>
                         {stats.comparison && stats.comparison.material_growth !== undefined && (
@@ -337,12 +337,12 @@ export const GlobalStats: React.FC = () => {
                                     style={{ height: `${Math.max((item.material / maxMaterial) * 100, 2)}%` }}
                                 >
                                     {/* Tooltip for Bar Chart */}
-                                    <div className="opacity-0 group-hover:opacity-100 absolute bottom-full left-1/2 -translate-x-1/2 mb-2 bg-slate-900 border border-slate-700 p-2 rounded shadow-xl text-xs whitespace-nowrap z-20 pointer-events-none transition-all">
-                                        <div className="font-bold text-white">{item.material.toLocaleString()} CHF</div>
-                                        <div className="text-gray-400">{formatMonth(item.month)}</div>
+                                    <div className="opacity-0 group-hover:opacity-100 absolute bottom-full left-1/2 -translate-x-1/2 mb-2 bg-white border border-slate-300 p-2 rounded shadow-xl text-xs whitespace-nowrap z-20 pointer-events-none transition-all">
+                                        <div className="font-bold text-slate-900">{item.material.toLocaleString()} CHF</div>
+                                        <div className="text-slate-500">{formatMonth(item.month)}</div>
                                     </div>
                                 </div>
-                                <span className="text-[9px] font-mono text-gray-500 uppercase rotate-45 md:rotate-0 mt-2 truncate w-full text-center">
+                                <span className="text-[9px] font-mono text-slate-400 uppercase rotate-45 md:rotate-0 mt-2 truncate w-full text-center">
                                     {filteredHistory.length > 6 ? (index % 2 === 0 ? formatMonth(item.month) : '') : formatMonth(item.month)}
                                 </span>
                             </div>

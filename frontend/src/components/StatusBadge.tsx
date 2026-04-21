@@ -5,7 +5,7 @@ interface StatusBadgeProps {
 }
 
 export const StatusBadge = ({ status, type }: StatusBadgeProps) => {
-    let colorClass = 'bg-slate-700 text-slate-300'; // Default
+    let colorClass = 'bg-slate-100 text-slate-300'; // Default
 
     const normalizedStatus = status.toUpperCase();
 
@@ -21,7 +21,7 @@ export const StatusBadge = ({ status, type }: StatusBadgeProps) => {
     }
 
     if (type === 'leave') {
-        if (normalizedStatus === 'PENDING') colorClass = 'bg-yellow-500/20 text-yellow-400';
+        if (normalizedStatus === 'PENDING') colorClass = 'bg-yellow-500/20 text-blue-600';
         if (normalizedStatus === 'APPROVED') colorClass = 'bg-green-500/20 text-green-400';
         if (normalizedStatus === 'REJECTED') colorClass = 'bg-red-500/20 text-red-400';
     }

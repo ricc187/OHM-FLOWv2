@@ -1,15 +1,11 @@
-@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 @layer base {
   body {
-    @apply bg-background text-text antialiased font-sans selection:bg-primary/50 selection:text-black;
-    /* Rich Midnight Blue Background */
-    background-color: #001233;
-    background-image:
-      radial-gradient(circle at 50% -20%, #002855 0%, #001233 60%);
+    @apply bg-background text-text antialiased font-sans selection:bg-primary/20 selection:text-primary-dark;
   }
 
   /* Custom Scrollbar */
@@ -19,11 +15,11 @@
   }
 
   ::-webkit-scrollbar-track {
-    @apply bg-black/40;
+    @apply bg-slate-100;
   }
 
   ::-webkit-scrollbar-thumb {
-    @apply bg-white/20 rounded-full hover:bg-primary transition-colors;
+    @apply bg-slate-300 rounded-full hover:bg-primary transition-colors;
   }
 }
 
@@ -31,63 +27,42 @@
 
   /* Aggressive Glass Panel */
   .glass-panel {
-    @apply bg-glass backdrop-blur-2xl border border-white/10 shadow-lg rounded-2xl relative overflow-hidden;
-    box-shadow: 0 4px 30px rgba(0, 0, 0, 0.5), inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+    @apply bg-white border border-slate-200 shadow-[0_8px_30px_rgb(0,0,0,0.04)] rounded-2xl relative overflow-hidden;
   }
 
   /* Universal Card Style */
   .card {
-    @apply bg-glass border border-white/10 rounded-2xl p-6 shadow-lg backdrop-blur-md relative overflow-hidden;
+    @apply bg-white border border-slate-200 rounded-2xl p-6 shadow-sm relative overflow-hidden;
   }
 
-  /* Interactive Card with Spotlight intent (handled via hover for now) */
+  /* Interactive Card */
   .hover-card {
-    @apply transition-all duration-300 hover:scale-[1.02] hover:border-primary/50 hover:shadow-neon relative;
-  }
-
-  .hover-card::before {
-    content: '';
-    @apply absolute inset-0 bg-gradient-to-r from-transparent via-white/5 to-transparent opacity-0 transition-opacity duration-500 pointer-events-none;
-    transform: skewX(-20deg) translateX(-150%);
-  }
-
-  .hover-card:hover::before {
-    @apply opacity-100;
-    animation: shine 1.5s forwards;
-  }
-
-  /* Neon Text */
-  .text-neon {
-    text-shadow: 0 0 10px rgba(255, 215, 0, 0.5);
-  }
-
-  .text-neon-blue {
-    text-shadow: 0 0 10px rgba(0, 240, 255, 0.5);
+    @apply transition-all duration-300 hover:-translate-y-1 hover:border-primary/30 hover:shadow-lg relative;
   }
 
   /* Gradient Text */
   .text-gradient {
-    @apply bg-clip-text text-transparent bg-gradient-to-r from-white via-white/90 to-white/70;
+    @apply bg-clip-text text-transparent bg-gradient-to-r from-slate-800 to-slate-600;
   }
 
   .text-gradient-gold {
-    @apply bg-clip-text text-transparent bg-gradient-to-r from-primary via-yellow-200 to-primary-dark drop-shadow-sm;
-    filter: drop-shadow(0 0 2px rgba(255, 215, 0, 0.3));
+    @apply bg-clip-text text-transparent bg-gradient-to-r from-primary to-primary-dark;
   }
 
   .text-gradient-mix {
-    @apply bg-clip-text text-transparent bg-gradient-to-r from-primary via-white to-secondary drop-shadow-sm;
+    @apply bg-clip-text text-transparent bg-gradient-to-r from-primary to-secondary;
   }
 
   .input-field {
-    @apply bg-black/40 border border-white/10 rounded-xl px-4 py-3 text-white placeholder-white/20 focus:outline-none focus:border-primary/80 focus:ring-1 focus:ring-primary/80 focus:bg-black/60 focus:shadow-neon transition-all duration-200 w-full font-mono text-sm;
+    @apply bg-white border border-slate-200 rounded-xl px-4 py-3 text-slate-800 placeholder-slate-400 focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 transition-all duration-200 w-full text-sm shadow-sm;
   }
 
   /* Button Styles */
   .btn-primary {
-    @apply bg-primary text-black font-black uppercase tracking-wider py-3 px-6 rounded-xl shadow-neon hover:shadow-neon-hover hover:scale-105 active:scale-95 transition-all duration-200 relative overflow-hidden;
+    @apply bg-primary text-white font-semibold py-3 px-6 rounded-xl shadow-md hover:shadow-lg hover:-translate-y-0.5 active:translate-y-0 transition-all duration-200 relative overflow-hidden;
   }
 }
+
 
 @layer utilities {
   .text-glow {
@@ -102,5 +77,36 @@
     100% {
       transform: skewX(-20deg) translateX(150%);
     }
+  }
+
+  /* React DatePicker Custom Cyberpunk Styles */
+  .cyber-calendar {
+    @apply bg-slate-900 border border-slate-700 rounded-xl shadow-[0_0_15px_rgba(34,211,238,0.15)] overflow-hidden font-mono !important;
+  }
+  .cyber-calendar .react-datepicker__header {
+    @apply bg-slate-800 border-b border-slate-700 py-3 !important;
+  }
+  .cyber-calendar .react-datepicker__current-month {
+    @apply text-cyan-300 font-bold uppercase tracking-widest text-lg !important;
+  }
+  .cyber-calendar .react-datepicker__day-name {
+    @apply text-slate-500 font-bold uppercase text-xs !important;
+  }
+  .cyber-calendar .react-datepicker__day {
+    @apply text-gray-300 hover:bg-slate-700 hover:text-cyan-300 rounded transition-colors !important;
+  }
+  .cyber-calendar .react-datepicker__day--selected {
+    @apply bg-cyan-500 text-black font-black shadow-[0_0_10px_rgba(34,211,238,0.5)] !important;
+  }
+  .cyber-calendar .react-datepicker__day--keyboard-selected {
+    @apply bg-slate-700 text-cyan-300 !important;
+  }
+  .cyber-calendar .react-datepicker__navigation-icon::before {
+    @apply border-cyan-500 !important;
+  }
+  .cyber-calendar .react-datepicker-popper[data-placement^="bottom"] .react-datepicker__triangle::before,
+  .cyber-calendar .react-datepicker-popper[data-placement^="bottom"] .react-datepicker__triangle::after {
+    @apply border-b-slate-800 !important;
+    border-bottom-color: #1e293b !important;
   }
 }

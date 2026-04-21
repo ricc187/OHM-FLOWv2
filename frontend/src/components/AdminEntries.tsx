@@ -89,20 +89,20 @@ export const AdminEntries: React.FC<Props> = () => {
         <div className="space-y-6 animate-fade-in pb-12">
             <div className="flex items-center justify-between">
                 <div>
-                    <h2 className="text-3xl font-bold text-white flex items-center gap-3">
+                    <h2 className="text-3xl font-bold text-slate-900 flex items-center gap-3">
                         <Check className="text-ohm-primary" size={32} />
-                        <span className="bg-gradient-to-r from-white to-gray-400 bg-clip-text text-transparent">Validation Saisies</span>
+                        <span className="bg-gradient-to-r from-slate-800 to-slate-600 bg-clip-text text-transparent">Validation Saisies</span>
                     </h2>
-                    <p className="text-gray-400 mt-1">Validez les heures et le matériel saisis par les équipes</p>
+                    <p className="text-slate-500 mt-1">Validez les heures et le matériel saisis par les équipes</p>
                 </div>
-                <div className="bg-slate-800 px-4 py-2 rounded-lg text-white font-mono font-bold">
+                <div className="bg-slate-50 px-4 py-2 rounded-lg text-slate-900 font-mono font-bold">
                     {entries.length} En attente
                 </div>
             </div>
 
             <div className="card overflow-hidden p-0">
                 <table className="w-full text-left text-sm">
-                    <thead className="bg-slate-900/50 text-gray-500 font-bold uppercase text-xs">
+                    <thead className="bg-white/50 text-slate-400 font-bold uppercase text-xs">
                         <tr>
                             <th className="p-4">Date</th>
                             <th className="p-4">Ouvrier</th>
@@ -114,27 +114,27 @@ export const AdminEntries: React.FC<Props> = () => {
                     </thead>
                     <tbody className="divide-y divide-slate-800">
                         {entries.map(e => (
-                            <tr key={e.id} className="hover:bg-white/5 transition-colors">
-                                <td className="p-4 text-gray-300 font-mono">{e.date}</td>
+                            <tr key={e.id} className="hover:bg-black/5 transition-colors">
+                                <td className="p-4 text-slate-600 font-mono">{e.date}</td>
                                 <td className="p-4">
                                     <div className="flex items-center gap-3">
-                                        <div className="w-8 h-8 rounded-full bg-slate-700 flex items-center justify-center font-bold text-xs text-white">
+                                        <div className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center font-bold text-xs text-slate-900">
                                             {e.user_name?.[0]}
                                         </div>
                                         <div>
-                                            <div className="text-white font-medium">{e.user_name}</div>
+                                            <div className="text-slate-900 font-medium">{e.user_name}</div>
                                         </div>
                                     </div>
                                 </td>
-                                <td className="p-4 text-gray-300">
+                                <td className="p-4 text-slate-600">
                                     {e.chantier_nom}
                                 </td>
-                                <td className="p-4 text-right font-mono font-bold text-white">
+                                <td className="p-4 text-right font-mono font-bold text-slate-900">
                                     {editingId === e.id ? (
                                         <input 
                                             type="number" 
                                             step="0.5" 
-                                            className="w-20 bg-black/40 border border-white/20 rounded px-2 py-1 text-right focus:outline-none focus:border-ohm-primary" 
+                                            className="w-20 bg-white/40 border border-black/10 rounded px-2 py-1 text-right focus:outline-none focus:border-ohm-primary" 
                                             value={editForm.heures} 
                                             onChange={ev => setEditForm({...editForm, heures: ev.target.value})}
                                         />
@@ -147,7 +147,7 @@ export const AdminEntries: React.FC<Props> = () => {
                                         <input 
                                             type="number" 
                                             step="0.01" 
-                                            className="w-20 bg-black/40 border border-white/20 rounded px-2 py-1 text-right focus:outline-none focus:border-blue-500 text-white" 
+                                            className="w-20 bg-white/40 border border-black/10 rounded px-2 py-1 text-right focus:outline-none focus:border-blue-500 text-slate-900" 
                                             value={editForm.materiel} 
                                             onChange={ev => setEditForm({...editForm, materiel: ev.target.value})}
                                         />
@@ -161,14 +161,14 @@ export const AdminEntries: React.FC<Props> = () => {
                                             <>
                                                 <button
                                                     onClick={() => setEditingId(null)}
-                                                    className="p-2 rounded-lg bg-slate-700 hover:bg-slate-600 text-white transition-all"
+                                                    className="p-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-900 transition-all"
                                                     title="Annuler"
                                                 >
                                                     <X size={18} />
                                                 </button>
                                                 <button
                                                     onClick={() => handleSaveEdit(e.id)}
-                                                    className="p-2 rounded-lg bg-blue-500/20 text-blue-400 hover:bg-blue-500 hover:text-white transition-all"
+                                                    className="p-2 rounded-lg bg-blue-500/20 text-blue-400 hover:bg-blue-500 hover:text-slate-900 transition-all"
                                                     title="Enregistrer"
                                                 >
                                                     <Check size={18} />
@@ -178,14 +178,14 @@ export const AdminEntries: React.FC<Props> = () => {
                                             <>
                                                 <button
                                                     onClick={() => startEditing(e)}
-                                                    className="p-2 rounded-lg bg-slate-800 text-gray-400 hover:text-white hover:bg-slate-700 transition-all font-bold text-xs"
+                                                    className="p-2 rounded-lg bg-slate-50 text-slate-500 hover:text-slate-900 hover:bg-slate-100 transition-all font-bold text-xs"
                                                     title="Modifier"
                                                 >
                                                     MODIFIER
                                                 </button>
                                                 <button
                                                     onClick={() => handleReject(e.id)}
-                                                    className="p-2 rounded-lg bg-red-500/10 text-red-400 hover:bg-red-500 hover:text-white transition-all"
+                                                    className="p-2 rounded-lg bg-red-500/10 text-red-400 hover:bg-red-500 hover:text-slate-900 transition-all"
                                                     title="Refuser"
                                                 >
                                                     <X size={18} />
@@ -206,7 +206,7 @@ export const AdminEntries: React.FC<Props> = () => {
                     </tbody>
                 </table>
                 {entries.length === 0 && (
-                    <div className="p-12 text-center text-gray-500 italic flex flex-col items-center">
+                    <div className="p-12 text-center text-slate-400 italic flex flex-col items-center">
                         <Check size={48} className="opacity-20 mb-4" />
                         <p>Tout est à jour ! Aucune saisie en attente.</p>
                     </div>

@@ -462,6 +462,47 @@ def trigger_backup(current_user):
         logger.error(f"Backup failed: {e}")
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/holidays/<int:year>', methods=['GET'])
+def get_valais_holidays(year):
+    import datetime
+    
+    # Algorithme de Meeus/Jones/Butcher pour calculer la date de Pâques
+    a = year % 19
+    b = year // 100
+    c = year % 100
+    d = b // 4
+    e = b % 4
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i = c // 4
+    k = c % 4
+    l = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * l) // 451
+    month = (h + l - 7 * m + 114) // 31
+    day = ((h + l - 7 * m + 114) % 31) + 1
+    
+    easter = datetime.date(year, month, day)
+    
+    # L'Ascension est 39 jours après Pâques
+    ascension = easter + datetime.timedelta(days=39)
+    # La Fête-Dieu est 60 jours après Pâques
+    fete_dieu = easter + datetime.timedelta(days=60)
+    
+    holidays_map = {
+        f"{year}-01-01": "Nouvel An",
+        f"{year}-03-19": "Saint-Joseph",
+        ascension.strftime("%Y-%m-%d"): "Ascension",
+        fete_dieu.strftime("%Y-%m-%d"): "Fête-Dieu",
+        f"{year}-08-01": "Fête nationale",
+        f"{year}-08-15": "Assomption",
+        f"{year}-11-01": "Toussaint",
+        f"{year}-12-08": "Immaculée Conception",
+        f"{year}-12-25": "Noël"
+    }
+    
+    return jsonify(holidays_map)
+
 @app.route('/api/chantiers', methods=['GET', 'POST'])
 @token_required
 def manage_chantiers(current_user):

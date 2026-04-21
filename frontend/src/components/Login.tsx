@@ -42,8 +42,8 @@ export const Login: React.FC<Props> = ({ onLogin }) => {
                     <Logo />
                 </div>
 
-                <h2 className="text-ohm-text-main text-lg font-bold mb-2 uppercase tracking-widest">Saisir PIN</h2>
-                <p className="text-ohm-text-muted text-xs mb-8">Accès sécurisé collaborateur</p>
+                <h2 className="text-slate-900 text-lg font-bold mb-2 uppercase tracking-widest">Saisir PIN</h2>
+                <p className="text-slate-500 text-xs mb-8">Accès sécurisé collaborateur</p>
 
                 {/* PIN Display (6 digits) */}
                 <div className="flex gap-2 mb-10">
@@ -52,7 +52,7 @@ export const Login: React.FC<Props> = ({ onLogin }) => {
                             key={idx}
                             className={`w-10 h-14 rounded-xl border-2 flex items-center justify-center transition-all duration-300 ${pin.length > idx
                                     ? 'bg-ohm-primary border-ohm-primary shadow-[0_0_15px_rgba(250,204,21,0.3)]'
-                                    : 'bg-slate-900 border-slate-700'
+                                    : 'bg-white border-slate-300'
                                 }`}
                         >
                             {pin.length > idx && <div className="w-3 h-3 bg-ohm-bg rounded-full animate-in zoom-in" />}
@@ -68,7 +68,7 @@ export const Login: React.FC<Props> = ({ onLogin }) => {
                         <button
                             key={num}
                             onClick={() => handleKeyClick(num.toString())}
-                            className="aspect-square bg-ohm-surface border border-slate-800 rounded-2xl text-2xl font-black text-ohm-text-main hover:bg-slate-700 active:scale-95 active:bg-ohm-primary active:text-ohm-bg transition-all shadow-lg"
+                            className="aspect-square bg-ohm-surface border border-slate-200 rounded-2xl text-2xl font-black text-slate-900 hover:bg-slate-100 active:scale-95 active:bg-ohm-primary active:text-ohm-bg transition-all shadow-lg"
                         >
                             {num}
                         </button>
@@ -76,13 +76,13 @@ export const Login: React.FC<Props> = ({ onLogin }) => {
                     <div />
                     <button
                         onClick={() => handleKeyClick('0')}
-                        className="aspect-square bg-ohm-surface border border-slate-800 rounded-2xl text-2xl font-black text-ohm-text-main hover:bg-slate-700 active:scale-95 active:bg-ohm-primary active:text-ohm-bg transition-all shadow-lg"
+                        className="aspect-square bg-ohm-surface border border-slate-200 rounded-2xl text-2xl font-black text-slate-900 hover:bg-slate-100 active:scale-95 active:bg-ohm-primary active:text-ohm-bg transition-all shadow-lg"
                     >
                         0
                     </button>
                     <button
                         onClick={handleClear}
-                        className="aspect-square flex items-center justify-center bg-slate-800 border border-slate-700 rounded-2xl text-red-400 hover:bg-slate-700 active:scale-95 transition-all shadow-lg"
+                        className="aspect-square flex items-center justify-center bg-slate-50 border border-slate-300 rounded-2xl text-red-400 hover:bg-slate-100 active:scale-95 transition-all shadow-lg"
                     >
                         <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2M3 12l6.414 6.414a2 2 0 001.414.586H19a2 2 0 002-2V7a2 2 0 00-2-2h-8.172a2 2 0 00-1.414.586L3 12z" />
@@ -90,7 +90,7 @@ export const Login: React.FC<Props> = ({ onLogin }) => {
                     </button>
                 </div>
 
-                <div className="mt-12 text-[10px] text-ohm-text-muted text-center uppercase tracking-widest leading-relaxed opacity-50">
+                <div className="mt-12 text-[10px] text-slate-500 text-center uppercase tracking-widest leading-relaxed opacity-50">
                     Patron: 000000 | Thomas: 123456
                 </div>
             </div>

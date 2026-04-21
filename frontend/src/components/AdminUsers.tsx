@@ -1,6 +1,6 @@
-
 import React, { useEffect, useState } from 'react';
 import { User } from '../types';
+import { AwesomeSelect } from './ui/AwesomeSelect';
 
 export const AdminUsers: React.FC = () => {
     const [users, setUsers] = useState<User[]>([]);
@@ -116,13 +116,13 @@ export const AdminUsers: React.FC = () => {
         <div className="animate-in slide-in-from-left duration-300 p-6">
             <div className="flex items-center justify-between mb-8">
                 <div>
-                    <h1 className="text-3xl font-black text-ohm-text-main uppercase tracking-tighter">Équipe</h1>
-                    <p className="text-ohm-text-muted text-sm mt-1">Gestion des accès sécurisés</p>
+                    <h1 className="text-3xl font-black text-slate-900 uppercase tracking-tighter">Équipe</h1>
+                    <p className="text-slate-500 text-sm mt-1">Gestion des accès sécurisés</p>
                 </div>
                 <div className="flex gap-3">
                     <button
                         onClick={handleBackup}
-                        className="bg-slate-700 text-ohm-text-main font-bold px-4 py-3 rounded-xl shadow-lg hover:bg-slate-600 transition-all flex items-center gap-2 uppercase text-xs tracking-wider"
+                        className="bg-slate-100 text-slate-900 font-bold px-4 py-3 rounded-xl shadow-lg hover:bg-slate-200 transition-all flex items-center gap-2 uppercase text-xs tracking-wider"
                     >
                         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
@@ -141,11 +141,11 @@ export const AdminUsers: React.FC = () => {
                 </div>
             </div>
 
-            <div className="bg-ohm-surface border border-slate-800 rounded-2xl shadow-xl overflow-hidden">
+            <div className="bg-ohm-surface border border-slate-200 rounded-2xl shadow-xl overflow-hidden">
                 <div className="overflow-x-auto">
                     <table className="w-full text-left">
                         <thead>
-                            <tr className="text-[10px] font-black text-ohm-text-muted uppercase tracking-widest bg-slate-900/50">
+                            <tr className="text-[10px] font-black text-slate-500 uppercase tracking-widest bg-white/50">
                                 <th className="px-6 py-3">Nom / Username</th>
                                 <th className="px-6 py-3 text-center">Code PIN</th>
                                 <th className="px-6 py-3">Rôle</th>
@@ -154,10 +154,10 @@ export const AdminUsers: React.FC = () => {
                         </thead>
                         <tbody className="divide-y divide-slate-800">
                             {users.map((user) => (
-                                <tr key={user.id} className="text-sm hover:bg-slate-800/30 transition-colors">
+                                <tr key={user.id} className="text-sm hover:bg-slate-50/30 transition-colors">
                                     <td className="px-6 py-4">
                                         <div className="flex flex-col">
-                                            <span className="font-bold text-ohm-text-main">{user.username}</span>
+                                            <span className="font-bold text-slate-900">{user.username}</span>
                                         </div>
                                     </td>
                                     <td className="px-6 py-4 text-center font-mono text-ohm-primary text-lg tracking-[0.2em]">{user.pin}</td>
@@ -166,7 +166,7 @@ export const AdminUsers: React.FC = () => {
                                                 ? 'bg-ohm-primary/20 text-ohm-primary border border-ohm-primary/30'
                                                 : user.role === 'depanneur'
                                                     ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
-                                                    : 'bg-slate-700 text-slate-400'
+                                                    : 'bg-slate-100 text-slate-400'
                                             }`}>
                                             {user.role === 'admin' ? 'Admin' : user.role === 'depanneur' ? 'Dépanneur' : 'Employé'}
                                         </span>
@@ -175,7 +175,7 @@ export const AdminUsers: React.FC = () => {
                                         <div className="flex items-center justify-end gap-2">
                                             <button
                                                 onClick={() => handleOpenEdit(user)}
-                                                className="p-2 text-ohm-text-muted hover:text-ohm-primary hover:bg-ohm-primary/10 rounded-lg transition-all"
+                                                className="p-2 text-slate-500 hover:text-ohm-primary hover:bg-ohm-primary/10 rounded-lg transition-all"
                                             >
                                                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
@@ -201,12 +201,12 @@ export const AdminUsers: React.FC = () => {
             {showModal && (
                 <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
                     <div className="absolute inset-0 bg-ohm-bg/80 backdrop-blur-sm" onClick={() => setShowModal(false)}></div>
-                    <div className="relative w-full max-w-md bg-ohm-surface rounded-3xl border border-slate-700 shadow-2xl overflow-hidden animate-in zoom-in duration-200">
-                        <div className="bg-slate-800/80 px-6 py-4 flex items-center justify-between border-b border-slate-700">
-                            <h3 className="font-black text-ohm-text-main uppercase tracking-widest text-sm">
+                    <div className="relative w-full max-w-md bg-ohm-surface rounded-3xl border border-slate-300 shadow-2xl overflow-hidden animate-in zoom-in duration-200">
+                        <div className="bg-slate-50/80 px-6 py-4 flex items-center justify-between border-b border-slate-300">
+                            <h3 className="font-black text-slate-900 uppercase tracking-widest text-sm">
                                 {editingUser ? 'Modifier' : 'Ajouter'} Collaborateur
                             </h3>
-                            <button onClick={() => setShowModal(false)} className="text-ohm-text-muted hover:text-ohm-text-main">
+                            <button onClick={() => setShowModal(false)} className="text-slate-500 hover:text-slate-900">
                                 <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
                                 </svg>
@@ -214,37 +214,37 @@ export const AdminUsers: React.FC = () => {
                         </div>
                         <form onSubmit={handleSubmit} className="p-6 space-y-6">
                             <div>
-                                <label className="block text-[10px] font-black uppercase text-ohm-text-muted mb-2 tracking-widest">Nom / Username</label>
+                                <label className="block text-[10px] font-black uppercase text-slate-500 mb-2 tracking-widest">Nom / Username</label>
                                 <input
                                     type="text"
                                     required
                                     value={formData.username}
                                     onChange={(e) => setFormData({ ...formData, username: e.target.value })}
-                                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-ohm-text-main focus:ring-2 focus:ring-ohm-primary/50 transition-all outline-none"
+                                    className="w-full bg-white border border-slate-300 rounded-xl px-4 py-3 text-slate-900 focus:ring-2 focus:ring-ohm-primary/50 transition-all outline-none"
                                 />
                             </div>
                             <div>
-                                <label className="block text-[10px] font-black uppercase text-ohm-text-muted mb-2 tracking-widest">Code PIN (6 chiffres)</label>
+                                <label className="block text-[10px] font-black uppercase text-slate-500 mb-2 tracking-widest">Code PIN (6 chiffres)</label>
                                 <input
                                     type="text"
                                     required
                                     maxLength={6}
                                     value={formData.pin}
                                     onChange={(e) => setFormData({ ...formData, pin: e.target.value.replace(/\D/g, '') })}
-                                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-ohm-text-main text-center text-xl font-black tracking-[0.5em] focus:ring-2 focus:ring-ohm-primary/50 transition-all outline-none"
+                                    className="w-full bg-white border border-slate-300 rounded-xl px-4 py-3 text-slate-900 text-center text-xl font-black tracking-[0.5em] focus:ring-2 focus:ring-ohm-primary/50 transition-all outline-none"
                                 />
                             </div>
                             <div>
-                                <label className="block text-[10px] font-black uppercase text-ohm-text-muted mb-2 tracking-widest">Rôle</label>
-                                <select
+                                <label className="block text-[10px] font-black uppercase text-slate-500 mb-2 tracking-widest">Rôle</label>
+                                <AwesomeSelect
                                     value={formData.role}
-                                    onChange={(e) => setFormData({ ...formData, role: e.target.value as 'user' | 'admin' | 'depanneur' })}
-                                    className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-ohm-text-main focus:ring-2 focus:ring-ohm-primary/50 transition-all outline-none"
-                                >
-                                    <option value="user">Ouvrier / Employé</option>
-                                    <option value="depanneur">Dépanneur</option>
-                                    <option value="admin">Administrateur</option>
-                                </select>
+                                    onChange={(val) => setFormData({ ...formData, role: val as 'user' | 'admin' | 'depanneur' })}
+                                    options={[
+                                        { value: 'user', label: 'Utilisateur' },
+                                        { value: 'depanneur', label: 'Dépanneur' },
+                                        { value: 'admin', label: 'Admin' }
+                                    ]}
+                                />
                             </div>
                             <button
                                 type="submit"

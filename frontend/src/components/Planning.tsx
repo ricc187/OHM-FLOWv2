@@ -2,19 +2,25 @@ import React, { useEffect, useState, useMemo } from 'react';
 import { User, Leave } from '../types';
 import { Calendar, Plus, Clock, ChevronLeft, ChevronRight } from 'lucide-react';
 import { StatusBadge } from './StatusBadge';
+import { AwesomeSelect } from './ui/AwesomeSelect';
+import { AwesomeDatePicker } from './ui/AwesomeDatePicker';
 
 // Helper to get days in month
 const getDaysInMonth = (year: number, month: number) => new Date(year, month + 1, 0).getDate();
 
 // Helper to check if a date is within a range (inclusive)
 const isWithinRange = (checkDate: Date, start: string, end: string) => {
-    const s = new Date(start);
-    const e = new Date(end);
+    // start and end are typically "YYYY-MM-DD". Parse them as local components to avoid UTC offset issues!
+    const [sYr, sMo, sDay] = start.split('-').map(Number);
+    const [eYr, eMo, eDay] = end.split('-').map(Number);
+    const s = new Date(sYr, sMo - 1, sDay);
+    const e = new Date(eYr, eMo - 1, eDay);
+    
     // Reset hours to avoid timezone issues/miscalculations for full days
     s.setHours(0, 0, 0, 0);
     e.setHours(0, 0, 0, 0);
     checkDate.setHours(0, 0, 0, 0);
-    return checkDate >= s && checkDate <= e;
+    return checkDate.getTime() >= s.getTime() && checkDate.getTime() <= e.getTime();
 };
 
 const CalendarView = ({ leaves }: { leaves: Leave[] }) => {
@@ -25,9 +31,14 @@ const CalendarView = ({ leaves }: { leaves: Leave[] }) => {
     const month = currentDate.getMonth();
 
     useEffect(() => {
-        fetch(`https://calendrier.api.gouv.fr/jours-feries/metropole/${year}.json`)
+        // Fetch public holidays for Canton of Valais via local backend proxy to bypass CORS/CSP blocks
+        fetch(`/api/holidays/${year}`)
             .then(res => res.json())
-            .then(data => setHolidays(data))
+            .then(data => {
+                // The backend proxy now directly returns `{ 'YYYY-MM-DD': 'Holiday Name' }`
+                console.log("Mapped Holidays from Proxy:", data);
+                setHolidays(data);
+            })
             .catch(err => console.error("Erreur lors du chargement des jours fériés", err));
     }, [year]);
 
@@ -59,7 +70,7 @@ const CalendarView = ({ leaves }: { leaves: Leave[] }) => {
         const days = [];
         // Empty cells for offset
         for (let i = 0; i < startOffset; i++) {
-            days.push(<div key={`empty-${i}`} className="h-24 bg-slate-900/30 border border-slate-800/50"></div>);
+            days.push(<div key={`empty-${i}`} className="h-24 bg-white/30 border border-slate-200/50"></div>);
         }
 
         // Days of month
@@ -76,17 +87,22 @@ const CalendarView = ({ leaves }: { leaves: Leave[] }) => {
                 }); // Sort to keep holidays on top and keep consistent order
 
             days.push(
-                <div key={d} className="min-h-[6rem] bg-slate-900/50 border border-slate-800 pt-2 px-0 flex flex-col gap-1 overflow-hidden hover:bg-slate-800/50 transition-colors p-0">
+                <div key={d} className="min-h-[6rem] bg-white/50 border border-slate-200 pt-2 px-0 flex flex-col gap-1 overflow-hidden hover:bg-slate-50/50 transition-colors p-0">
                     <span className={`text-sm font-mono font-bold self-end mb-1 mr-2 ${new Date().toDateString() === dateObj.toDateString()
                         ? 'bg-ohm-primary text-black w-6 h-6 rounded-full flex items-center justify-center'
-                        : 'text-gray-500'
+                        : 'text-slate-400'
                         }`}>{d}</span>
 
 
 
                     {dayLeaves.map(l => {
-                        const isStart = new Date(l.date_start).getTime() === dateObj.getTime();
-                        const isEnd = new Date(l.date_end).getTime() === dateObj.getTime();
+                        // Use local components for precise timestamp matching without UTC offsets
+                        const [sYr, sMo, sDay] = l.date_start.split('-').map(Number);
+                        const [eYr, eMo, eDay] = l.date_end.split('-').map(Number);
+                        
+                        const isStart = new Date(sYr, sMo - 1, sDay).getTime() === dateObj.getTime();
+                        const isEnd = new Date(eYr, eMo - 1, eDay).getTime() === dateObj.getTime();
+                        
                         // Also check if it continues from yesterday (even if not start date, e.g. spanning months)
                         const continuesFromPrev = !isStart && d > 1;
                         // Check if continues to tomorrow
@@ -108,7 +124,7 @@ const CalendarView = ({ leaves }: { leaves: Leave[] }) => {
                         
                         let extraClass = '';
                         if (l.type === 'HOLIDAY') {
-                            extraClass = 'bg-purple-500/20 text-purple-300 border border-purple-500/30 font-extrabold uppercase italic tracking-wider shadow-purple-500/10 shadow-inner z-10 mx-0 mt-1 mb-1';
+                            extraClass = 'bg-red-500/20 text-red-400 border border-red-500/50 font-extrabold uppercase italic tracking-wider shadow-[0_0_10px_rgba(239,68,68,0.3)] shadow-inner z-10 mx-0 mt-1 mb-1';
                         } else if (l.status === 'APPROVED') {
                             extraClass = 'bg-green-500/20 text-green-400 border border-green-500/30';
                         } else {
@@ -131,31 +147,39 @@ const CalendarView = ({ leaves }: { leaves: Leave[] }) => {
                 </div>
             );
         }
+
+        // Fill trailing empty cells to ensure a perfect 42-cell grid (6 weeks) every month
+        const totalItems = startOffset + daysInMonth;
+        const trailingDays = 42 - totalItems;
+        for (let i = 0; i < trailingDays; i++) {
+            days.push(<div key={`trailing-${i}`} className="min-h-[6rem] bg-white/30 border border-slate-200/50 p-0"></div>);
+        }
+
         return days;
     };
 
     return (
-        <div className="card p-0 overflow-hidden border border-slate-700">
+        <div className="card p-0 overflow-hidden border border-slate-300">
             {/* Calendar Header */}
-            <div className="p-4 flex items-center justify-between bg-slate-800 border-b border-slate-700">
-                <button onClick={prevMonth} className="p-2 hover:bg-slate-700 rounded-lg text-gray-400 hover:text-white transition-colors"><ChevronLeft /></button>
-                <h3 className="text-xl font-bold text-white uppercase tracking-wider">{monthNames[month]} {year}</h3>
-                <button onClick={nextMonth} className="p-2 hover:bg-slate-700 rounded-lg text-gray-400 hover:text-white transition-colors"><ChevronRight /></button>
+            <div className="p-4 flex items-center justify-between bg-slate-50 border-b border-slate-300">
+                <button onClick={prevMonth} className="p-2 hover:bg-slate-100 rounded-lg text-slate-500 hover:text-slate-900 transition-colors"><ChevronLeft /></button>
+                <h3 className="text-xl font-bold text-slate-900 uppercase tracking-wider">{monthNames[month]} {year}</h3>
+                <button onClick={nextMonth} className="p-2 hover:bg-slate-100 rounded-lg text-slate-500 hover:text-slate-900 transition-colors"><ChevronRight /></button>
             </div>
 
             {/* Days Header */}
-            <div className="grid grid-cols-7 bg-slate-900 border-b border-slate-700">
+            <div className="grid grid-cols-7 bg-white border-b border-slate-300">
                 {['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'].map(d => (
-                    <div key={d} className="p-3 text-center text-xs font-bold text-gray-500 uppercase tracking-widest">{d}</div>
+                    <div key={d} className="p-3 text-center text-xs font-bold text-slate-400 uppercase tracking-widest">{d}</div>
                 ))}
             </div>
 
             {/* Calendar Grid */}
-            <div className="grid grid-cols-7 bg-slate-950">
+            <div className="grid grid-cols-7 bg-slate-100">
                 {renderDays()}
             </div>
 
-            <div className="p-4 bg-slate-900 border-t border-slate-800 flex gap-6 text-xs text-gray-400 font-mono">
+            <div className="p-4 bg-white border-t border-slate-200 flex gap-6 text-xs text-slate-500 font-mono">
                 <div className="flex items-center gap-2">
                     <span className="w-3 h-3 rounded bg-green-500/20 border border-green-500/30"></span> Validé
                 </div>
@@ -279,18 +303,18 @@ export const Planning: React.FC<Props> = ({ currentUser }) => {
         <div className="space-y-8 animate-fade-in pb-12">
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                 <div>
-                    <h2 className="text-3xl font-bold text-white flex items-center gap-3">
+                    <h2 className="text-3xl font-bold text-slate-900 flex items-center gap-3">
                         <Calendar className="text-ohm-primary" size={32} />
-                        <span className="bg-gradient-to-r from-white to-gray-400 bg-clip-text text-transparent">Planning & Congés</span>
+                        <span className="bg-gradient-to-r from-slate-800 to-slate-600 bg-clip-text text-transparent">Planning & Congés</span>
                     </h2>
-                    <p className="text-gray-400 mt-1">Vue d'équipe et gestion des absences</p>
+                    <p className="text-slate-500 mt-1">Vue d'équipe et gestion des absences</p>
                 </div>
 
-                <div className="flex bg-slate-800 p-1 rounded-lg">
-                    <button onClick={() => setActiveTab('GLOBAL')} className={`px-4 py-2 rounded-md text-sm font-bold transition-all ${activeTab === 'GLOBAL' ? 'bg-slate-700 text-white shadow' : 'text-gray-400 hover:text-white'}`}>PLANNING</button>
-                    <button onClick={() => setActiveTab('MY_LEAVES')} className={`px-4 py-2 rounded-md text-sm font-bold transition-all ${activeTab === 'MY_LEAVES' ? 'bg-slate-700 text-white shadow' : 'text-gray-400 hover:text-white'}`}>MES CONGÉS</button>
+                <div className="flex bg-slate-50 p-1 rounded-lg">
+                    <button onClick={() => setActiveTab('GLOBAL')} className={`px-4 py-2 rounded-md text-sm font-bold transition-all ${activeTab === 'GLOBAL' ? 'bg-slate-100 text-slate-900 shadow' : 'text-slate-500 hover:text-slate-900'}`}>PLANNING</button>
+                    <button onClick={() => setActiveTab('MY_LEAVES')} className={`px-4 py-2 rounded-md text-sm font-bold transition-all ${activeTab === 'MY_LEAVES' ? 'bg-slate-100 text-slate-900 shadow' : 'text-slate-500 hover:text-slate-900'}`}>MES CONGÉS</button>
                     {currentUser.role === 'admin' && (
-                        <button onClick={() => setActiveTab('VALIDATION')} className={`px-4 py-2 rounded-md text-sm font-bold transition-all ${activeTab === 'VALIDATION' ? 'bg-slate-700 text-white shadow' : 'text-gray-400 hover:text-white'}`}>GESTION DES CONGÉS</button>
+                        <button onClick={() => setActiveTab('VALIDATION')} className={`px-4 py-2 rounded-md text-sm font-bold transition-all ${activeTab === 'VALIDATION' ? 'bg-slate-100 text-slate-900 shadow' : 'text-slate-500 hover:text-slate-900'}`}>GESTION DES CONGÉS</button>
                     )}
                 </div>
             </div>
@@ -305,34 +329,38 @@ export const Planning: React.FC<Props> = ({ currentUser }) => {
                 <div className="space-y-6">
                     <button
                         onClick={() => setShowNewLeave(!showNewLeave)}
-                        className="w-full py-4 border-2 border-dashed border-slate-700 rounded-xl text-gray-400 hover:text-white hover:border-ohm-primary hover:bg-slate-800 transition-all flex items-center justify-center gap-2 font-bold uppercase tracking-widest"
+                        className="w-full py-4 border-2 border-dashed border-slate-300 rounded-xl text-slate-500 hover:text-slate-900 hover:border-ohm-primary hover:bg-slate-50 transition-all flex items-center justify-center gap-2 font-bold uppercase tracking-widest"
                     >
                         <Plus /> Nouvelle Demande
                     </button>
 
                     {showNewLeave && (
-                        <div className="card border-l-4 border-l-ohm-primary animate-slide-up">
+                        <div className="card border-l-4 border-l-ohm-primary animate-slide-up overflow-visible">
                             <form onSubmit={handleCreateLeave} className="space-y-4">
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                     <div>
-                                        <label className="text-xs font-bold text-gray-500 uppercase">Début</label>
-                                        <input type="date" required className="input-field mt-1" value={newLeave.start_date} onChange={e => setNewLeave({ ...newLeave, start_date: e.target.value })} />
+                                        <label className="text-xs font-bold text-slate-400 uppercase mb-1 block">Début</label>
+                                        <AwesomeDatePicker value={newLeave.start_date} onChange={(d) => setNewLeave({ ...newLeave, start_date: d })} />
                                     </div>
                                     <div>
-                                        <label className="text-xs font-bold text-gray-500 uppercase">Fin</label>
-                                        <input type="date" required className="input-field mt-1" value={newLeave.end_date} onChange={e => setNewLeave({ ...newLeave, end_date: e.target.value })} />
+                                        <label className="text-xs font-bold text-slate-400 uppercase mb-1 block">Fin</label>
+                                        <AwesomeDatePicker value={newLeave.end_date} onChange={(d) => setNewLeave({ ...newLeave, end_date: d })} minDate={newLeave.start_date} />
                                     </div>
                                 </div>
-                                <div>
-                                    <label className="text-xs font-bold text-gray-500 uppercase">Type</label>
-                                    <select className="input-field mt-1" value={newLeave.type} onChange={e => setNewLeave({ ...newLeave, type: e.target.value })}>
-                                        <option value="VACATION">Vacances</option>
-                                        <option value="SICKNESS">Maladie</option>
-                                        <option value="OTHER">Autre</option>
-                                    </select>
+                                <div className="mt-4">
+                                    <label className="text-xs font-bold text-slate-400 uppercase mb-1 block">Type</label>
+                                    <AwesomeSelect
+                                        value={newLeave.type}
+                                        onChange={(v) => setNewLeave({ ...newLeave, type: v })}
+                                        options={[
+                                            { value: 'VACATION', label: 'Vacances' },
+                                            { value: 'SICKNESS', label: 'Maladie' },
+                                            { value: 'OTHER', label: 'Autre' }
+                                        ]}
+                                    />
                                 </div>
                                 <div className="flex justify-end gap-2">
-                                    <button type="button" onClick={() => setShowNewLeave(false)} className="px-6 py-2 rounded-lg font-bold text-gray-400 hover:text-white hover:bg-slate-700 transition-colors">ANNULER</button>
+                                    <button type="button" onClick={() => setShowNewLeave(false)} className="px-6 py-2 rounded-lg font-bold text-slate-500 hover:text-slate-900 hover:bg-slate-100 transition-colors">ANNULER</button>
                                     <button type="submit" className="px-6 py-2 rounded-lg font-bold bg-ohm-primary text-ohm-bg hover:bg-yellow-300 transition-colors">ENVOYER</button>
                                 </div>
                             </form>
@@ -343,14 +371,14 @@ export const Planning: React.FC<Props> = ({ currentUser }) => {
                         {leaves.map(l => (
                             <div key={l.id} className="card p-4 flex items-center justify-between">
                                 <div>
-                                    <div className="font-bold text-white text-lg">{renderLeaveType(l.type)}</div>
-                                    <div className="text-sm text-gray-400 font-mono mt-1 flex items-center gap-2">
+                                    <div className="font-bold text-slate-900 text-lg">{renderLeaveType(l.type)}</div>
+                                    <div className="text-sm text-slate-500 font-mono mt-1 flex items-center gap-2">
                                         <span>{l.date_start}</span>
                                         <span className="text-slate-600">➔</span>
                                         <span>{l.date_end}</span>
                                     </div>
                                     {l.admin_note && (
-                                        <div className="mt-2 text-xs italic text-gray-400 bg-slate-800/50 p-2 rounded border border-slate-700">
+                                        <div className="mt-2 text-xs italic text-slate-500 bg-slate-50/50 p-2 rounded border border-slate-300">
                                             <span className="font-bold text-ohm-primary mr-1">Note de l'admin:</span>
                                             {l.admin_note}
                                         </div>
@@ -366,37 +394,43 @@ export const Planning: React.FC<Props> = ({ currentUser }) => {
             {/* ADMIN VALIDATION */}
             {activeTab === 'VALIDATION' && currentUser.role === 'admin' && (
                 <div className="space-y-4">
-                    <h3 className="font-bold text-white uppercase tracking-wider mb-4">Gestion des Congés</h3>
+                    <h3 className="font-bold text-slate-900 uppercase tracking-wider mb-4">Gestion des Congés</h3>
                     {[...leaves].sort((a, b) => {
                         if (a.status === 'PENDING' && b.status !== 'PENDING') return -1;
                         if (a.status !== 'PENDING' && b.status === 'PENDING') return 1;
                         return new Date(b.date_start).getTime() - new Date(a.date_start).getTime();
                     }).map(l => (
-                        <div key={l.id} className={`card p-4 flex flex-col md:flex-row md:items-start justify-between gap-4 border-l-4 ${l.status === 'PENDING' ? 'border-l-ohm-primary' : 'border-l-slate-700'}`}>
+                        <div key={l.id} className={`card p-4 flex flex-col md:flex-row md:items-start justify-between gap-4 border-l-4 overflow-visible ${l.status === 'PENDING' ? 'border-l-ohm-primary' : 'border-l-slate-700'}`}>
                             <div className="flex items-start gap-4 w-full md:w-auto">
-                                <div className="w-10 h-10 bg-slate-700 rounded-full flex items-center justify-center font-bold text-white shrink-0 mt-1">
+                                <div className="w-10 h-10 bg-slate-100 rounded-full flex items-center justify-center font-bold text-slate-900 shrink-0 mt-1">
                                     {l.user_name?.[0]}
                                 </div>
                                 <div className="flex-1">
-                                    <div className="font-bold text-white text-lg flex items-center gap-3">
+                                    <div className="font-bold text-slate-900 text-lg flex items-center gap-3">
                                         {l.user_name}
                                         <StatusBadge status={l.status} type="leave" />
                                     </div>
                                     
                                     {editingLeaveId === l.id ? (
                                         <div className="mt-2 space-y-2">
-                                            <div className="flex items-center gap-2 text-sm">
-                                                <input type="date" className="bg-slate-800 border border-slate-600 rounded px-2 py-1 text-white" value={editLeaveForm.start_date} onChange={e => setEditLeaveForm({...editLeaveForm, start_date: e.target.value})} />
-                                                <span className="text-gray-500">➔</span>
-                                                <input type="date" className="bg-slate-800 border border-slate-600 rounded px-2 py-1 text-white" value={editLeaveForm.end_date} onChange={e => setEditLeaveForm({...editLeaveForm, end_date: e.target.value})} />
+                                            <div className="flex flex-col md:flex-row items-center gap-2 text-sm">
+                                                <AwesomeDatePicker value={editLeaveForm.start_date} onChange={(d) => setEditLeaveForm({...editLeaveForm, start_date: d})} />
+                                                <span className="text-slate-400 hidden md:inline">➔</span>
+                                                <AwesomeDatePicker value={editLeaveForm.end_date} onChange={(d) => setEditLeaveForm({...editLeaveForm, end_date: d})} minDate={editLeaveForm.start_date} />
                                             </div>
-                                            <select className="bg-slate-800 border border-slate-600 rounded px-2 py-1 text-white text-xs uppercase" value={editLeaveForm.type} onChange={e => setEditLeaveForm({...editLeaveForm, type: e.target.value})}>
-                                                <option value="VACATION">Vacances</option>
-                                                <option value="SICKNESS">Maladie</option>
-                                                <option value="OTHER">Autre</option>
-                                            </select>
+                                            <div className="w-full mt-2">
+                                                <AwesomeSelect
+                                                    value={editLeaveForm.type}
+                                                    onChange={v => setEditLeaveForm({...editLeaveForm, type: v})}
+                                                    options={[
+                                                        { value: 'VACATION', label: 'Vacances' },
+                                                        { value: 'SICKNESS', label: 'Maladie' },
+                                                        { value: 'OTHER', label: 'Autre' }
+                                                    ]}
+                                                />
+                                            </div>
                                             <textarea 
-                                                className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-white text-sm mt-2" 
+                                                className="w-full bg-slate-50 border border-slate-300 rounded px-2 py-1 text-slate-900 text-sm mt-2" 
                                                 rows={2} 
                                                 placeholder="Ajouter une note administrative (visible par l'utilisateur)..."
                                                 value={editLeaveForm.admin_note} 
@@ -405,14 +439,14 @@ export const Planning: React.FC<Props> = ({ currentUser }) => {
                                         </div>
                                     ) : (
                                         <>
-                                            <div className="text-sm text-gray-400 font-mono flex items-center gap-2 mt-1">
+                                            <div className="text-sm text-slate-500 font-mono flex items-center gap-2 mt-1">
                                                 <span>{l.date_start}</span>
                                                 <span className="text-slate-600">➔</span>
                                                 <span>{l.date_end}</span>
                                             </div>
                                             <div className="text-xs font-bold text-orange-400 mt-1 uppercase">{renderLeaveType(l.type)}</div>
                                             {l.admin_note && (
-                                                <div className="mt-2 text-xs italic text-gray-400 bg-slate-800/50 p-2 rounded border border-slate-700">
+                                                <div className="mt-2 text-xs italic text-slate-500 bg-slate-50/50 p-2 rounded border border-slate-300">
                                                     <span className="font-bold text-ohm-primary mr-1">Note:</span>
                                                     {l.admin_note}
                                                 </div>
@@ -424,15 +458,15 @@ export const Planning: React.FC<Props> = ({ currentUser }) => {
                             <div className="flex items-center gap-2 mt-4 md:mt-0 self-end md:self-auto flex-wrap justify-end">
                                 {editingLeaveId === l.id ? (
                                     <>
-                                        <button onClick={() => setEditingLeaveId(null)} className="p-2 rounded-lg bg-slate-700 text-white hover:bg-slate-600 transition-all text-xs font-bold uppercase">Annuler</button>
-                                        <button onClick={() => handleSaveEditLeave(l.id)} className="px-4 py-2 rounded-lg bg-blue-500 text-white font-bold hover:bg-blue-400 transition-all text-xs uppercase">Enregistrer</button>
+                                        <button onClick={() => setEditingLeaveId(null)} className="p-2 rounded-lg bg-slate-100 text-slate-900 hover:bg-slate-200 transition-all text-xs font-bold uppercase">Annuler</button>
+                                        <button onClick={() => handleSaveEditLeave(l.id)} className="px-4 py-2 rounded-lg bg-blue-500 text-slate-900 font-bold hover:bg-blue-400 transition-all text-xs uppercase">Enregistrer</button>
                                     </>
                                 ) : (
                                     <>
-                                        <button onClick={() => startEditingLeave(l)} className="p-2 rounded-lg bg-slate-800 text-gray-400 hover:text-white hover:bg-slate-700 transition-all font-bold text-xs mr-2 border border-slate-700">MODIFIER</button>
+                                        <button onClick={() => startEditingLeave(l)} className="p-2 rounded-lg bg-slate-50 text-slate-500 hover:text-slate-900 hover:bg-slate-100 transition-all font-bold text-xs mr-2 border border-slate-300">MODIFIER</button>
                                         {l.status === 'PENDING' && (
                                             <>
-                                                <button onClick={() => handleValidation(l.id, 'REJECTED')} className="p-2 rounded-lg bg-red-500/10 text-red-400 hover:bg-red-500 hover:text-white transition-all text-xs font-bold uppercase">Refuser</button>
+                                                <button onClick={() => handleValidation(l.id, 'REJECTED')} className="p-2 rounded-lg bg-red-500/10 text-red-400 hover:bg-red-500 hover:text-slate-900 transition-all text-xs font-bold uppercase">Refuser</button>
                                                 <button onClick={() => handleValidation(l.id, 'APPROVED')} className="px-4 py-2 rounded-lg bg-ohm-primary text-ohm-bg hover:bg-yellow-300 font-bold transition-all shadow-lg shadow-primary/20 text-xs uppercase">Valider</button>
                                             </>
                                         )}
@@ -442,7 +476,7 @@ export const Planning: React.FC<Props> = ({ currentUser }) => {
                         </div>
                     ))}
                     {leaves.length === 0 && (
-                        <div className="p-12 text-center text-gray-500 italic flex flex-col items-center border-2 border-dashed border-slate-800 rounded-xl">
+                        <div className="p-12 text-center text-slate-400 italic flex flex-col items-center border-2 border-dashed border-slate-200 rounded-xl">
                             <Clock size={48} className="opacity-20 mb-4" />
                             <p>Aucune demande de congé.</p>
                         </div>

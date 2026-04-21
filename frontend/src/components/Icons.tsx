@@ -20,12 +20,12 @@ export const BoltIcon = ({ className = "w-6 h-6" }) => (
 export const Logo = () => (
     <div className="flex items-center gap-2 group">
         <div className="relative">
-            <div className="bg-ohm-surface p-1.5 rounded-lg border border-slate-700 shadow-xl group-hover:border-ohm-primary transition-colors">
+            <div className="bg-ohm-surface p-1.5 rounded-lg border border-slate-300 shadow-xl group-hover:border-ohm-primary transition-colors">
                 <OhmIcon className="w-7 h-7 text-ohm-primary" />
             </div>
             <BoltIcon className="absolute -top-1 -right-1 w-4 h-4 text-ohm-primary animate-pulse" />
         </div>
-        <span className="text-xl font-extrabold tracking-tighter text-ohm-text-main">
+        <span className="text-xl font-extrabold tracking-tighter text-slate-900">
             OHM<span className="text-ohm-primary">FLOW</span>
         </span>
     </div>

@@ -23,7 +23,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, onLogout, onNavi
             </div>
 
             {/* Sidebar */}
-            <aside className="fixed left-4 top-4 bottom-4 z-50 w-20 hover:w-72 bg-glass backdrop-blur-xl border border-white/10 shadow-glass rounded-2xl transition-all duration-500 ease-in-out group flex flex-col overflow-hidden">
+            <aside className="fixed left-4 top-4 bottom-4 z-50 w-20 hover:w-72 bg-glass backdrop-blur-xl border border-black/5 shadow-glass rounded-2xl transition-all duration-500 ease-in-out group flex flex-col overflow-hidden">
 
                 {/* Logo Area */}
                 <div className="h-24 flex items-center justify-start px-0 relative w-full shrink-0">
@@ -35,7 +35,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, onLogout, onNavi
                         </div>
                         {/* Text Container */}
                         <div className="w-0 overflow-hidden group-hover:w-auto transition-all duration-500 ease-in-out flex flex-col justify-center ml-0 group-hover:ml-4 opacity-0 group-hover:opacity-100">
-                            <span className="font-display font-bold text-2xl tracking-tight text-white whitespace-nowrap">
+                            <span className="font-display font-bold text-2xl tracking-tight text-slate-900 whitespace-nowrap">
                                 OHM<span className="text-primary drop-shadow-[0_0_10px_rgba(255,215,0,0.5)]">FLOW</span>
                             </span>
                         </div>
@@ -60,7 +60,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, onLogout, onNavi
                     />
 
                     {user?.role === 'admin' && (
-                        <div className="pt-4 mt-2 border-t border-white/5 mx-2">
+                        <div className="pt-4 mt-2 border-t border-black/5 mx-2">
                             <div className="hidden group-hover:block px-2 text-[10px] font-bold text-text-muted/60 uppercase tracking-widest mb-3 animate-fade-in pl-4">
                                 Administration
                             </div>
@@ -88,12 +88,12 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, onLogout, onNavi
 
                 {/* User & Logout */}
                 <div className="p-3 mt-auto relative z-10 w-full flex justify-center">
-                    <div className="bg-white/5 backdrop-blur-sm rounded-xl p-2 border border-white/5 flex items-center gap-3 w-full overflow-hidden transition-all duration-300 hover:bg-white/10 group-hover:px-3 px-2">
+                    <div className="bg-white/5 backdrop-blur-sm rounded-xl p-2 border border-black/5 flex items-center gap-3 w-full overflow-hidden transition-all duration-300 hover:bg-white/10 group-hover:px-3 px-2">
                         <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-primary to-primary-dark flex items-center justify-center font-bold text-black shadow-lg shrink-0 mx-auto group-hover:mx-0 transition-all">
                             {user?.username?.[0].toUpperCase() || 'G'}
                         </div>
                         <div className="flex flex-col min-w-0 opacity-0 group-hover:opacity-100 transition-opacity duration-300 delay-75 w-0 group-hover:w-auto">
-                            <span className="font-bold text-white text-sm truncate">{user?.username || 'Guest'}</span>
+                            <span className="font-bold text-slate-900 text-sm truncate">{user?.username || 'Guest'}</span>
                             <span className="text-[10px] uppercase text-primary font-bold tracking-wider truncate">{user?.role || 'Visiteur'}</span>
                         </div>
                         <button
@@ -120,7 +120,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, onLogout, onNavi
 const NavItem = ({ icon, label, onClick }: { icon: React.ReactNode, label: string, onClick: () => void }) => (
     <button
         onClick={onClick}
-        className="w-full h-14 flex items-center gap-4 px-3 rounded-2xl text-text-muted hover:text-white hover:bg-white/5 relative group/item overflow-hidden transition-all duration-300 hover:shadow-neon"
+        className="w-full h-14 flex items-center gap-4 px-3 rounded-2xl text-text-muted hover:text-slate-900 hover:bg-black/5 relative group/item overflow-hidden transition-all duration-300 hover:shadow-md"
     >
         <div className="w-8 flex justify-center flex-shrink-0 relative z-10 transition-transform duration-300 group-hover/item:scale-110 group-hover/item:text-primary group-hover/item:drop-shadow-[0_0_8px_rgba(255,215,0,0.8)]">
             {icon}
