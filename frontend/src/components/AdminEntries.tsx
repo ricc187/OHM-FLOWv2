@@ -105,9 +105,14 @@ export const AdminEntries: React.FC<Props> = () => {
         if (ids.length === 0) return;
         if (!confirm(`Valider les ${ids.length} saisie(s) de ce jour ?`)) return;
         setValidatingDay(date);
-        await Promise.all(ids.map(id => api.put(`/api/entries/${id}/validate`)));
-        setValidatingDay(null);
-        fetchPendingEntries();
+        try {
+            // Settle, not all — one dropped connection shouldn't abort the
+            // whole batch and leave the button stuck disabled forever.
+            await Promise.allSettled(ids.map(id => api.put(`/api/entries/${id}/validate`)));
+        } finally {
+            setValidatingDay(null);
+            fetchPendingEntries();
+        }
     };
 
     // Enter validates the focused entry (and auto-advances); arrows move the
