@@ -336,12 +336,12 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
                     </div>
                 )}
                 {currentUser.role === 'admin' && (
-                    <label className="mt-3 text-xs text-slate-500 font-medium flex items-center gap-2 cursor-pointer w-fit">
+                    <label className="mt-3 text-sm sm:text-xs text-slate-500 font-medium flex items-center gap-3 sm:gap-2 cursor-pointer w-fit py-1">
                         <input
                             type="checkbox"
                             checked={!!chantier.no_mesure_needed}
                             onChange={e => handleToggleNoMesureNeeded(e.target.checked)}
-                            className="w-4 h-4 rounded accent-ohm-primary"
+                            className="w-6 h-6 sm:w-4 sm:h-4 rounded accent-ohm-primary shrink-0"
                         />
                         Pas de mesure nécessaire pour ce chantier
                     </label>
