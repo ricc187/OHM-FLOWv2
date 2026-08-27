@@ -1,0 +1,18 @@
+ * Serving Flask app 'app'
+ * Debug mode: on
+INFO:werkzeug:[31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5000
+ * Running on http://192.168.1.104:5000
+INFO:werkzeug:[33mPress CTRL+C to quit[0m
+INFO:werkzeug: * Restarting with stat
+WARNING:werkzeug: * Debugger is active!
+INFO:werkzeug: * Debugger PIN: 111-795-220
+INFO:werkzeug:127.0.0.1 - - [25/Jan/2026 15:57:16] "POST /api/login HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [25/Jan/2026 15:57:16] "[35m[1mPOST /api/chantiers HTTP/1.1[0m" 201 -
+INFO:werkzeug:127.0.0.1 - - [25/Jan/2026 15:57:16] "[35m[1mPOST /api/users HTTP/1.1[0m" 201 -
+INFO:werkzeug:127.0.0.1 - - [25/Jan/2026 15:57:16] "GET /api/users HTTP/1.1" 200 -
+INFO:werkzeug:127.0.0.1 - - [25/Jan/2026 15:57:16] "[35m[1mPOST /api/entries HTTP/1.1[0m" 201 -
+INFO:werkzeug:127.0.0.1 - - [25/Jan/2026 15:57:16] "GET /api/entries/pending HTTP/1.1" 200 -
+/usr/lib/python3.14/multiprocessing/resource_tracker.py:396: UserWarning: resource_tracker: There appear to be 1 leaked semaphore objects to clean up at shutdown: {'/mp-s_2zrbge'}
+  warnings.warn(
