@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Chantier, Entry, User } from '../types';
-import { Plus, Minus, X, ArrowLeft, Clock, Calendar, Info, Pencil, Download, FileText, Receipt, Camera, FolderOpen, Lock, Unlock, Loader2 } from 'lucide-react';
+import { Plus, Minus, X, ArrowLeft, Clock, Calendar, Info, Pencil, Download, FileText, Receipt, Camera, FolderOpen, Lock, Unlock, Loader2, Ruler, ClipboardList, AlertTriangle } from 'lucide-react';
 import { StatusBadge } from './StatusBadge';
 import { AwesomeDatePicker } from './ui/AwesomeDatePicker';
 import { AwesomeSelect } from './ui/AwesomeSelect';
@@ -32,12 +32,23 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
     const [showEditModal, setShowEditModal] = useState(false);
     const [editForm, setEditForm] = useState(initialChantier);
 
-    // Documents (plans / devis / photos)
+    // Documents (plans / devis / photos / mesures / rapports d'intervention)
     const [showExplorer, setShowExplorer] = useState(false);
-    const [uploadingCategory, setUploadingCategory] = useState<'plan' | 'devis' | 'photo' | null>(null);
+    const [uploadingCategory, setUploadingCategory] = useState<'plan' | 'devis' | 'photo' | 'mesure' | 'rapport' | null>(null);
     const planInputRef = useRef<HTMLInputElement>(null);
     const devisInputRef = useRef<HTMLInputElement>(null);
     const photoInputRef = useRef<HTMLInputElement>(null);
+    const mesureInputRef = useRef<HTMLInputElement>(null);
+    const rapportInputRef = useRef<HTMLInputElement>(null);
+
+    // Closing is blocked server-side while a required document is missing —
+    // shows the reason as a small popup instead of failing silently.
+    const [closeBlockedMessage, setCloseBlockedMessage] = useState<string | null>(null);
+    useEffect(() => {
+        if (!closeBlockedMessage) return;
+        const t = setTimeout(() => setCloseBlockedMessage(null), 5000);
+        return () => clearTimeout(t);
+    }, [closeBlockedMessage]);
 
     useEffect(() => {
         fetchDetails();
@@ -83,7 +94,15 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
         if (res.ok) {
             const updated = await res.json();
             setChantier(updated);
+        } else {
+            const data = await res.json().catch(() => ({}));
+            setCloseBlockedMessage(data.error || 'Impossible de clôturer ce chantier');
         }
+    };
+
+    const handleToggleNoMesureNeeded = async (value: boolean) => {
+        const res = await api.put(`/api/chantiers/${chantier.id}`, { no_mesure_needed: value });
+        if (res.ok) setChantier(await res.json());
     };
 
     // --- Entry Logic (Suivi) ---
@@ -129,33 +148,39 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
         }
     };
 
-    // --- Document Logic (Plans / Devis / Photos) ---
-    const uploadDocument = async (category: 'plan' | 'devis' | 'photo', file: File) => {
+    // --- Document Logic (Plans / Devis / Photos / Mesures / Rapports) ---
+    const uploadDocument = async (category: 'plan' | 'devis' | 'photo' | 'mesure' | 'rapport', file: File) => {
         const formData = new FormData();
         formData.append('category', category);
         formData.append('file', file);
         return api.upload(`/api/chantiers/${chantier.id}/documents`, formData);
     };
 
-    // Plan/Devis: one PDF at a time. Photos: the picker allows selecting
-    // several at once (from the phone's own gallery), uploaded one by one.
-    const handleDocumentInputChange = async (category: 'plan' | 'devis' | 'photo', e: React.ChangeEvent<HTMLInputElement>) => {
+    // Plan/Devis/Mesure/Rapport: one PDF at a time. Photos: the picker allows
+    // selecting several at once (from the phone's own gallery), uploaded one by one.
+    const handleDocumentInputChange = async (category: 'plan' | 'devis' | 'photo' | 'mesure' | 'rapport', e: React.ChangeEvent<HTMLInputElement>) => {
         const files = Array.from(e.target.files || []);
         e.target.value = ''; // allow re-selecting the same file(s) later
         if (!files.length) return;
 
         setUploadingCategory(category);
-        let failed = 0;
+        const errors: string[] = [];
         for (const file of files) {
             const res = await uploadDocument(category, file);
-            if (!res.ok) failed++;
+            if (!res.ok) {
+                const data = await res.json().catch(() => ({}));
+                errors.push(data.error || `Échec de l'import de "${file.name}"`);
+            }
         }
         setUploadingCategory(null);
-        if (failed > 0) alert(`${failed} fichier(s) n'ont pas pu être importés`);
+        if (errors.length > 0) alert(errors.join('\n'));
+        fetchDetails(); // refresh has_mesure/has_rapport so the buttons' red state updates
     };
 
     const totalHeures = entries.reduce((acc, curr) => acc + curr.heures, 0);
     const totalMateriel = entries.reduce((acc, curr) => acc + curr.materiel, 0);
+    const mesureMissing = !chantier.has_mesure && !chantier.no_mesure_needed;
+    const rapportMissing = !chantier.has_rapport;
 
     return (
         <div className="animate-fade-in relative pb-40 min-h-screen">
@@ -228,6 +253,8 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
                         <input ref={planInputRef} type="file" accept="application/pdf" className="hidden" onChange={e => handleDocumentInputChange('plan', e)} />
                         <input ref={devisInputRef} type="file" accept="application/pdf" className="hidden" onChange={e => handleDocumentInputChange('devis', e)} />
                         <input ref={photoInputRef} type="file" accept="image/*" multiple className="hidden" onChange={e => handleDocumentInputChange('photo', e)} />
+                        <input ref={mesureInputRef} type="file" accept="application/pdf" className="hidden" onChange={e => handleDocumentInputChange('mesure', e)} />
+                        <input ref={rapportInputRef} type="file" accept="application/pdf" className="hidden" onChange={e => handleDocumentInputChange('rapport', e)} />
 
                         {currentUser.role === 'admin' && (
                             <>
@@ -261,6 +288,30 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
                             <span className="font-bold text-xs uppercase tracking-wider">Photos</span>
                         </button>
                         <button
+                            onClick={() => mesureInputRef.current?.click()}
+                            disabled={chantier.archived || uploadingCategory !== null}
+                            className={`flex items-center gap-2 px-3 py-2 rounded-lg transition-colors border justify-center disabled:opacity-40 ${mesureMissing
+                                ? 'bg-red-50 text-red-600 border-red-300 hover:bg-red-100'
+                                : 'bg-slate-50 text-slate-500 hover:text-slate-900 hover:bg-slate-100 border-slate-300'
+                                }`}
+                            title={mesureMissing ? "Aucune mesure — le nom du fichier doit contenir \"mesure\"" : "Ajouter des mesures (PDF)"}
+                        >
+                            {uploadingCategory === 'mesure' ? <Loader2 size={16} className="animate-spin" /> : mesureMissing ? <AlertTriangle size={16} /> : <Ruler size={16} />}
+                            <span className="font-bold text-xs uppercase tracking-wider">Mesures</span>
+                        </button>
+                        <button
+                            onClick={() => rapportInputRef.current?.click()}
+                            disabled={chantier.archived || uploadingCategory !== null}
+                            className={`flex items-center gap-2 px-3 py-2 rounded-lg transition-colors border justify-center disabled:opacity-40 ${rapportMissing
+                                ? 'bg-red-50 text-red-600 border-red-300 hover:bg-red-100'
+                                : 'bg-slate-50 text-slate-500 hover:text-slate-900 hover:bg-slate-100 border-slate-300'
+                                }`}
+                            title={rapportMissing ? "Aucun rapport d'intervention — le nom du fichier doit contenir \"rapport\"" : "Ajouter un rapport d'intervention (PDF)"}
+                        >
+                            {uploadingCategory === 'rapport' ? <Loader2 size={16} className="animate-spin" /> : rapportMissing ? <AlertTriangle size={16} /> : <ClipboardList size={16} />}
+                            <span className="font-bold text-xs uppercase tracking-wider">Rapport d'inter</span>
+                        </button>
+                        <button
                             onClick={() => setShowExplorer(true)}
                             className="flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-50 text-slate-500 hover:text-ohm-primary hover:bg-slate-100 transition-colors border border-slate-300 justify-center"
                             title="Explorer les documents"
@@ -282,7 +333,31 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
                         <Lock size={12} /> Chantier archivé — rouvrez-le pour ajouter des documents
                     </div>
                 )}
+                {currentUser.role === 'admin' && (
+                    <label className="mt-3 text-xs text-slate-500 font-medium flex items-center gap-2 cursor-pointer w-fit">
+                        <input
+                            type="checkbox"
+                            checked={!!chantier.no_mesure_needed}
+                            onChange={e => handleToggleNoMesureNeeded(e.target.checked)}
+                            className="w-4 h-4 rounded accent-ohm-primary"
+                        />
+                        Pas de mesure nécessaire pour ce chantier
+                    </label>
+                )}
             </div>
+
+            {/* Closure blocked — small popup, auto-dismisses */}
+            {closeBlockedMessage && (
+                <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[200] max-w-md w-[calc(100%-2rem)] safe-top">
+                    <div className="bg-red-50 border border-red-300 text-red-700 rounded-xl shadow-xl p-4 flex items-start gap-3 animate-slide-up">
+                        <AlertTriangle size={18} className="shrink-0 mt-0.5" />
+                        <div className="text-sm font-medium flex-1">{closeBlockedMessage}</div>
+                        <button onClick={() => setCloseBlockedMessage(null)} className="shrink-0 text-red-400 hover:text-red-700">
+                            <X size={16} />
+                        </button>
+                    </div>
+                </div>
+            )}
 
             {/* Content Area */}
             <div className="space-y-6">

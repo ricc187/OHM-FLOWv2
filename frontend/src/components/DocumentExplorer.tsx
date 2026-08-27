@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { X, FileText, Receipt, Image as ImageIcon, Download, Trash2, FolderDown, Archive, Loader2 } from 'lucide-react';
+import { X, FileText, Receipt, Image as ImageIcon, Download, Trash2, FolderDown, Archive, Loader2, Ruler, ClipboardList } from 'lucide-react';
 import { ChantierDocument, DocumentCategory } from '../types';
 import { api } from '../api';
 import { useEscapeKey } from '../hooks/useEscapeKey';
@@ -15,6 +15,8 @@ const CATEGORY_META: Record<DocumentCategory, { label: string; icon: React.Eleme
     plan: { label: 'Plans', icon: FileText },
     devis: { label: 'Devis', icon: Receipt },
     photo: { label: 'Photos', icon: ImageIcon },
+    mesure: { label: 'Mesures', icon: Ruler },
+    rapport: { label: "Rapports d'intervention", icon: ClipboardList },
 };
 
 const formatSize = (bytes: number) => {

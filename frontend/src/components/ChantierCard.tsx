@@ -1,5 +1,6 @@
 import { Chantier } from '../types';
 import { StatusBadge } from './StatusBadge';
+import { AlertTriangle } from 'lucide-react';
 
 interface ChantierCardProps {
     chantier: Chantier;
@@ -7,12 +8,24 @@ interface ChantierCardProps {
 }
 
 export const ChantierCard = ({ chantier, onClick }: ChantierCardProps) => {
+    const missing: string[] = [];
+    if (!chantier.has_rapport) missing.push("rapport d'intervention");
+    if (!chantier.has_mesure && !chantier.no_mesure_needed) missing.push('mesures');
+
     return (
         <div
             onClick={onClick}
             className="group relative glass-panel p-8 cursor-pointer hover-card overflow-hidden hover:bg-white/80 transition-all duration-500"
         >
-            <div className="absolute top-0 right-0 p-6 z-10">
+            <div className="absolute top-0 right-0 p-6 z-10 flex items-center gap-2">
+                {missing.length > 0 && (
+                    <div
+                        className="w-7 h-7 rounded-full bg-red-100 border border-red-300 text-red-600 flex items-center justify-center shrink-0"
+                        title={`Document(s) manquant(s) : ${missing.join(', ')}`}
+                    >
+                        <AlertTriangle size={14} />
+                    </div>
+                )}
                 <StatusBadge status={chantier.status} type="chantier" />
             </div>
 

@@ -21,10 +21,13 @@ export interface Chantier {
     remarque?: string;
     status: ChantierStatus;
     archived?: boolean; // documents zipped + originals freed (set on close, cleared on reopen)
+    no_mesure_needed?: boolean; // opt-out clearing the missing-mesure warning without a file
+    has_mesure?: boolean;
+    has_rapport?: boolean;
     members: number[]; // Array of User IDs
 }
 
-export type DocumentCategory = 'plan' | 'devis' | 'photo';
+export type DocumentCategory = 'plan' | 'devis' | 'photo' | 'mesure' | 'rapport';
 
 export interface ChantierDocument {
     id: number;
@@ -63,12 +66,3 @@ export interface Leave {
     admin_note?: string;
 }
 
-export interface Alert {
-    id: number;
-    chantier_id: number;
-    chantier_nom: string;
-    title: string;
-    description?: string;
-    due_date?: string;
-    is_resolved: boolean;
-}

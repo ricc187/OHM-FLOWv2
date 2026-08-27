@@ -5,6 +5,7 @@ import datetime
 import functools
 import uuid
 import re
+import unicodedata
 import zipfile
 import tempfile
 from io import BytesIO
@@ -178,6 +179,10 @@ class Chantier(db.Model):
     # own name, sanitized (see chantier_storage_dirname). Tracked explicitly
     # so a rename can locate + move the existing folder instead of losing it.
     storage_dir = db.Column(db.String(150), nullable=True)
+    # "Pas de mesure nécessaire pour ce chantier" — the one opt-out that
+    # clears the missing-mesure warning without requiring a file. Rapport
+    # d'intervention has no equivalent opt-out; it's always required.
+    no_mesure_needed = db.Column(db.Boolean, default=False)
 
     # Relationships
     members = db.relationship('User', secondary=chantier_members, lazy='subquery',
@@ -197,6 +202,9 @@ class Chantier(db.Model):
             'remarque': self.remarque,
             'status': self.status,
             'archived': bool(self.archived),
+            'no_mesure_needed': bool(self.no_mesure_needed),
+            'has_mesure': any(d.category == 'mesure' for d in self.documents),
+            'has_rapport': any(d.category == 'rapport' for d in self.documents),
             'members': [u.id for u in self.members]
         }
 
@@ -281,10 +289,14 @@ class Alert(db.Model):
             'is_resolved': self.is_resolved
         }
 
-DOCUMENT_CATEGORIES = ('plan', 'devis', 'photo')
+DOCUMENT_CATEGORIES = ('plan', 'devis', 'photo', 'mesure', 'rapport')
+# Categories whose filename must contain a specific word (case/accent-insensitive)
+# — a lightweight way to keep these two clearly identifiable in the on-disk
+# folder without depending on anyone remembering to name things consistently.
+CATEGORY_FILENAME_REQUIREMENTS = {'mesure': 'mesure', 'rapport': 'rapport'}
 # On-disk subfolder name per category — kept distinct from the API category
 # string in case we ever want to relabel one without a filesystem migration.
-CATEGORY_FOLDERS = {'plan': 'plans', 'devis': 'devis', 'photo': 'photos'}
+CATEGORY_FOLDERS = {'plan': 'plans', 'devis': 'devis', 'photo': 'photos', 'mesure': 'mesures', 'rapport': 'rapports_intervention'}
 
 class Document(db.Model):
     __tablename__ = 'documents'
@@ -312,6 +324,16 @@ class Document(db.Model):
             'uploaded_by': self.uploaded_by.username if self.uploaded_by else None,
             'uploaded_at': self.uploaded_at.isoformat() if self.uploaded_at else None,
         }
+
+def _filename_contains_word(filename, word):
+    """Case/accent-insensitive substring check used to enforce that mesure/
+    rapport uploads are actually named as such (e.g. "Mesures_Cuisine.pdf",
+    "rapport-intervention-12.pdf") — strips accents so "Relevé Mesures.pdf"
+    also matches "mesure"."""
+    def normalize(s):
+        s = unicodedata.normalize('NFKD', s).encode('ascii', 'ignore').decode('ascii')
+        return s.lower()
+    return normalize(word) in normalize(filename)
 
 def sanitize_folder_name(name):
     """Make a chantier name safe to use as a filesystem folder name."""
@@ -471,6 +493,7 @@ def init_db():
                     'archived': "BOOLEAN DEFAULT 0",
                     'archive_zip_path': "VARCHAR(255)",
                     'storage_dir': "VARCHAR(150)",
+                    'no_mesure_needed': "BOOLEAN DEFAULT 0",
                 }
                 for col_name, col_type in new_cols.items():
                     if col_name not in cols:
@@ -820,7 +843,26 @@ def chantier_detail(current_user, chantier_id):
         chantier.date_start = data.get('date_start', chantier.date_start)
         chantier.date_end = data.get('date_end', chantier.date_end)
         chantier.remarque = data.get('remarque', chantier.remarque)
-        chantier.status = data.get('status', chantier.status)
+        chantier.no_mesure_needed = data.get('no_mesure_needed', chantier.no_mesure_needed)
+        new_status = data.get('status', chantier.status)
+
+        # Can't close a chantier while a required document is missing —
+        # rapport d'intervention always, mesures unless explicitly marked
+        # not needed. Checked after applying no_mesure_needed above so
+        # ticking the box and closing in the same request works.
+        if new_status == 'DONE' and previous_status != 'DONE':
+            missing = []
+            has_rapport = any(d.category == 'rapport' for d in chantier.documents)
+            has_mesure = any(d.category == 'mesure' for d in chantier.documents)
+            if not has_rapport:
+                missing.append("le rapport d'intervention")
+            if not has_mesure and not chantier.no_mesure_needed:
+                missing.append("les mesures")
+            if missing:
+                db.session.rollback()
+                return jsonify({'error': f"Impossible de clôturer : il manque {' et '.join(missing)}."}), 409
+
+        chantier.status = new_status
 
         # Closing a chantier archives its document folder (zipped + originals
         # freed); reopening one re-extracts it. Best-effort: a storage hiccup
@@ -920,8 +962,8 @@ def manage_documents(current_user, id):
     category = request.form.get('category')
     if category not in DOCUMENT_CATEGORIES:
         return jsonify({'error': 'Invalid category'}), 400
-    # Plans/devis are contractual documents — admin only. Photos can be added
-    # by any worker on site, which is the whole point of the feature.
+    # Plans/devis are contractual documents — admin only. Photos, mesures and
+    # rapports d'intervention are field deliverables — any worker can add them.
     if category in ('plan', 'devis') and current_user.role != 'admin':
         return jsonify({'error': 'Admin access required'}), 403
 
@@ -929,7 +971,11 @@ def manage_documents(current_user, id):
         return jsonify({'error': 'No file provided'}), 400
     file = request.files['file']
 
-    if category in ('plan', 'devis'):
+    required_word = CATEGORY_FILENAME_REQUIREMENTS.get(category)
+    if required_word and not _filename_contains_word(file.filename, required_word):
+        return jsonify({'error': f'Le nom du fichier doit contenir le mot "{required_word}"'}), 400
+
+    if category in ('plan', 'devis', 'mesure', 'rapport'):
         if not file.filename.lower().endswith('.pdf'):
             return jsonify({'error': 'Only PDF files are allowed'}), 400
         header = file.read(5)
