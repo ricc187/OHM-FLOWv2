@@ -33,11 +33,30 @@ export default defineConfig({
                 ],
             },
             workbox: {
-                // Precache the app shell (JS/CSS/HTML/icons) so the PWA opens even with
-                // zero signal on site — chantiers often have weak/no mobile coverage.
-                globPatterns: ['**/*.{js,css,html,png,svg,ico}'],
-                navigateFallback: '/index.html',
+                // Precache the JS/CSS/icons app shell so the PWA still opens with zero
+                // signal on site — chantiers often have weak/no mobile coverage. HTML is
+                // deliberately NOT precached/globbed here: see the navigation runtimeCaching
+                // rule below for why.
+                globPatterns: ['**/*.{js,css,png,svg,ico}'],
                 runtimeCaching: [
+                    {
+                        // Every page navigation (including a plain refresh) — NetworkFirst,
+                        // not the precached-HTML cache-first fallback workbox defaults to.
+                        // Cache-first here was the actual bug behind "I refresh and don't
+                        // get the update": it kept serving the last-installed HTML (which
+                        // points at the old hashed JS/CSS bundle) until the service worker
+                        // itself finished a separate background update cycle. NetworkFirst
+                        // fetches fresh on every refresh while online (the common case) and
+                        // only falls back to the last-seen page when genuinely offline.
+                        urlPattern: ({ request }) => request.mode === 'navigate',
+                        handler: 'NetworkFirst',
+                        options: {
+                            cacheName: 'ohm-html-cache',
+                            networkTimeoutSeconds: 4,
+                            expiration: { maxEntries: 5, maxAgeSeconds: 60 * 60 * 24 * 7 },
+                            cacheableResponse: { statuses: [200] },
+                        },
+                    },
                     {
                         // Read endpoints: try the network (fresh data), fall back to the
                         // last-seen response when offline/slow instead of a blank error.
