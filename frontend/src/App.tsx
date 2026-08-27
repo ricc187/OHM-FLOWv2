@@ -1,14 +1,24 @@
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { User, Chantier } from './types.ts';
 import { Dashboard } from './components/Dashboard';
-import { ChantierDetail } from './components/ChantierDetail';
-import { AdminUsers } from './components/AdminUsers';
-import { AdminEntries } from './components/AdminEntries';
-import { Planning } from './components/Planning';
-import { GlobalStats } from './components/GlobalStats';
 import { Login } from './components/Login';
 import { Layout } from './components/Layout';
 import { api, UNAUTHORIZED_EVENT } from './api';
+
+// Most sessions only ever touch Dashboard (and maybe one ChantierDetail) —
+// keeping Login/Dashboard in the main bundle and splitting the rest out
+// means the first load (often on a weak chantier signal) ships less JS.
+const ChantierDetail = lazy(() => import('./components/ChantierDetail').then(m => ({ default: m.ChantierDetail })));
+const AdminUsers = lazy(() => import('./components/AdminUsers').then(m => ({ default: m.AdminUsers })));
+const AdminEntries = lazy(() => import('./components/AdminEntries').then(m => ({ default: m.AdminEntries })));
+const Planning = lazy(() => import('./components/Planning').then(m => ({ default: m.Planning })));
+const GlobalStats = lazy(() => import('./components/GlobalStats').then(m => ({ default: m.GlobalStats })));
+
+const PageLoader = () => (
+    <div className="flex items-center justify-center h-full min-h-[50vh]">
+        <div className="w-8 h-8 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
+    </div>
+);
 
 type View = 'dashboard' | 'admin' | 'admin-entries' | 'planning' | 'stats';
 const VALID_VIEWS: View[] = ['dashboard', 'admin', 'admin-entries', 'planning', 'stats'];
@@ -153,28 +163,30 @@ function App() {
             onLogout={handleLogout}
             onNavigate={handleNavigate}
         >
-            {view === 'admin' ? (
-                <AdminUsers />
-            ) : view === 'planning' ? (
-                <Planning currentUser={user} />
-            ) : view === 'stats' ? (
-                <GlobalStats />
-            ) : view === 'admin-entries' ? (
-                <AdminEntries currentUser={user} />
-            ) : selectedChantier ? (
-                <ChantierDetail
-                    chantier={selectedChantier}
-                    currentUser={user}
-                    onBack={handleBackFromChantier}
-                />
-            ) : selectedChantierId ? (
-                null // fetching the chantier for a refreshed/direct link — avoid a dashboard flash
-            ) : (
-                <Dashboard
-                    currentUser={user}
-                    onSelectChantier={handleSelectChantier}
-                />
-            )}
+            <Suspense fallback={<PageLoader />}>
+                {view === 'admin' ? (
+                    <AdminUsers />
+                ) : view === 'planning' ? (
+                    <Planning currentUser={user} />
+                ) : view === 'stats' ? (
+                    <GlobalStats />
+                ) : view === 'admin-entries' ? (
+                    <AdminEntries currentUser={user} />
+                ) : selectedChantier ? (
+                    <ChantierDetail
+                        chantier={selectedChantier}
+                        currentUser={user}
+                        onBack={handleBackFromChantier}
+                    />
+                ) : selectedChantierId ? (
+                    null // fetching the chantier for a refreshed/direct link — avoid a dashboard flash
+                ) : (
+                    <Dashboard
+                        currentUser={user}
+                        onSelectChantier={handleSelectChantier}
+                    />
+                )}
+            </Suspense>
         </Layout>
     );
 }

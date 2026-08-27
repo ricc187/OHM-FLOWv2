@@ -310,7 +310,11 @@ class Document(db.Model):
     uploaded_by_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
     uploaded_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
 
-    chantier = db.relationship('Chantier', backref=db.backref('documents', cascade='all, delete-orphan'))
+    # selectin: one extra batched query for ALL chantiers' documents at once,
+    # instead of the default lazy='select' issuing one query per chantier —
+    # to_dict()'s has_mesure/has_rapport check touches .documents on every
+    # chantier in the list (e.g. the dashboard), which was N+1 queries.
+    chantier = db.relationship('Chantier', backref=db.backref('documents', cascade='all, delete-orphan', lazy='selectin'))
     uploaded_by = db.relationship('User')
 
     def to_dict(self):
