@@ -83,7 +83,12 @@
   animation: t-badge-slide-in var(--badge-slide-dur) var(--badge-slide-ease);
 }
 .t-badge-dot {
-  display: block;
+  /* Not "display: block" like the reference snippet: every usage in this
+     app centers content (a count or an icon) inside the dot via Tailwind's
+     `flex items-center justify-center` on this same element, and block
+     was winning the cascade (same specificity, defined later in the file)
+     and silently overriding it — the child rendered top-left instead of
+     centered. */
   transform-origin: center;
   transform: scale(1);
   opacity: 1;
