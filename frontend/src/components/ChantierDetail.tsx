@@ -287,18 +287,20 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
                             {uploadingCategory === 'photo' ? <Loader2 size={16} className="animate-spin" /> : <Camera size={16} />}
                             <span className="font-bold text-xs uppercase tracking-wider">Photos</span>
                         </button>
-                        <button
-                            onClick={() => mesureInputRef.current?.click()}
-                            disabled={chantier.archived || uploadingCategory !== null}
-                            className={`flex items-center gap-2 px-3 py-2 rounded-lg transition-colors border justify-center disabled:opacity-40 ${mesureMissing
-                                ? 'bg-red-50 text-red-600 border-red-300 hover:bg-red-100'
-                                : 'bg-slate-50 text-slate-500 hover:text-slate-900 hover:bg-slate-100 border-slate-300'
-                                }`}
-                            title={mesureMissing ? "Aucune mesure — le nom du fichier doit contenir \"mesure\"" : "Ajouter des mesures (PDF)"}
-                        >
-                            {uploadingCategory === 'mesure' ? <Loader2 size={16} className="animate-spin" /> : mesureMissing ? <AlertTriangle size={16} /> : <Ruler size={16} />}
-                            <span className="font-bold text-xs uppercase tracking-wider">Mesures</span>
-                        </button>
+                        {!chantier.no_mesure_needed && (
+                            <button
+                                onClick={() => mesureInputRef.current?.click()}
+                                disabled={chantier.archived || uploadingCategory !== null}
+                                className={`flex items-center gap-2 px-3 py-2 rounded-lg transition-colors border justify-center disabled:opacity-40 ${mesureMissing
+                                    ? 'bg-red-50 text-red-600 border-red-300 hover:bg-red-100'
+                                    : 'bg-slate-50 text-slate-500 hover:text-slate-900 hover:bg-slate-100 border-slate-300'
+                                    }`}
+                                title={mesureMissing ? "Aucune mesure — le nom du fichier doit contenir \"mesure\"" : "Ajouter des mesures (PDF)"}
+                            >
+                                {uploadingCategory === 'mesure' ? <Loader2 size={16} className="animate-spin" /> : mesureMissing ? <AlertTriangle size={16} /> : <Ruler size={16} />}
+                                <span className="font-bold text-xs uppercase tracking-wider">Mesures</span>
+                            </button>
+                        )}
                         <button
                             onClick={() => rapportInputRef.current?.click()}
                             disabled={chantier.archived || uploadingCategory !== null}
