@@ -8,7 +8,9 @@ import { DocumentExplorer } from './DocumentExplorer';
 import { api } from '../api';
 import { setAppModalOpen } from '../modalState';
 import { useEscapeKey } from '../hooks/useEscapeKey';
+import { useMountTransition } from '../hooks/useMountTransition';
 import { queueEntry } from '../offlineQueue';
+import { SlidingTabs } from './ui/SlidingTabs';
 
 interface Props {
     chantier: Chantier;
@@ -45,7 +47,9 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
     // Closing is blocked server-side while a required document is missing —
     // shows the reason as a small popup instead of failing silently.
     const [closeBlockedMessage, setCloseBlockedMessage] = useState<string | null>(null);
+    const [displayedBlockedMessage, setDisplayedBlockedMessage] = useState<string | null>(null);
     useEffect(() => {
+        if (closeBlockedMessage) setDisplayedBlockedMessage(closeBlockedMessage);
         if (!closeBlockedMessage) return;
         const t = setTimeout(() => setCloseBlockedMessage(null), 5000);
         return () => clearTimeout(t);
@@ -67,6 +71,13 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
     // should need the mouse just to back out of one.
     useEscapeKey(showEntryModal, () => setShowEntryModal(false));
     useEscapeKey(showEditModal, () => setShowEditModal(false));
+
+    // transitions-dev "06-modal": keeps each modal mounted long enough to
+    // play its scale/fade-out instead of vanishing instantly.
+    const entryModalT = useMountTransition(showEntryModal, 150);
+    const editModalT = useMountTransition(showEditModal, 150);
+    // "22-toast": the closure-blocked popup rises in/out instead of popping.
+    const closeBlockedT = useMountTransition(!!closeBlockedMessage, 250);
 
     const fetchDetails = async () => {
         // Always refresh chantier to get latest status/members
@@ -241,26 +252,15 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
 
                 {/* Tags Navigation & Export */}
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                    <div className="flex items-center gap-2 overflow-x-auto no-scrollbar pb-1 sm:pb-0 w-full sm:w-auto">
-                        {[
-                            { id: 'SUIVI', icon: Clock, label: 'Suivi' },
-                            { id: 'INFO', icon: Info, label: 'Infos' },
-                        ].map(tab => {
-                            const Icon = tab.icon;
-                            const isActive = activeTab === tab.id;
-                            return (
-                                <button
-                                    key={tab.id}
-                                    onClick={() => setActiveTab(tab.id as Tab)}
-                                    className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm font-bold transition-all whitespace-nowrap ${isActive
-                                        ? 'bg-ohm-primary text-ohm-bg shadow-lg shadow-primary/20'
-                                        : 'bg-surface text-slate-500 hover:text-slate-900 border border-slate-300'
-                                        }`}
-                                >
-                                    <Icon size={16} /> {tab.label}
-                                </button>
-                            )
-                        })}
+                    <div className="w-full sm:w-auto overflow-x-auto no-scrollbar">
+                        <SlidingTabs
+                            active={activeTab}
+                            onChange={setActiveTab}
+                            tabs={[
+                                { id: 'SUIVI', icon: <Clock size={16} />, label: 'Suivi' },
+                                { id: 'INFO', icon: <Info size={16} />, label: 'Infos' },
+                            ]}
+                        />
                     </div>
 
                     <div className="grid grid-cols-2 sm:flex sm:items-center gap-2 w-full sm:w-auto">
@@ -352,23 +352,30 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
                 )}
                 {currentUser.role === 'admin' && (
                     <label className="mt-3 text-sm sm:text-xs text-slate-500 font-medium flex items-center gap-3 sm:gap-2 cursor-pointer w-fit py-1">
-                        <input
-                            type="checkbox"
-                            checked={!!chantier.no_mesure_needed}
-                            onChange={e => handleToggleNoMesureNeeded(e.target.checked)}
-                            className="w-6 h-6 sm:w-4 sm:h-4 rounded accent-ohm-primary shrink-0"
-                        />
+                        <span className="relative inline-flex shrink-0">
+                            <input
+                                type="checkbox"
+                                checked={!!chantier.no_mesure_needed}
+                                onChange={e => handleToggleNoMesureNeeded(e.target.checked)}
+                                className="t-check-input peer"
+                            />
+                            <span className="t-check-box w-6 h-6 sm:w-5 sm:h-5 rounded-md border-2 border-slate-300 bg-white flex items-center justify-center peer-checked:bg-ohm-primary peer-checked:border-ohm-primary peer-focus-visible:ring-2 peer-focus-visible:ring-ohm-primary peer-focus-visible:ring-offset-2">
+                                <svg viewBox="0 0 10.1668 10.1668" className="w-3.5 h-3.5 sm:w-3 sm:h-3" fill="none" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                                    <path d="M1 5.52L3.92 9.17L9.17 1" />
+                                </svg>
+                            </span>
+                        </span>
                         Pas de mesure nécessaire pour ce chantier
                     </label>
                 )}
             </div>
 
             {/* Closure blocked — small popup, auto-dismisses */}
-            {closeBlockedMessage && (
+            {closeBlockedT.mounted && (
                 <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[200] max-w-md w-[calc(100%-2rem)] safe-top">
-                    <div className="bg-red-50 border border-red-300 text-red-700 rounded-xl shadow-xl p-4 flex items-start gap-3 animate-slide-up">
+                    <div className={`t-toast ${closeBlockedT.active ? 'is-open' : ''} bg-red-50 border border-red-300 text-red-700 rounded-xl shadow-xl p-4 flex items-start gap-3`}>
                         <AlertTriangle size={18} className="shrink-0 mt-0.5" />
-                        <div className="text-sm font-medium flex-1">{closeBlockedMessage}</div>
+                        <div className="text-sm font-medium flex-1">{displayedBlockedMessage}</div>
                         <button onClick={() => setCloseBlockedMessage(null)} className="shrink-0 text-red-400 hover:text-red-700">
                             <X size={16} />
                         </button>
@@ -479,9 +486,9 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
             </div>
 
             {/* ENTRY MODAL */}
-            {showEntryModal && (
-                <div className="fixed inset-0 bg-white/80 backdrop-blur-md flex items-center justify-center z-[100] p-4 safe-top safe-bottom">
-                    <div className="w-full max-w-2xl bg-white rounded-3xl border border-slate-300 shadow-2xl overflow-hidden animate-fade-in ring-1 ring-white/10 max-h-[90vh] flex flex-col">
+            {entryModalT.mounted && (
+                <div className={`t-modal ${entryModalT.active ? 'is-open' : 'is-closing'} fixed inset-0 bg-white/80 backdrop-blur-md flex items-center justify-center z-[100] p-4 safe-top safe-bottom`}>
+                    <div className="w-full max-w-2xl bg-white rounded-3xl border border-slate-300 shadow-2xl overflow-hidden ring-1 ring-white/10 max-h-[90vh] flex flex-col">
                         <div className="p-4 sm:p-8 border-b border-black/5 flex justify-between items-center bg-slate-50 shrink-0">
                             <div>
                                 <h3 className="text-xl sm:text-2xl font-black text-slate-900 uppercase tracking-tight">Nouvelle Saisie</h3>
@@ -578,9 +585,9 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
             )}
 
             {/* EDIT MODAL */}
-            {showEditModal && (
-                <div className="fixed inset-0 bg-white/80 backdrop-blur-sm flex items-center justify-center z-[100] p-4 safe-top safe-bottom">
-                    <div className="card w-full max-w-2xl animate-slide-up max-h-[90vh] overflow-y-auto overflow-x-hidden">
+            {editModalT.mounted && (
+                <div className={`t-modal ${editModalT.active ? 'is-open' : 'is-closing'} fixed inset-0 bg-white/80 backdrop-blur-sm flex items-center justify-center z-[100] p-4 safe-top safe-bottom`}>
+                    <div className="card w-full max-w-2xl max-h-[90vh] overflow-y-auto overflow-x-hidden">
                         <div className="flex justify-between items-center mb-6">
                             <h3 className="text-xl font-bold text-slate-900 uppercase">Modifier le chantier</h3>
                             <button onClick={() => setShowEditModal(false)}><X className="text-slate-500" /></button>

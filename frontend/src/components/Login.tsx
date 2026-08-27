@@ -8,8 +8,13 @@ interface Props {
 export const Login: React.FC<Props> = ({ onLogin }) => {
     const [pin, setPin] = useState('');
     const [error, setError] = useState('');
+    const [displayedError, setDisplayedError] = useState('');
     const [checking, setChecking] = useState(false);
     const [shake, setShake] = useState(false);
+
+    useEffect(() => {
+        if (error) setDisplayedError(error);
+    }, [error]);
 
     const handleKeyClick = (num: string) => {
         if (pin.length < 6 && !checking) {
@@ -52,22 +57,23 @@ export const Login: React.FC<Props> = ({ onLogin }) => {
                 <h2 className="text-slate-900 text-lg font-bold mb-1 uppercase tracking-widest">Saisir PIN</h2>
                 <p className="text-slate-500 text-xs mb-4 sm:mb-6">Accès sécurisé collaborateur</p>
 
-                {/* PIN Display (6 digits) */}
-                <div className={`flex gap-2 mb-4 sm:mb-6 ${shake ? 'animate-shake' : ''}`}>
-                    {[0, 1, 2, 3, 4, 5].map((idx) => (
-                        <div
-                            key={idx}
-                            className={`w-9 h-12 rounded-xl border-2 flex items-center justify-center transition-all duration-300 ${pin.length > idx
-                                    ? 'bg-ohm-primary border-ohm-primary shadow-[0_0_15px_rgba(250,204,21,0.3)]'
-                                    : 'bg-white border-slate-300'
-                                }`}
-                        >
-                            {pin.length > idx && <div className="w-3 h-3 bg-ohm-bg rounded-full animate-in zoom-in" />}
-                        </div>
-                    ))}
+                {/* PIN Display (6 digits) — transitions-dev "12-error-state-shake" */}
+                <div className={`t-input-wrap ${error ? 'is-error' : ''} flex flex-col items-center`}>
+                    <div className={`t-input flex gap-2 mb-1 ${shake ? 'is-shaking' : ''}`}>
+                        {[0, 1, 2, 3, 4, 5].map((idx) => (
+                            <div
+                                key={idx}
+                                className={`w-9 h-12 rounded-xl border-2 flex items-center justify-center transition-all duration-300 ${pin.length > idx
+                                        ? 'bg-ohm-primary border-ohm-primary shadow-[0_0_15px_rgba(250,204,21,0.3)]'
+                                        : 'bg-white border-slate-300'
+                                    }`}
+                            >
+                                {pin.length > idx && <div className="w-3 h-3 bg-ohm-bg rounded-full animate-in zoom-in" />}
+                            </div>
+                        ))}
+                    </div>
+                    <p className="t-error-msg text-red-500 text-sm font-bold mb-3">{displayedError}</p>
                 </div>
-
-                {error && <p className="text-red-500 text-sm font-bold mb-3">{error}</p>}
 
                 {/* Numpad — fixed button size so it stays compact on any screen height */}
                 <div className="grid grid-cols-3 gap-3 w-fit mx-auto">

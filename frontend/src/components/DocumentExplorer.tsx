@@ -46,7 +46,19 @@ export const DocumentExplorer: React.FC<Props> = ({ chantierId, chantierNom, isA
     const [archived, setArchived] = useState(false);
     const [loading, setLoading] = useState(true);
     const [busyId, setBusyId] = useState<number | 'all' | DocumentCategory | null>(null);
-    useEscapeKey(true, onClose);
+
+    // transitions-dev "06-modal" — this component owns its own mount, so it
+    // plays the close animation itself before telling the parent to unmount it.
+    const [isOpen, setIsOpen] = useState(false);
+    useEffect(() => {
+        const raf = requestAnimationFrame(() => setIsOpen(true));
+        return () => cancelAnimationFrame(raf);
+    }, []);
+    const handleClose = () => {
+        setIsOpen(false);
+        setTimeout(onClose, 150);
+    };
+    useEscapeKey(true, handleClose);
 
     const fetchDocuments = async () => {
         setLoading(true);
@@ -85,8 +97,8 @@ export const DocumentExplorer: React.FC<Props> = ({ chantierId, chantierNom, isA
     const byCategory = (cat: DocumentCategory) => documents.filter(d => d.category === cat);
 
     return (
-        <div className="fixed inset-0 bg-white/80 backdrop-blur-md flex items-center justify-center z-[100] p-4 safe-top safe-bottom">
-            <div className="w-full max-w-2xl bg-white rounded-3xl border border-slate-300 shadow-2xl overflow-hidden animate-fade-in max-h-[90vh] flex flex-col">
+        <div className={`t-modal ${isOpen ? 'is-open' : 'is-closing'} fixed inset-0 bg-white/80 backdrop-blur-md flex items-center justify-center z-[100] p-4 safe-top safe-bottom`}>
+            <div className="w-full max-w-2xl bg-white rounded-3xl border border-slate-300 shadow-2xl overflow-hidden max-h-[90vh] flex flex-col">
                 <div className="p-4 sm:p-6 border-b border-black/5 flex justify-between items-center bg-slate-50 shrink-0">
                     <div className="min-w-0">
                         <h3 className="text-lg sm:text-xl font-black text-slate-900 uppercase tracking-tight truncate">Documents — {chantierNom}</h3>
@@ -96,7 +108,7 @@ export const DocumentExplorer: React.FC<Props> = ({ chantierId, chantierNom, isA
                             </div>
                         )}
                     </div>
-                    <button onClick={onClose} className="p-2 rounded-full hover:bg-black/5 text-slate-500 hover:text-slate-900 transition-colors shrink-0">
+                    <button onClick={handleClose} className="p-2 rounded-full hover:bg-black/5 text-slate-500 hover:text-slate-900 transition-colors shrink-0">
                         <X size={22} />
                     </button>
                 </div>

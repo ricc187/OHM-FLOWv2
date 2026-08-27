@@ -4,6 +4,7 @@ import { LayoutDashboard, Calendar, Users, ClipboardCheck, LogOut, BarChart3, Me
 import { MODAL_STATE_EVENT } from '../modalState';
 import { api } from '../api';
 import { getQueuedEntries, onQueueChange } from '../offlineQueue';
+import { useMountTransition } from '../hooks/useMountTransition';
 
 interface User {
     username: string;
@@ -63,11 +64,16 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, activeView, onLo
     // Offline-queued entries (see offlineQueue.ts) — a small persistent
     // indicator so it's obvious something is waiting to send, not silently lost.
     const [queuedCount, setQueuedCount] = useState(0);
+    const [displayedQueuedCount, setDisplayedQueuedCount] = useState(0);
     useEffect(() => {
         const refresh = () => setQueuedCount(getQueuedEntries().length);
         refresh();
         return onQueueChange(refresh);
     }, []);
+    useEffect(() => {
+        if (queuedCount > 0) setDisplayedQueuedCount(queuedCount);
+    }, [queuedCount]);
+    const queuedPillT = useMountTransition(queuedCount > 0, 250);
 
     // Close the drawer automatically if the viewport grows into the desktop
     // layout (e.g. phone rotated to a tablet-sized landscape, or a resize).
@@ -285,11 +291,11 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, activeView, onLo
             </main>
 
             {/* Offline-queued entries — stays until they've actually sent */}
-            {queuedCount > 0 && (
+            {queuedPillT.mounted && (
                 <div className="fixed bottom-4 left-1/2 -translate-x-1/2 lg:left-auto lg:right-6 lg:translate-x-0 z-40 safe-bottom">
-                    <div className="flex items-center gap-2 px-4 py-2.5 rounded-full bg-amber-500 text-white shadow-lg font-bold text-sm">
+                    <div className={`t-toast ${queuedPillT.active ? 'is-open' : ''} flex items-center gap-2 px-4 py-2.5 rounded-full bg-amber-500 text-white shadow-lg font-bold text-sm`}>
                         <CloudOff size={16} />
-                        {queuedCount} saisie{queuedCount > 1 ? 's' : ''} en attente d'envoi
+                        {displayedQueuedCount} saisie{displayedQueuedCount > 1 ? 's' : ''} en attente d'envoi
                     </div>
                 </div>
             )}
@@ -307,20 +313,15 @@ const NavItem = ({ icon, label, active, onClick, badge }: { icon: React.ReactNod
         <div className={`w-8 flex justify-center flex-shrink-0 relative z-10 transition-transform duration-300 group-hover/item:scale-110 ${active ? 'text-primary drop-shadow-[0_0_8px_rgba(255,215,0,0.8)]' : 'group-hover/item:text-primary group-hover/item:drop-shadow-[0_0_8px_rgba(255,215,0,0.8)]'
             }`}>
             {icon}
-            {!!badge && (
-                <span className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 rounded-full bg-red-600 text-white text-[9px] font-bold flex items-center justify-center">
-                    {badge > 99 ? '99+' : badge}
+            <span className="t-badge" data-open={!!badge} style={{ top: '-4px', right: '-6px' }}>
+                <span className="t-badge-dot min-w-[16px] h-4 px-1 rounded-full bg-red-600 text-white text-[9px] font-bold flex items-center justify-center">
+                    {badge && badge > 99 ? '99+' : badge}
                 </span>
-            )}
+            </span>
         </div>
         <span className="opacity-0 group-hover:opacity-100 transition-opacity duration-300 font-bold text-base whitespace-nowrap delay-75 relative z-10 tracking-wide flex-1">
             {label}
         </span>
-        {!!badge && (
-            <span className="opacity-0 group-hover:opacity-100 transition-opacity duration-300 delay-75 relative z-10 shrink-0 min-w-[20px] h-5 px-1.5 rounded-full bg-red-600 text-white text-[10px] font-bold flex items-center justify-center">
-                {badge > 99 ? '99+' : badge}
-            </span>
-        )}
 
         <div className={`absolute left-0 top-1/2 -translate-y-1/2 w-1 h-8 bg-primary rounded-r-full transition-all duration-300 shadow-[0_0_10px_rgba(255,215,0,0.8)] ${active ? 'opacity-100' : 'opacity-0 group-hover/item:opacity-100'
             }`} />
@@ -335,12 +336,14 @@ const NavItemMobile = ({ icon, label, active, onClick, badge }: { icon: React.Re
         className={`w-full h-12 flex items-center gap-4 px-4 rounded-xl font-bold text-sm transition-all active:scale-[0.98] ${active ? 'bg-primary/10 text-primary' : 'text-slate-600 hover:bg-black/5 hover:text-slate-900'
             }`}
     >
-        <div className="w-6 flex justify-center flex-shrink-0">{icon}</div>
-        <span className="tracking-wide flex-1 text-left">{label}</span>
-        {!!badge && (
-            <span className="shrink-0 min-w-[20px] h-5 px-1.5 rounded-full bg-red-600 text-white text-[10px] font-bold flex items-center justify-center">
-                {badge > 99 ? '99+' : badge}
+        <div className="w-6 flex justify-center flex-shrink-0 relative">
+            {icon}
+            <span className="t-badge" data-open={!!badge} style={{ top: '-8px', right: '-10px' }}>
+                <span className="t-badge-dot min-w-[16px] h-4 px-1 rounded-full bg-red-600 text-white text-[9px] font-bold flex items-center justify-center">
+                    {badge && badge > 99 ? '99+' : badge}
+                </span>
             </span>
-        )}
+        </div>
+        <span className="tracking-wide flex-1 text-left">{label}</span>
     </button>
 );

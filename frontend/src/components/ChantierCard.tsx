@@ -19,12 +19,14 @@ export const ChantierCard = ({ chantier, onClick }: ChantierCardProps) => {
         >
             <div className="absolute top-0 right-0 p-6 z-10 flex items-center gap-2">
                 {missing.length > 0 && (
-                    <div
-                        className="w-7 h-7 rounded-full bg-red-600 text-white flex items-center justify-center shrink-0 shadow-[0_0_10px_rgba(220,38,38,0.6)] animate-pulse"
-                        title={`Manque : ${missing.join(', ')}`}
-                    >
-                        <AlertTriangle size={14} />
-                    </div>
+                    <span className="t-badge relative" data-open="true" style={{ top: 0, right: 0 }}>
+                        <div
+                            className="t-badge-dot w-7 h-7 rounded-full bg-red-600 text-white flex items-center justify-center shrink-0 shadow-[0_0_10px_rgba(220,38,38,0.6)] animate-pulse"
+                            title={`Manque : ${missing.join(', ')}`}
+                        >
+                            <AlertTriangle size={14} />
+                        </div>
+                    </span>
                 )}
                 <StatusBadge status={chantier.status} type="chantier" />
             </div>
