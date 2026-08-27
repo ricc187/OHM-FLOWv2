@@ -113,13 +113,15 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, activeView, onLo
                     ))}
 
                     {user?.role === 'admin' && (
-                        <div className="pt-4 mt-2 border-t border-black/5 mx-2">
+                        <div className="pt-4 mt-2 border-t border-black/5">
                             <div className="hidden group-hover:block px-2 text-[10px] font-bold text-text-muted/60 uppercase tracking-widest mb-3 animate-fade-in pl-4">
                                 Administration
                             </div>
-                            {ADMIN_NAV_ITEMS.map(item => (
-                                <NavItem key={item.path} icon={<item.icon size={22} />} label={item.label} active={activeView === item.view} onClick={() => handleNavigate(item.path)} />
-                            ))}
+                            <div className="space-y-2">
+                                {ADMIN_NAV_ITEMS.map(item => (
+                                    <NavItem key={item.path} icon={<item.icon size={22} />} label={item.label} active={activeView === item.view} onClick={() => handleNavigate(item.path)} />
+                                ))}
+                            </div>
                         </div>
                     )}
                 </nav>
