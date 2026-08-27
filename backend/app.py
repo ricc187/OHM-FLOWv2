@@ -17,7 +17,7 @@ from flask_cors import CORS
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from sqlalchemy.orm import DeclarativeBase
-from sqlalchemy import text, inspect
+from sqlalchemy import text, inspect, func
 from PIL import Image, ImageOps
 import fitz  # PyMuPDF
 import logging
@@ -205,11 +205,24 @@ class Chantier(db.Model):
             'no_mesure_needed': bool(self.no_mesure_needed),
             'has_mesure': any(d.category == 'mesure' for d in self.documents),
             'has_rapport': any(d.category == 'rapport' for d in self.documents),
-            'hours_this_month': round(sum(
-                e.heures for e in self.entries if e.date.startswith(datetime.datetime.utcnow().strftime('%Y-%m'))
-            ), 2),
+            'hours_this_month': round(self._get_hours_this_month(), 2),
             'members': [u.id for u in self.members]
         }
+
+    def _get_hours_this_month(self):
+        """Sum of heures logged this month, regardless of PENDING/VALIDATED
+        status — matches the "total heures" already shown elsewhere (e.g.
+        ChantierDetail's SUIVI tab), which never filtered by status either.
+        Uses a precomputed value if the caller already batched it for a list
+        (see manage_chantiers) to avoid one query per chantier; otherwise
+        runs a single lightweight SUM aggregate instead of loading this
+        chantier's entire entries history just to add up one field."""
+        if hasattr(self, '_hours_this_month_precomputed'):
+            return self._hours_this_month_precomputed
+        month_prefix = datetime.datetime.utcnow().strftime('%Y-%m')
+        return db.session.query(func.coalesce(func.sum(Entry.heures), 0.0)).filter(
+            Entry.chantier_id == self.id, Entry.date.like(f'{month_prefix}%')
+        ).scalar()
 
 class Entry(db.Model):
     __tablename__ = 'entries'
@@ -224,10 +237,16 @@ class Entry(db.Model):
     status = db.Column(db.String(20), default='PENDING') # PENDING, VALIDATED
     created_by_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
     admin_note = db.Column(db.Text, nullable=True)
-    
+    # Client-generated id for offline-queued submissions (see frontend
+    # offlineQueue.ts) — lets a retried request that actually succeeded but
+    # whose response got lost (dropped connection) be recognized as already
+    # done instead of creating a duplicate entry. Nullable/non-unique at the
+    # DB level (old entries never set it); add_entry does the existence check.
+    client_ref = db.Column(db.String(64), nullable=True, index=True)
+
     user = db.relationship('User', foreign_keys=[user_id], backref='entries')
     created_by = db.relationship('User', foreign_keys=[created_by_id])
-    chantier = db.relationship('Chantier', backref=db.backref('entries', lazy='selectin'))
+    chantier = db.relationship('Chantier', backref='entries')
 
     def to_dict(self):
         return {
@@ -523,6 +542,10 @@ def init_db():
                     logger.info("Migrating entries: adding admin_note")
                     conn.execute(text("ALTER TABLE entries ADD COLUMN admin_note TEXT"))
                     conn.commit()
+                if 'client_ref' not in cols:
+                    logger.info("Migrating entries: adding client_ref")
+                    conn.execute(text("ALTER TABLE entries ADD COLUMN client_ref VARCHAR(64)"))
+                    conn.commit()
 
             # 4. Leaves Table
             if 'leaves' in existing_tables:
@@ -803,6 +826,19 @@ def manage_chantiers(current_user):
         # Everyone sees all chantiers now (Requirement change)
         
         chantiers = query.all()
+
+        # Batch hours_this_month for the whole list in one grouped query
+        # instead of letting each chantier's to_dict() run its own —
+        # avoids reintroducing the N+1 pattern already fixed once here.
+        month_prefix = datetime.datetime.utcnow().strftime('%Y-%m')
+        hours_by_chantier = dict(
+            db.session.query(Entry.chantier_id, func.sum(Entry.heures))
+            .filter(Entry.date.like(f'{month_prefix}%'))
+            .group_by(Entry.chantier_id).all()
+        )
+        for c in chantiers:
+            c._hours_this_month_precomputed = hours_by_chantier.get(c.id, 0.0)
+
         return jsonify([c.to_dict() for c in chantiers])
 
     if request.method == 'POST':
@@ -1056,11 +1092,15 @@ def document_thumbnail(current_user, doc_id):
     disk_path = document_disk_path(doc)
     if not os.path.isfile(disk_path):
         return jsonify({'error': 'Fichier introuvable (chantier peut-être archivé)'}), 404
-    img = Image.open(disk_path)
-    img.thumbnail((300, 300), Image.LANCZOS)
-    buf = BytesIO()
-    img.save(buf, format='JPEG', quality=60)
-    buf.seek(0)
+    try:
+        img = Image.open(disk_path)
+        img.thumbnail((300, 300), Image.LANCZOS)
+        buf = BytesIO()
+        img.save(buf, format='JPEG', quality=60)
+        buf.seek(0)
+    except Exception as e:
+        logger.error(f"Thumbnail generation failed for document {doc_id}: {e}")
+        return jsonify({'error': 'Impossible de générer la miniature'}), 500
     return send_file(buf, mimetype='image/jpeg')
 
 @app.route('/api/chantiers/<int:id>/documents/zip', methods=['GET'])
@@ -1163,6 +1203,16 @@ def add_entry(current_user):
     if heures < 0 or materiel < 0:
         return jsonify({'error': 'heures/materiel cannot be negative'}), 400
 
+    # Offline-queued submissions (see frontend offlineQueue.ts) carry a
+    # client-generated ref — if a retry's earlier attempt actually succeeded
+    # but its response got lost (dropped connection), this recognizes it as
+    # already-done instead of creating a duplicate entry.
+    client_ref = data.get('client_ref')
+    if client_ref:
+        existing = Entry.query.filter_by(client_ref=client_ref).first()
+        if existing:
+            return jsonify(existing.to_dict()), 200
+
     new_entry = Entry(
         user_id=target_user_id,
         chantier_id=chantier_id,
@@ -1170,7 +1220,8 @@ def add_entry(current_user):
         heures=heures,
         materiel=materiel,
         status='PENDING',
-        created_by_id=data.get('created_by_id', current_user.id)
+        created_by_id=data.get('created_by_id', current_user.id),
+        client_ref=client_ref
     )
     db.session.add(new_entry)
     db.session.commit()

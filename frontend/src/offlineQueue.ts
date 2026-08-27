@@ -14,10 +14,22 @@ export interface QueuedEntry {
     materiel: number;
     created_by_id: number;
     queuedAt: string;
+    /** Set once a sync attempt gets a 401/403 back — almost always means a
+     * different user is now logged in on this device than the one who
+     * queued the entry (shared/handed-off tablet). Kept (not dropped) and
+     * still retried in the background in case the right user logs back in,
+     * but the UI shows it distinctly instead of an indefinite silent retry. */
+    authError?: boolean;
 }
 
 const KEY = 'ohm_offline_entries';
 const CHANGE_EVENT = 'ohm:offline-queue-changed';
+// Cross-tab sync lock: two tabs open on the same device both reacting to the
+// same 'online' event would otherwise both read the queue before either
+// writes it back, and both post everything — a short localStorage-based
+// lock closes most of that window (doesn't need to be perfect, just short).
+const LOCK_KEY = 'ohm_offline_sync_lock';
+const LOCK_TTL_MS = 8000;
 
 function read(): QueuedEntry[] {
     try {
@@ -37,7 +49,7 @@ function write(entries: QueuedEntry[]) {
     window.dispatchEvent(new Event(CHANGE_EVENT));
 }
 
-export function queueEntry(entry: Omit<QueuedEntry, 'tempId' | 'queuedAt'>) {
+export function queueEntry(entry: Omit<QueuedEntry, 'tempId' | 'queuedAt' | 'authError'>) {
     const entries = read();
     entries.push({
         ...entry,
@@ -56,6 +68,21 @@ export function onQueueChange(cb: () => void) {
     return () => window.removeEventListener(CHANGE_EVENT, cb);
 }
 
+function acquireLock(): boolean {
+    try {
+        const raw = localStorage.getItem(LOCK_KEY);
+        const held = raw ? parseInt(raw, 10) : 0;
+        if (held && Date.now() - held < LOCK_TTL_MS) return false; // another tab is syncing
+        localStorage.setItem(LOCK_KEY, String(Date.now()));
+        return true;
+    } catch {
+        return true; // storage unavailable — proceed rather than block sync entirely
+    }
+}
+function releaseLock() {
+    try { localStorage.removeItem(LOCK_KEY); } catch { /* best-effort */ }
+}
+
 let syncing = false;
 
 /** Attempts to flush the queue. Stops at the first network failure (still
@@ -66,6 +93,7 @@ export async function trySyncQueue(apiPost: (path: string, body?: unknown) => Pr
     if (syncing) return;
     const entries = read();
     if (entries.length === 0) return;
+    if (!acquireLock()) return; // another tab is already flushing the same queue
 
     syncing = true;
     try {
@@ -76,10 +104,12 @@ export async function trySyncQueue(apiPost: (path: string, body?: unknown) => Pr
                 stillQueued.push(entry);
                 continue;
             }
-            const { tempId, queuedAt, chantier_nom, ...payload } = entry;
+            const { tempId, queuedAt, chantier_nom, authError, ...payload } = entry;
             try {
-                const res = await apiPost('/api/entries', payload);
-                if (!res.ok) stillQueued.push(entry);
+                const res = await apiPost('/api/entries', { ...payload, client_ref: tempId });
+                if (!res.ok) {
+                    stillQueued.push({ ...entry, authError: res.status === 401 || res.status === 403 });
+                }
             } catch {
                 offline = true;
                 stillQueued.push(entry);
@@ -88,5 +118,6 @@ export async function trySyncQueue(apiPost: (path: string, body?: unknown) => Pr
         write(stillQueued);
     } finally {
         syncing = false;
+        releaseLock();
     }
 }

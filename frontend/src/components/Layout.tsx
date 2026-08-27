@@ -64,15 +64,24 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, activeView, onLo
     // Offline-queued entries (see offlineQueue.ts) — a small persistent
     // indicator so it's obvious something is waiting to send, not silently lost.
     const [queuedCount, setQueuedCount] = useState(0);
+    const [queuedAuthError, setQueuedAuthError] = useState(false);
     const [displayedQueuedCount, setDisplayedQueuedCount] = useState(0);
     useEffect(() => {
-        const refresh = () => setQueuedCount(getQueuedEntries().length);
+        const refresh = () => {
+            const entries = getQueuedEntries();
+            setQueuedCount(entries.length);
+            setQueuedAuthError(entries.some(e => e.authError));
+        };
         refresh();
         return onQueueChange(refresh);
     }, []);
+    const [displayedQueuedAuthError, setDisplayedQueuedAuthError] = useState(false);
     useEffect(() => {
-        if (queuedCount > 0) setDisplayedQueuedCount(queuedCount);
-    }, [queuedCount]);
+        if (queuedCount > 0) {
+            setDisplayedQueuedCount(queuedCount);
+            setDisplayedQueuedAuthError(queuedAuthError);
+        }
+    }, [queuedCount, queuedAuthError]);
     const queuedPillT = useMountTransition(queuedCount > 0, 250);
 
     // Close the drawer automatically if the viewport grows into the desktop
@@ -290,12 +299,18 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, activeView, onLo
                 {children}
             </main>
 
-            {/* Offline-queued entries — stays until they've actually sent */}
+            {/* Offline-queued entries — stays until they've actually sent.
+                Turns red instead of amber if the server keeps refusing them
+                (almost always a different user now logged in on this device
+                than the one who made the entry) instead of retrying forever
+                with no visible difference. */}
             {queuedPillT.mounted && (
                 <div className="fixed bottom-4 left-1/2 -translate-x-1/2 lg:left-auto lg:right-6 lg:translate-x-0 z-40 safe-bottom">
-                    <div className={`t-toast ${queuedPillT.active ? 'is-open' : ''} flex items-center gap-2 px-4 py-2.5 rounded-full bg-amber-500 text-white shadow-lg font-bold text-sm`}>
+                    <div className={`t-toast ${queuedPillT.active ? 'is-open' : ''} flex items-center gap-2 px-4 py-2.5 rounded-full text-white shadow-lg font-bold text-sm ${displayedQueuedAuthError ? 'bg-red-600' : 'bg-amber-500'}`}>
                         <CloudOff size={16} />
-                        {displayedQueuedCount} saisie{displayedQueuedCount > 1 ? 's' : ''} en attente d'envoi
+                        {displayedQueuedAuthError
+                            ? `${displayedQueuedCount} saisie${displayedQueuedCount > 1 ? 's' : ''} bloquée${displayedQueuedCount > 1 ? 's' : ''} — reconnectez-vous avec le bon compte`
+                            : `${displayedQueuedCount} saisie${displayedQueuedCount > 1 ? 's' : ''} en attente d'envoi`}
                     </div>
                 </div>
             )}
