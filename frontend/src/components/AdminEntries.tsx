@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Entry } from '../types';
-import { Check, X, Pencil } from 'lucide-react';
+import { Check, X, Pencil, CheckCheck, Loader2 } from 'lucide-react';
 import { api } from '../api';
 
 interface Props {
@@ -99,6 +99,17 @@ export const AdminEntries: React.FC<Props> = () => {
         }
     };
 
+    const [validatingDay, setValidatingDay] = useState<string | null>(null);
+    const handleValidateDay = async (date: string) => {
+        const ids = sorted.filter(e => e.date === date).map(e => e.id);
+        if (ids.length === 0) return;
+        if (!confirm(`Valider les ${ids.length} saisie(s) de ce jour ?`)) return;
+        setValidatingDay(date);
+        await Promise.all(ids.map(id => api.put(`/api/entries/${id}/validate`)));
+        setValidatingDay(null);
+        fetchPendingEntries();
+    };
+
     // Enter validates the focused entry (and auto-advances); arrows move the
     // focus without acting. Disabled while editing, or while typing anywhere
     // else on the page, so it never hijacks normal form input.
@@ -156,9 +167,19 @@ export const AdminEntries: React.FC<Props> = () => {
                     return (
                         <React.Fragment key={e.id}>
                             {showHeader && (
-                                <div className="text-sm font-bold text-slate-500 uppercase tracking-wider pt-2 first:pt-0 flex items-center gap-2">
-                                    {e.date === yesterdayStr && <span className="w-2 h-2 rounded-full bg-ohm-primary" />}
-                                    {formatDateHeader(e.date)}
+                                <div className="text-sm font-bold text-slate-500 uppercase tracking-wider pt-2 first:pt-0 flex items-center justify-between gap-2 flex-wrap">
+                                    <div className="flex items-center gap-2">
+                                        {e.date === yesterdayStr && <span className="w-2 h-2 rounded-full bg-ohm-primary" />}
+                                        {formatDateHeader(e.date)}
+                                    </div>
+                                    <button
+                                        onClick={() => handleValidateDay(e.date)}
+                                        disabled={validatingDay !== null}
+                                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-100 text-slate-600 hover:bg-ohm-primary hover:text-ohm-bg transition-all text-xs font-bold normal-case disabled:opacity-50"
+                                    >
+                                        {validatingDay === e.date ? <Loader2 size={14} className="animate-spin" /> : <CheckCheck size={14} />}
+                                        Valider tout ce jour
+                                    </button>
                                 </div>
                             )}
                             <div

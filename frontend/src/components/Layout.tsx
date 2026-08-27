@@ -1,7 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { OhmIcon } from './Icons';
-import { LayoutDashboard, Calendar, Users, ClipboardCheck, LogOut, BarChart3, Menu, X, ChevronRight } from 'lucide-react';
+import { LayoutDashboard, Calendar, Users, ClipboardCheck, LogOut, BarChart3, Menu, X, ChevronRight, CloudOff } from 'lucide-react';
 import { MODAL_STATE_EVENT } from '../modalState';
+import { api } from '../api';
+import { getQueuedEntries, onQueueChange } from '../offlineQueue';
 
 interface User {
     username: string;
@@ -42,6 +44,29 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, activeView, onLo
         const onModalState = (e: Event) => setPageModalOpen((e as CustomEvent<boolean>).detail);
         window.addEventListener(MODAL_STATE_EVENT, onModalState);
         return () => window.removeEventListener(MODAL_STATE_EVENT, onModalState);
+    }, []);
+
+    // Pending-entries count, shown as a badge on "Validation Saisies" so
+    // admins see there's something to review without opening the page.
+    const [pendingCount, setPendingCount] = useState(0);
+    useEffect(() => {
+        if (user?.role !== 'admin') return;
+        const fetchCount = async () => {
+            const res = await api.get('/api/entries/pending');
+            if (res.ok) setPendingCount((await res.json()).length);
+        };
+        fetchCount();
+        const interval = setInterval(fetchCount, 60000);
+        return () => clearInterval(interval);
+    }, [user?.role]);
+
+    // Offline-queued entries (see offlineQueue.ts) — a small persistent
+    // indicator so it's obvious something is waiting to send, not silently lost.
+    const [queuedCount, setQueuedCount] = useState(0);
+    useEffect(() => {
+        const refresh = () => setQueuedCount(getQueuedEntries().length);
+        refresh();
+        return onQueueChange(refresh);
     }, []);
 
     // Close the drawer automatically if the viewport grows into the desktop
@@ -119,7 +144,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, activeView, onLo
                             </div>
                             <div className="space-y-2">
                                 {ADMIN_NAV_ITEMS.map(item => (
-                                    <NavItem key={item.path} icon={<item.icon size={22} />} label={item.label} active={activeView === item.view} onClick={() => handleNavigate(item.path)} />
+                                    <NavItem key={item.path} icon={<item.icon size={22} />} label={item.label} active={activeView === item.view} onClick={() => handleNavigate(item.path)} badge={item.path === 'admin-entries' ? pendingCount : undefined} />
                                 ))}
                             </div>
                         </div>
@@ -218,7 +243,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, activeView, onLo
                                         Administration
                                     </div>
                                     {ADMIN_NAV_ITEMS.map(item => (
-                                        <NavItemMobile key={item.path} icon={<item.icon size={22} />} label={item.label} active={activeView === item.view} onClick={() => handleNavigate(item.path)} />
+                                        <NavItemMobile key={item.path} icon={<item.icon size={22} />} label={item.label} active={activeView === item.view} onClick={() => handleNavigate(item.path)} badge={item.path === 'admin-entries' ? pendingCount : undefined} />
                                     ))}
                                 </div>
                             )}
@@ -258,12 +283,22 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, activeView, onLo
             >
                 {children}
             </main>
+
+            {/* Offline-queued entries — stays until they've actually sent */}
+            {queuedCount > 0 && (
+                <div className="fixed bottom-4 left-1/2 -translate-x-1/2 lg:left-auto lg:right-6 lg:translate-x-0 z-40 safe-bottom">
+                    <div className="flex items-center gap-2 px-4 py-2.5 rounded-full bg-amber-500 text-white shadow-lg font-bold text-sm">
+                        <CloudOff size={16} />
+                        {queuedCount} saisie{queuedCount > 1 ? 's' : ''} en attente d'envoi
+                    </div>
+                </div>
+            )}
         </div>
     );
 };
 
 // Desktop nav item (hover-reveal label)
-const NavItem = ({ icon, label, active, onClick }: { icon: React.ReactNode, label: string, active?: boolean, onClick: () => void }) => (
+const NavItem = ({ icon, label, active, onClick, badge }: { icon: React.ReactNode, label: string, active?: boolean, onClick: () => void, badge?: number }) => (
     <button
         onClick={onClick}
         className={`w-full h-14 flex items-center gap-4 px-3 rounded-2xl relative group/item overflow-hidden transition-all duration-300 hover:shadow-md ${active ? 'text-slate-900 bg-black/5' : 'text-text-muted hover:text-slate-900 hover:bg-black/5'
@@ -272,10 +307,20 @@ const NavItem = ({ icon, label, active, onClick }: { icon: React.ReactNode, labe
         <div className={`w-8 flex justify-center flex-shrink-0 relative z-10 transition-transform duration-300 group-hover/item:scale-110 ${active ? 'text-primary drop-shadow-[0_0_8px_rgba(255,215,0,0.8)]' : 'group-hover/item:text-primary group-hover/item:drop-shadow-[0_0_8px_rgba(255,215,0,0.8)]'
             }`}>
             {icon}
+            {!!badge && (
+                <span className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 rounded-full bg-red-600 text-white text-[9px] font-bold flex items-center justify-center">
+                    {badge > 99 ? '99+' : badge}
+                </span>
+            )}
         </div>
-        <span className="opacity-0 group-hover:opacity-100 transition-opacity duration-300 font-bold text-base whitespace-nowrap delay-75 relative z-10 tracking-wide">
+        <span className="opacity-0 group-hover:opacity-100 transition-opacity duration-300 font-bold text-base whitespace-nowrap delay-75 relative z-10 tracking-wide flex-1">
             {label}
         </span>
+        {!!badge && (
+            <span className="opacity-0 group-hover:opacity-100 transition-opacity duration-300 delay-75 relative z-10 shrink-0 min-w-[20px] h-5 px-1.5 rounded-full bg-red-600 text-white text-[10px] font-bold flex items-center justify-center">
+                {badge > 99 ? '99+' : badge}
+            </span>
+        )}
 
         <div className={`absolute left-0 top-1/2 -translate-y-1/2 w-1 h-8 bg-primary rounded-r-full transition-all duration-300 shadow-[0_0_10px_rgba(255,215,0,0.8)] ${active ? 'opacity-100' : 'opacity-0 group-hover/item:opacity-100'
             }`} />
@@ -284,13 +329,18 @@ const NavItem = ({ icon, label, active, onClick }: { icon: React.ReactNode, labe
 );
 
 // Mobile drawer nav item (label always visible — no hover on touch devices)
-const NavItemMobile = ({ icon, label, active, onClick }: { icon: React.ReactNode, label: string, active?: boolean, onClick: () => void }) => (
+const NavItemMobile = ({ icon, label, active, onClick, badge }: { icon: React.ReactNode, label: string, active?: boolean, onClick: () => void, badge?: number }) => (
     <button
         onClick={onClick}
         className={`w-full h-12 flex items-center gap-4 px-4 rounded-xl font-bold text-sm transition-all active:scale-[0.98] ${active ? 'bg-primary/10 text-primary' : 'text-slate-600 hover:bg-black/5 hover:text-slate-900'
             }`}
     >
         <div className="w-6 flex justify-center flex-shrink-0">{icon}</div>
-        <span className="tracking-wide">{label}</span>
+        <span className="tracking-wide flex-1 text-left">{label}</span>
+        {!!badge && (
+            <span className="shrink-0 min-w-[20px] h-5 px-1.5 rounded-full bg-red-600 text-white text-[10px] font-bold flex items-center justify-center">
+                {badge > 99 ? '99+' : badge}
+            </span>
+        )}
     </button>
 );

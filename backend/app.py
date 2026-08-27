@@ -205,6 +205,9 @@ class Chantier(db.Model):
             'no_mesure_needed': bool(self.no_mesure_needed),
             'has_mesure': any(d.category == 'mesure' for d in self.documents),
             'has_rapport': any(d.category == 'rapport' for d in self.documents),
+            'hours_this_month': round(sum(
+                e.heures for e in self.entries if e.date.startswith(datetime.datetime.utcnow().strftime('%Y-%m'))
+            ), 2),
             'members': [u.id for u in self.members]
         }
 
@@ -224,7 +227,7 @@ class Entry(db.Model):
     
     user = db.relationship('User', foreign_keys=[user_id], backref='entries')
     created_by = db.relationship('User', foreign_keys=[created_by_id])
-    chantier = db.relationship('Chantier', backref='entries')
+    chantier = db.relationship('Chantier', backref=db.backref('entries', lazy='selectin'))
 
     def to_dict(self):
         return {
@@ -1038,6 +1041,27 @@ def document_detail(current_user, doc_id):
     if not os.path.isfile(disk_path):
         return jsonify({'error': 'Fichier introuvable (chantier peut-être archivé)'}), 404
     return send_file(disk_path, as_attachment=True, download_name=doc.original_filename, mimetype=doc.mimetype)
+
+@app.route('/api/documents/<int:doc_id>/thumbnail', methods=['GET'])
+@token_required
+def document_thumbnail(current_user, doc_id):
+    """Small on-the-fly JPEG for photo grids — the DocumentExplorer used to
+    load the full compressed photo (up to ~150KB) just to show it in a
+    thumbnail-sized cell. Computed per-request rather than stored: cheap
+    (resizing an already-small source) and keeps storage at exactly one file
+    per photo."""
+    doc = Document.query.get_or_404(doc_id)
+    if doc.category != 'photo':
+        return jsonify({'error': 'Not a photo'}), 400
+    disk_path = document_disk_path(doc)
+    if not os.path.isfile(disk_path):
+        return jsonify({'error': 'Fichier introuvable (chantier peut-être archivé)'}), 404
+    img = Image.open(disk_path)
+    img.thumbnail((300, 300), Image.LANCZOS)
+    buf = BytesIO()
+    img.save(buf, format='JPEG', quality=60)
+    buf.seek(0)
+    return send_file(buf, mimetype='image/jpeg')
 
 @app.route('/api/chantiers/<int:id>/documents/zip', methods=['GET'])
 @token_required

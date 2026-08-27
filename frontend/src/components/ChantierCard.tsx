@@ -1,6 +1,6 @@
 import { Chantier } from '../types';
 import { StatusBadge } from './StatusBadge';
-import { AlertTriangle } from 'lucide-react';
+import { AlertTriangle, Clock } from 'lucide-react';
 
 interface ChantierCardProps {
     chantier: Chantier;
@@ -54,6 +54,15 @@ export const ChantierCard = ({ chantier, onClick }: ChantierCardProps) => {
                     <div className="flex items-center gap-3 group-hover:text-slate-900 transition-colors p-2 rounded-lg group-hover:bg-black/5">
                         <svg className="w-5 h-5 shrink-0 text-primary/50 group-hover:text-primary transition-colors group-hover:drop-shadow-[0_0_5px_rgba(255,215,0,0.5)]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
                         <span className="font-mono text-xs">{chantier.date_start} {chantier.date_end ? `→ ${chantier.date_end}` : '...'}</span>
+                    </div>
+                )}
+
+                {typeof chantier.hours_this_month === 'number' && chantier.hours_this_month > 0 && (
+                    <div className="flex items-center gap-3 p-2 rounded-lg">
+                        <Clock size={20} className="shrink-0 text-primary/50" />
+                        <span className="font-mono text-xs">
+                            <span className="font-bold text-slate-900">{chantier.hours_this_month} h</span> ce mois-ci
+                        </span>
                     </div>
                 )}
 

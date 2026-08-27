@@ -24,6 +24,7 @@ export interface Chantier {
     no_mesure_needed?: boolean; // opt-out clearing the missing-mesure warning without a file
     has_mesure?: boolean;
     has_rapport?: boolean;
+    hours_this_month?: number;
     members: number[]; // Array of User IDs
 }
 

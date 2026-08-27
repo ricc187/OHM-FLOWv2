@@ -4,6 +4,7 @@ import { Dashboard } from './components/Dashboard';
 import { Login } from './components/Login';
 import { Layout } from './components/Layout';
 import { api, UNAUTHORIZED_EVENT } from './api';
+import { trySyncQueue } from './offlineQueue';
 
 // Most sessions only ever touch Dashboard (and maybe one ChantierDetail) —
 // keeping Login/Dashboard in the main bundle and splitting the rest out
@@ -78,6 +79,22 @@ function App() {
         const onUnauthorized = () => handleLogout();
         window.addEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
         return () => window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
+    }, []);
+
+    // Flush any offline-queued entries: on load (in case we started this
+    // session already back online with leftovers), whenever the browser
+    // reports coming back online, and periodically in the background —
+    // navigator.onLine can say "online" while a weak chantier signal still
+    // fails every request, so a dumb interval retry catches that too.
+    useEffect(() => {
+        const sync = () => trySyncQueue(api.post);
+        sync();
+        window.addEventListener('online', sync);
+        const interval = setInterval(sync, 20000);
+        return () => {
+            window.removeEventListener('online', sync);
+            clearInterval(interval);
+        };
     }, []);
 
     // Browser back/forward — re-sync state from the URL instead of navigating away.

@@ -133,7 +133,7 @@ export const DocumentExplorer: React.FC<Props> = ({ chantierId, chantierNom, isA
                                             {docs.map(doc => (
                                                 <div key={doc.id} className="relative group aspect-square rounded-xl overflow-hidden border border-slate-200 bg-slate-100">
                                                     {!archived ? (
-                                                        <img src={`/api/documents/${doc.id}`} alt={doc.filename} className="w-full h-full object-cover" loading="lazy" />
+                                                        <img src={`/api/documents/${doc.id}/thumbnail`} alt={doc.filename} className="w-full h-full object-cover" loading="lazy" />
                                                     ) : (
                                                         <div className="w-full h-full flex items-center justify-center text-slate-300"><ImageIcon size={24} /></div>
                                                     )}

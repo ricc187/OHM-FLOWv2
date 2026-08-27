@@ -8,6 +8,7 @@ import { DocumentExplorer } from './DocumentExplorer';
 import { api } from '../api';
 import { setAppModalOpen } from '../modalState';
 import { useEscapeKey } from '../hooks/useEscapeKey';
+import { queueEntry } from '../offlineQueue';
 
 interface Props {
     chantier: Chantier;
@@ -113,18 +114,32 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
 
         if (h === 0 && m === 0) return;
 
-        const res = await api.post('/api/entries', {
+        const payload = {
             user_id: currentUser.id,
             chantier_id: chantier.id,
             date: entryDate,
             heures: h,
             materiel: m,
             created_by_id: currentUser.id
-        });
-        if (res.ok) {
+        };
+
+        try {
+            const res = await api.post('/api/entries', payload);
+            if (res.ok) {
+                setEntryForm({ heures: '', materiel: '' });
+                setShowEntryModal(false);
+                fetchDetails();
+            } else {
+                const data = await res.json().catch(() => ({}));
+                alert(data.error || 'Erreur lors de la saisie');
+            }
+        } catch (err) {
+            // No network — chantiers often have weak/no signal. Queue it
+            // instead of losing what was just typed; it sends automatically
+            // once the connection comes back.
+            queueEntry({ ...payload, chantier_nom: chantier.nom });
             setEntryForm({ heures: '', materiel: '' });
             setShowEntryModal(false);
-            fetchDetails();
         }
     };
 
