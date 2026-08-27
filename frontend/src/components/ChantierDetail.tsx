@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Chantier, Entry, User, Alert } from '../types';
-import { Plus, Minus, X, Check, ArrowLeft, Clock, Calendar, Bell, Info, Pencil, Download, FileText, Receipt, Camera, FolderOpen, Lock, Unlock, Loader2 } from 'lucide-react';
+import { Chantier, Entry, User } from '../types';
+import { Plus, Minus, X, ArrowLeft, Clock, Calendar, Info, Pencil, Download, FileText, Receipt, Camera, FolderOpen, Lock, Unlock, Loader2 } from 'lucide-react';
 import { StatusBadge } from './StatusBadge';
 import { AwesomeDatePicker } from './ui/AwesomeDatePicker';
 import { AwesomeSelect } from './ui/AwesomeSelect';
@@ -15,23 +15,18 @@ interface Props {
     onBack: () => void;
 }
 
-type Tab = 'SUIVI' | 'INFO' | 'ALERTES';
+type Tab = 'SUIVI' | 'INFO';
 
 export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, currentUser, onBack }) => {
     const [chantier, setChantier] = useState(initialChantier);
     const [activeTab, setActiveTab] = useState<Tab>('SUIVI');
     const [entries, setEntries] = useState<Entry[]>([]);
-    const [alerts, setAlerts] = useState<Alert[]>([]);
 
     // Suivi Modal
     const [showEntryModal, setShowEntryModal] = useState(false);
     // Combined Entry Mode
     const [entryForm, setEntryForm] = useState({ heures: '', materiel: '' });
     const [entryDate, setEntryDate] = useState(new Date().toISOString().split('T')[0]);
-
-    // Alert Modal
-    const [showAlertModal, setShowAlertModal] = useState(false);
-    const [newAlert, setNewAlert] = useState({ title: '', due_date: '' });
 
     // Edit Modal
     const [showEditModal, setShowEditModal] = useState(false);
@@ -50,7 +45,7 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
 
     // Lock background scroll while any modal is open, and tell the app shell
     // to hide its own nav bar so it can't sit on top of / peek behind the modal.
-    const anyModalOpen = showEntryModal || showAlertModal || showEditModal || showExplorer;
+    const anyModalOpen = showEntryModal || showEditModal || showExplorer;
     useEffect(() => {
         setAppModalOpen(anyModalOpen);
         return () => setAppModalOpen(false);
@@ -59,7 +54,6 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
     // Escape closes whichever modal is open — no reason a keyboard user
     // should need the mouse just to back out of one.
     useEscapeKey(showEntryModal, () => setShowEntryModal(false));
-    useEscapeKey(showAlertModal, () => setShowAlertModal(false));
     useEscapeKey(showEditModal, () => setShowEditModal(false));
 
     const fetchDetails = async () => {
@@ -70,10 +64,6 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
         if (activeTab === 'SUIVI') {
             const res = await api.get(`/api/chantiers/${chantier.id}/entries?role=${currentUser.role}&user_id=${currentUser.id}`);
             if (res.ok) setEntries(await res.json());
-        }
-        if (activeTab === 'ALERTES') {
-            const res = await api.get(`/api/chantiers/${chantier.id}/alerts`);
-            if (res.ok) setAlerts(await res.json());
         }
     };
 
@@ -119,22 +109,6 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
         }
     };
 
-
-    // --- Alert Logic ---
-    const handleCreateAlert = async (e: React.FormEvent) => {
-        e.preventDefault();
-        const res = await api.post(`/api/chantiers/${chantier.id}/alerts`, newAlert);
-        if (res.ok) {
-            setNewAlert({ title: '', due_date: '' });
-            setShowAlertModal(false);
-            fetchDetails();
-        }
-    };
-
-    const toggleAlert = async (alert: Alert) => {
-        await api.put(`/api/alerts/${alert.id}`, { is_resolved: !alert.is_resolved });
-        fetchDetails();
-    };
 
     const handleExport = async () => {
         try {
@@ -231,7 +205,6 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
                         {[
                             { id: 'SUIVI', icon: Clock, label: 'Suivi' },
                             { id: 'INFO', icon: Info, label: 'Infos' },
-                            { id: 'ALERTES', icon: Bell, label: 'Alertes' },
                         ].map(tab => {
                             const Icon = tab.icon;
                             const isActive = activeTab === tab.id;
@@ -411,34 +384,6 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
                     </div>
                 )}
 
-
-
-                {/* ALERTES TAB */}
-                {activeTab === 'ALERTES' && (
-                    <div className="space-y-6 animate-slide-up">
-                        {alerts.map(alert => (
-                            <div key={alert.id} className={`card p-4 flex items-center justify-between group ${alert.is_resolved ? 'opacity-50' : 'border-l-4 border-l-red-500'}`}>
-                                <div>
-                                    <h4 className={`font-bold ${alert.is_resolved ? 'text-slate-400 line-through' : 'text-slate-900'}`}>{alert.title}</h4>
-                                    {alert.due_date && <div className="text-xs text-slate-400 font-mono mt-1 flex items-center gap-1"><Clock size={12} /> {alert.due_date}</div>}
-                                </div>
-                                <button onClick={() => toggleAlert(alert)} className={`p-2 rounded-full border ${alert.is_resolved ? 'border-green-500/30 text-green-500' : 'border-gray-600 text-slate-500 hover:text-green-400'}`}>
-                                    <Check size={18} />
-                                </button>
-                            </div>
-                        ))}
-
-                        {currentUser.role === 'admin' && (
-                            <button
-                                onClick={() => setShowAlertModal(true)}
-                                className="w-full py-3 rounded-xl border border-dashed border-slate-300 text-slate-500 hover:text-slate-900 hover:border-slate-500 hover:bg-slate-50 transition-all flex items-center justify-center gap-2"
-                            >
-                                <Plus size={20} /> Ajouter une alerte
-                            </button>
-                        )}
-                    </div>
-                )}
-
             </div>
 
             {/* ENTRY MODAL */}
@@ -536,21 +481,6 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
                                 </button>
                             </div>
                         </form>
-                    </div>
-                </div>
-            )}
-
-            {/* ALERT MODAL */}
-            {showAlertModal && (
-                <div className="fixed inset-0 bg-white/80 backdrop-blur-sm flex items-center justify-center z-[100] p-4 safe-top safe-bottom">
-                    <div className="card w-full max-w-md space-y-4">
-                        <h3 className="text-xl font-bold text-slate-900">Nouvelle Alerte</h3>
-                        <input type="text" placeholder="Titre" autoFocus className="input-field" value={newAlert.title} onChange={e => setNewAlert({ ...newAlert, title: e.target.value })} />
-                        <AwesomeDatePicker value={newAlert.due_date} onChange={d => setNewAlert({ ...newAlert, due_date: d })} placeholder="Date d'échéance" />
-                        <div className="flex gap-2">
-                            <button onClick={() => setShowAlertModal(false)} className="flex-1 py-3 rounded-lg bg-slate-100 text-slate-900 font-bold">Annuler</button>
-                            <button onClick={handleCreateAlert} className="flex-1 py-3 rounded-lg bg-ohm-primary text-ohm-bg font-bold">Créer</button>
-                        </div>
                     </div>
                 </div>
             )}

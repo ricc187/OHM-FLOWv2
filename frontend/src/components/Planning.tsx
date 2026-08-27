@@ -71,7 +71,7 @@ const CalendarView = ({ leaves }: { leaves: Leave[] }) => {
         const days = [];
         // Empty cells for offset
         for (let i = 0; i < startOffset; i++) {
-            days.push(<div key={`empty-${i}`} className="h-24 bg-white/30 border border-slate-200/50"></div>);
+            days.push(<div key={`empty-${i}`} className="h-14 sm:h-24 bg-white/30 border border-slate-200/50"></div>);
         }
 
         // Days of month
@@ -88,9 +88,9 @@ const CalendarView = ({ leaves }: { leaves: Leave[] }) => {
                 }); // Sort to keep holidays on top and keep consistent order
 
             days.push(
-                <div key={d} className="min-h-[6rem] bg-white/50 border border-slate-200 pt-2 px-0 flex flex-col gap-1 overflow-hidden hover:bg-slate-50/50 transition-colors p-0">
-                    <span className={`text-sm font-mono font-bold self-end mb-1 mr-2 ${new Date().toDateString() === dateObj.toDateString()
-                        ? 'bg-ohm-primary text-black w-6 h-6 rounded-full flex items-center justify-center'
+                <div key={d} className="min-h-[3.5rem] sm:min-h-[6rem] bg-white/50 border border-slate-200 pt-1 sm:pt-2 px-0 flex flex-col gap-0.5 sm:gap-1 overflow-hidden hover:bg-slate-50/50 transition-colors p-0">
+                    <span className={`text-[10px] sm:text-sm font-mono font-bold self-end mb-0.5 sm:mb-1 mr-1 sm:mr-2 ${new Date().toDateString() === dateObj.toDateString()
+                        ? 'bg-ohm-primary text-black w-4 h-4 sm:w-6 sm:h-6 rounded-full flex items-center justify-center'
                         : 'text-slate-400'
                         }`}>{d}</span>
 
@@ -135,13 +135,15 @@ const CalendarView = ({ leaves }: { leaves: Leave[] }) => {
                         return (
                             <div
                                 key={l.id}
-                                className={`py-1 text-[10px] truncate flex items-center gap-1 shadow-sm opacity-90 h-6 ${roundedClass} ${marginClass} ${extraClass} ${continuesFromPrev ? 'pl-2' : 'pl-2'} ${continuesToNext ? 'pr-2' : 'pr-2'} ${l.type === 'HOLIDAY' ? 'justify-center border-l border-r' : 'font-bold'}`}
+                                className={`py-0.5 sm:py-1 text-[10px] truncate flex items-center gap-1 shadow-sm opacity-90 h-3.5 sm:h-6 ${roundedClass} ${marginClass} ${extraClass} ${continuesFromPrev ? 'pl-1 sm:pl-2' : 'pl-1 sm:pl-2'} ${continuesToNext ? 'pr-1 sm:pr-2' : 'pr-1 sm:pr-2'} ${l.type === 'HOLIDAY' ? 'justify-center border-l border-r' : 'font-bold'}`}
                                 title={`${l.user_name} - ${l.type}`}
                             >
                                 {/* Only show dot on start or if space permits? Showing it always is fine for now */}
                                 {isStart && l.type !== 'HOLIDAY' && <span className="w-1.5 h-1.5 rounded-full shrink-0 bg-current"></span>}
-                                {/* Hide text if it's a middle segment to save space, or keep it for readability? Keeping it. */}
-                                {l.user_name}
+                                {/* Name text: hidden below sm — cells are too narrow on phones to fit it
+                                    without forcing horizontal scroll, the colored bar alone still shows
+                                    who's off via the dot + tapping/title */}
+                                <span className="hidden sm:inline">{l.user_name}</span>
                             </div>
                         );
                     })}
@@ -153,7 +155,7 @@ const CalendarView = ({ leaves }: { leaves: Leave[] }) => {
         const totalItems = startOffset + daysInMonth;
         const trailingDays = 42 - totalItems;
         for (let i = 0; i < trailingDays; i++) {
-            days.push(<div key={`trailing-${i}`} className="min-h-[6rem] bg-white/30 border border-slate-200/50 p-0"></div>);
+            days.push(<div key={`trailing-${i}`} className="min-h-[3.5rem] sm:min-h-[6rem] bg-white/30 border border-slate-200/50 p-0"></div>);
         }
 
         return days;
@@ -168,18 +170,19 @@ const CalendarView = ({ leaves }: { leaves: Leave[] }) => {
                 <button onClick={nextMonth} className="p-2 hover:bg-slate-100 rounded-lg text-slate-500 hover:text-slate-900 transition-colors"><ChevronRight /></button>
             </div>
 
-            {/* Days Header + Grid — scrolls horizontally instead of squishing on narrow phones */}
-            <div className="overflow-x-auto">
-                <div className="min-w-[560px]">
-                    <div className="grid grid-cols-7 bg-white border-b border-slate-300">
-                        {['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'].map(d => (
-                            <div key={d} className="p-3 text-center text-xs font-bold text-slate-400 uppercase tracking-widest">{d}</div>
-                        ))}
+            {/* Days Header + Grid — shrinks to fit the screen instead of forcing
+                horizontal scroll on narrow phones (see the mobile/desktop label
+                and cell-content adjustments above) */}
+            <div className="grid grid-cols-7 bg-white border-b border-slate-300">
+                {[{ short: 'L', full: 'Lun' }, { short: 'M', full: 'Mar' }, { short: 'M', full: 'Mer' }, { short: 'J', full: 'Jeu' }, { short: 'V', full: 'Ven' }, { short: 'S', full: 'Sam' }, { short: 'D', full: 'Dim' }].map((d, i) => (
+                    <div key={i} className="p-1.5 sm:p-3 text-center text-[10px] sm:text-xs font-bold text-slate-400 uppercase tracking-widest">
+                        <span className="sm:hidden">{d.short}</span>
+                        <span className="hidden sm:inline">{d.full}</span>
                     </div>
-                    <div className="grid grid-cols-7 bg-slate-100">
-                        {renderDays()}
-                    </div>
-                </div>
+                ))}
+            </div>
+            <div className="grid grid-cols-7 bg-slate-100">
+                {renderDays()}
             </div>
 
             <div className="p-4 bg-white border-t border-slate-200 flex gap-6 text-xs text-slate-500 font-mono">
