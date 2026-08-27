@@ -1,0 +1,113 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html, body, #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-background text-text antialiased font-sans selection:bg-primary/20 selection:text-primary-dark;
+    /* Installed-app feel: no rubber-band bounce, no long-press callout/highlight flash */
+    overscroll-behavior-y: none;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-touch-callout: none;
+  }
+
+  /* Custom Scrollbar */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    @apply bg-slate-100;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    @apply bg-slate-300 rounded-full hover:bg-primary transition-colors;
+  }
+}
+
+@layer components {
+
+  /* Aggressive Glass Panel */
+  .glass-panel {
+    @apply bg-white border border-slate-200 shadow-[0_8px_30px_rgb(0,0,0,0.04)] rounded-2xl relative overflow-hidden;
+  }
+
+  /* Universal Card Style */
+  .card {
+    @apply bg-white border border-slate-200 rounded-2xl p-6 shadow-sm relative overflow-hidden;
+  }
+
+  /* Interactive Card */
+  .hover-card {
+    @apply transition-all duration-300 hover:-translate-y-1 hover:border-primary/30 hover:shadow-lg relative;
+  }
+
+  /* Gradient Text */
+  .text-gradient {
+    @apply bg-clip-text text-transparent bg-gradient-to-r from-slate-800 to-slate-600;
+  }
+
+  .text-gradient-gold {
+    @apply bg-clip-text text-transparent bg-gradient-to-r from-primary to-primary-dark;
+  }
+
+  .text-gradient-mix {
+    @apply bg-clip-text text-transparent bg-gradient-to-r from-primary to-secondary;
+  }
+
+  .input-field {
+    @apply bg-white border border-slate-200 rounded-xl px-4 py-3 text-slate-800 placeholder-slate-400 focus:outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 transition-all duration-200 w-full text-sm shadow-sm;
+  }
+
+  /* Button Styles */
+  .btn-primary {
+    @apply bg-primary text-white font-semibold py-3 px-6 rounded-xl shadow-md hover:shadow-lg hover:-translate-y-0.5 active:translate-y-0 transition-all duration-200 relative overflow-hidden;
+  }
+}
+
+
+@layer utilities {
+  .text-glow {
+    text-shadow: 0 0 5px currentColor;
+  }
+
+  /* Safe-area insets — iPhone notch / home-indicator / Android gesture bar.
+     Use max() so these stay 0 (not negative/collapsed) on devices without insets. */
+  .safe-top {
+    padding-top: max(env(safe-area-inset-top), 0px);
+  }
+  .safe-bottom {
+    padding-bottom: max(env(safe-area-inset-bottom), 0px);
+  }
+  .safe-left {
+    padding-left: max(env(safe-area-inset-left), 0px);
+  }
+  .safe-right {
+    padding-right: max(env(safe-area-inset-right), 0px);
+  }
+
+  /* Hide scrollbar on horizontally-scrollable tab/chip rows while keeping them scrollable */
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+
+  @keyframes shine {
+    0% {
+      transform: skewX(-20deg) translateX(-150%);
+    }
+
+    100% {
+      transform: skewX(-20deg) translateX(150%);
+    }
+  }
+}
