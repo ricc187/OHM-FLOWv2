@@ -8,6 +8,7 @@ pointé sur un dossier temporaire.
 
 Lancer : python -m unittest tests.test_auth -v   (depuis backend/)
 """
+import datetime
 import os
 import sys
 import shutil
@@ -285,6 +286,58 @@ class AuthTestCase(unittest.TestCase):
         c.set_cookie(ohmapp.COOKIE_NAME, token)
         res = c.post(f'/api/users/{target_id}/force-logout')
         self.assertEqual(res.status_code, 403)
+
+    def test_force_logout_rejects_self_target(self):
+        admin_id = self._create_user('self_target_admin', 'admin')
+        with ohmapp.app.app_context():
+            token = ohmapp.serializer.dumps({'user_id': admin_id})
+        c = ohmapp.app.test_client()
+        c.set_cookie(ohmapp.COOKIE_NAME, token)
+        res = c.post(f'/api/users/{admin_id}/force-logout')
+        self.assertEqual(res.status_code, 400)
+
+    def test_force_logout_resets_lockout(self):
+        admin_id = self._create_user('lockout_reset_admin', 'admin')
+        target_id = self._create_user('lockout_reset_target', 'user')
+        with ohmapp.app.app_context():
+            target = ohmapp.db.session.get(ohmapp.User, target_id)
+            target.lockout_stage = 1
+            target.locked_until = datetime.datetime.utcnow() + datetime.timedelta(minutes=15)
+            ohmapp.db.session.commit()
+            admin_token = ohmapp.serializer.dumps({'user_id': admin_id})
+        c = ohmapp.app.test_client()
+        c.set_cookie(ohmapp.COOKIE_NAME, admin_token)
+
+        res = c.post(f'/api/users/{target_id}/force-logout')
+        self.assertEqual(res.status_code, 200, res.get_json())
+
+        with ohmapp.app.app_context():
+            target = ohmapp.db.session.get(ohmapp.User, target_id)
+            self.assertIsNone(target.locked_until)
+            self.assertEqual(target.lockout_stage, 0)
+
+    def test_force_logout_also_blocks_voluntary_mfa_reenroll(self):
+        """The bypass this closes: mfa/enroll/start|confirm authenticate via
+        the session cookie directly (they run before any real session
+        exists in the mandatory mid-login case), so they must independently
+        honor sessions_invalidated_at, not just token_required."""
+        admin_id = self._create_user('bypass_admin', 'admin')
+        target_id = self._create_user('bypass_target', 'admin')
+        with ohmapp.app.app_context():
+            admin_token = ohmapp.serializer.dumps({'user_id': admin_id})
+            target_token = ohmapp.serializer.dumps({'user_id': target_id})
+
+        target_client = ohmapp.app.test_client()
+        target_client.set_cookie(ohmapp.COOKIE_NAME, target_token)
+
+        admin_client = ohmapp.app.test_client()
+        admin_client.set_cookie(ohmapp.COOKIE_NAME, admin_token)
+        res = admin_client.post(f'/api/users/{target_id}/force-logout')
+        self.assertEqual(res.status_code, 200, res.get_json())
+
+        # The revoked cookie must not be able to start a voluntary re-enroll either.
+        start_res = target_client.post('/api/mfa/enroll/start', json={})
+        self.assertEqual(start_res.status_code, 401)
 
     def test_admin_reset_requires_own_password(self):
         admin_id = self._create_user('reset_admin', 'admin')

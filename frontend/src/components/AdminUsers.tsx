@@ -4,7 +4,11 @@ import { AwesomeSelect } from './ui/AwesomeSelect';
 import { api } from '../api';
 import { ShieldCheck, ShieldAlert, KeyRound, LogOut } from 'lucide-react';
 
-export const AdminUsers: React.FC = () => {
+interface Props {
+    currentUser: User;
+}
+
+export const AdminUsers: React.FC<Props> = ({ currentUser }) => {
     const [users, setUsers] = useState<User[]>([]);
     const [showModal, setShowModal] = useState(false);
     const [editingUser, setEditingUser] = useState<User | null>(null);
@@ -90,6 +94,7 @@ export const AdminUsers: React.FC = () => {
     };
 
     const handleForceLogout = async (user: User) => {
+        if (user.id === currentUser.id) return; // backend also rejects this — button is disabled on our own row anyway
         if (!confirm(`Déconnecter ${user.username} de partout ? Sa session en cours sera immédiatement invalidée.`)) return;
         const res = await api.post(`/api/users/${user.id}/force-logout`);
         if (!res.ok) {
@@ -211,13 +216,15 @@ export const AdminUsers: React.FC = () => {
                                     </td>
                                     <td className="px-6 py-4 text-right">
                                         <div className="flex items-center justify-end gap-2">
-                                            <button
-                                                onClick={() => handleForceLogout(user)}
-                                                className="p-2 text-slate-500 hover:text-red-500 hover:bg-red-500/10 rounded-lg transition-all"
-                                                title="Déconnecter de partout"
-                                            >
-                                                <LogOut className="w-5 h-5" />
-                                            </button>
+                                            {user.id !== currentUser.id && (
+                                                <button
+                                                    onClick={() => handleForceLogout(user)}
+                                                    className="p-2 text-slate-500 hover:text-red-500 hover:bg-red-500/10 rounded-lg transition-all"
+                                                    title="Déconnecter de partout"
+                                                >
+                                                    <LogOut className="w-5 h-5" />
+                                                </button>
+                                            )}
                                             {user.mfa_enabled && (
                                                 <button
                                                     onClick={() => { setMfaResetTarget(user); setMfaResetPassword(''); setMfaResetError(''); }}

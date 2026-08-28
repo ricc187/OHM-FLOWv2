@@ -189,7 +189,7 @@ function App() {
             <NoticeBanner />
             <Suspense fallback={<PageLoader />}>
                 {view === 'admin' ? (
-                    <AdminUsers />
+                    <AdminUsers currentUser={user} />
                 ) : view === 'planning' ? (
                     <Planning currentUser={user} />
                 ) : view === 'stats' ? (

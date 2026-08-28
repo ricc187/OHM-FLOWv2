@@ -227,7 +227,14 @@ def _issue_session(user):
 def _resolve_mfa_enroll_actor(data):
     """Mid-login mandatory enrollment identifies the user via a short-lived
     mfa_token (no session exists yet); voluntary re-enrollment identifies
-    them via their existing session cookie instead. Returns (user, via_session)."""
+    them via their existing session cookie instead. Returns (user, via_session).
+
+    The session-cookie branch duplicates token_required's own checks
+    (purpose rejection, force-logout revocation) rather than calling it,
+    since this isn't wrapped in @token_required (it also has to accept an
+    mfa_token with no session at all) — those checks must stay in lockstep
+    with token_required's, or a cookie an admin just force-revoked could
+    still be used here to overwrite the victim's TOTP secret."""
     mfa_token = (data or {}).get('mfa_token')
     if mfa_token:
         return decode_mfa_pending_token(mfa_token, 'mfa_enroll'), False
@@ -235,9 +242,11 @@ def _resolve_mfa_enroll_actor(data):
     token = request.cookies.get(COOKIE_NAME)
     if token:
         try:
-            sess = serializer.loads(token, max_age=COOKIE_MAX_AGE)
+            sess, issued_at = serializer.loads(token, max_age=COOKIE_MAX_AGE, return_timestamp=True)
             if 'purpose' not in sess:
-                return db.session.get(User, sess.get('user_id')), True
+                user = db.session.get(User, sess.get('user_id'))
+                if user and not (user.sessions_invalidated_at and issued_at.replace(tzinfo=None) <= user.sessions_invalidated_at):
+                    return user, True
         except Exception:
             pass
     return None, False
@@ -1498,6 +1507,8 @@ def force_logout_user(current_user, user_id):
     unable to log back in."""
     if current_user.role != 'admin':
         return jsonify({'error': 'Admin access required'}), 403
+    if user_id == current_user.id:
+        return jsonify({'error': "Utilisez le bouton Déconnexion pour vous déconnecter vous-même"}), 400
     user = db.session.get(User, user_id)
     if not user:
         return jsonify({'error': 'User not found'}), 404
@@ -1507,6 +1518,7 @@ def force_logout_user(current_user, user_id):
     # action (e.g. logging back in right away) isn't wrongly killed by a
     # microsecond of skew between the two clocks being compared.
     user.sessions_invalidated_at = datetime.datetime.utcnow().replace(microsecond=0)
+    _reset_lockout(user)  # matches this endpoint's whole point — don't force them out and leave them locked out too
     db.session.commit()
     audit_log('auth', current_user, f"force-logged-out {user.username} (id={user.id})")
     return jsonify({'message': f'{user.username} déconnecté de partout'})
