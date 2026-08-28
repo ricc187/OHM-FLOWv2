@@ -8,7 +8,10 @@ COPY frontend/ .
 RUN npm run build
 
 # Production Stage for Flask
-FROM python:3.9-slim
+# 3.13 (not the previous 3.9) — matches the Python version this app has
+# actually been developed/tested against, and Pillow==12.3.0 requires >=3.10
+# (3.9 fails to resolve it at all).
+FROM python:3.13-slim
 
 WORKDIR /app
 
