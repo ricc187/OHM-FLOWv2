@@ -32,6 +32,16 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
     // Combined Entry Mode
     const [entryForm, setEntryForm] = useState({ heures: '' });
     const [entryDate, setEntryDate] = useState(new Date().toISOString().split('T')[0]);
+    // Admin only: who the entry is actually for. Defaults to themselves;
+    // the picker (search + dropdown of every app user) lets them log it on
+    // a teammate's behalf instead of needing a separate "for a third party" form.
+    const [entryUserId, setEntryUserId] = useState(currentUser.id.toString());
+    const [allUsers, setAllUsers] = useState<User[]>([]);
+    useEffect(() => {
+        if (currentUser.role === 'admin') {
+            api.get('/api/users').then(res => res.ok && res.json()).then(data => data && setAllUsers(data));
+        }
+    }, []);
 
     // Edit Modal
     const [showEditModal, setShowEditModal] = useState(false);
@@ -123,8 +133,9 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
 
         if (h === 0) return;
 
+        const targetUserId = currentUser.role === 'admin' ? (parseInt(entryUserId, 10) || currentUser.id) : currentUser.id;
         const payload = {
-            user_id: currentUser.id,
+            user_id: targetUserId,
             chantier_id: chantier.id,
             date: entryDate,
             heures: h,
@@ -136,6 +147,7 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
             const res = await api.post('/api/entries', payload);
             if (res.ok) {
                 setEntryForm({ heures: '' });
+                setEntryUserId(currentUser.id.toString());
                 setShowEntryModal(false);
                 fetchDetails();
             } else {
@@ -148,6 +160,7 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
             // once the connection comes back.
             queueEntry({ ...payload, chantier_nom: chantier.nom });
             setEntryForm({ heures: '' });
+            setEntryUserId(currentUser.id.toString());
             setShowEntryModal(false);
         }
     };
@@ -418,6 +431,18 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
                         </div>
 
                         <form onSubmit={handleEntrySubmit} className="p-4 sm:p-8 space-y-6 sm:space-y-8 overflow-y-auto overflow-x-hidden">
+
+                            {currentUser.role === 'admin' && (
+                                <div className="min-w-0">
+                                    <label className="text-xs font-bold text-ohm-primary uppercase tracking-widest mb-2 block">Effectué par</label>
+                                    <AwesomeSelect
+                                        placeholder="Utilisateur"
+                                        value={entryUserId}
+                                        onChange={setEntryUserId}
+                                        options={allUsers.map(u => ({ value: u.id.toString(), label: u.username }))}
+                                    />
+                                </div>
+                            )}
 
                             <div className="min-w-0">
                                 <label className="text-xs font-bold text-ohm-primary uppercase tracking-widest mb-2 block">Date</label>
