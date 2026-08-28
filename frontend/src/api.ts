@@ -11,6 +11,18 @@
 
 export const UNAUTHORIZED_EVENT = 'ohm:unauthorized';
 
+// A 401 on these paths is a normal, expected step of the login/2FA flow
+// itself (bad password, bad code, expired mfa_token) — never "your existing
+// session expired", so it must not fire UNAUTHORIZED_EVENT (which drops
+// back to the login screen and resets app state).
+const AUTH_FLOW_PATHS = [
+    '/api/login',
+    '/api/mfa/verify',
+    '/api/mfa/verify-backup',
+    '/api/mfa/enroll/start',
+    '/api/mfa/enroll/confirm',
+];
+
 async function request(path: string, options: RequestInit = {}): Promise<Response> {
     const isFormData = options.body instanceof FormData;
     const res = await fetch(path, {
@@ -21,7 +33,7 @@ async function request(path: string, options: RequestInit = {}): Promise<Respons
             ...(options.headers || {}),
         },
     });
-    if (res.status === 401) {
+    if (res.status === 401 && !AUTH_FLOW_PATHS.some(p => path.startsWith(p))) {
         window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
     }
     return res;

@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useState } from 'react';
 import { User, Chantier } from './types.ts';
 import { Dashboard } from './components/Dashboard';
 import { Login } from './components/Login';
+import { ChangePasswordGate } from './components/ChangePasswordGate';
 import { Layout } from './components/Layout';
 import { NoticeBanner } from './components/NoticeBanner';
 import { api, UNAUTHORIZED_EVENT } from './api';
@@ -128,19 +129,10 @@ function App() {
         })();
     }, [user, selectedChantierId]);
 
-    const handleLogin = async (pin: string): Promise<boolean> => {
-        try {
-            const res = await api.post('/api/login', { pin });
-            if (res.ok) {
-                setUser(await res.json());
-                return true;
-            }
-            return false;
-        } catch (err) {
-            console.error(err);
-            return false;
-        }
-    };
+    // Login.tsx drives the whole password/2FA flow itself (it may be a
+    // multi-step exchange: password -> mfa code -> enroll) and only calls
+    // this once a real session actually exists.
+    const handleLoginSuccess = (loggedInUser: User) => setUser(loggedInUser);
 
     const handleNavigate = (path: string) => {
         setSelectedChantier(null);
@@ -173,7 +165,11 @@ function App() {
     }
 
     if (!user) {
-        return <Login onLogin={handleLogin} />;
+        return <Login onLoginSuccess={handleLoginSuccess} />;
+    }
+
+    if (user.must_change_password) {
+        return <ChangePasswordGate user={user} onChanged={setUser} />;
     }
 
     return (

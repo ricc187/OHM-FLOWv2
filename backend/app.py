@@ -21,6 +21,8 @@ from PIL import Image, ImageOps
 import fitz  # PyMuPDF
 import logging
 from financier_calculs import compute_financier
+from auth_security import validate_password
+import mfa as mfa_service
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -116,6 +118,12 @@ def token_required(f):
 
         try:
             data = serializer.loads(token, max_age=COOKIE_MAX_AGE)
+            # MFA pending tickets (see issue_mfa_pending_token) carry a
+            # 'purpose' claim and must never work as a real session, even
+            # though they're signed with the same key — a stolen in-flight
+            # login-step ticket must not be usable to reach an authed route.
+            if 'purpose' in data:
+                raise Exception('Not a session token')
             current_user = User.query.get(data['user_id'])
             if not current_user:
                 raise Exception('User not found')
@@ -124,6 +132,105 @@ def token_required(f):
 
         return f(current_user, *args, **kwargs)
     return decorated
+
+
+# --- Auth: password login + role-gated 2FA -----------------------------
+# Only roles listed here are required to set up/use TOTP 2FA at login.
+# 'user' and 'depanneur' log in with password only.
+MFA_REQUIRED_ROLES = ('admin',)
+
+# Account lockout after repeated bad password/2FA-code attempts (mirrors a
+# sliding-window count over LoginAttempt, not a live counter — see
+# _recent_failed_attempts). Escalating duration per stage, never
+# auto-decreasing — only a successful login resets it.
+LOCKOUT_MAX_ATTEMPTS = 5
+LOCKOUT_WINDOW_MIN = 15
+LOCKOUT_DURATIONS_MIN = [15, 60, 24 * 60]
+
+# TTL of the short-lived ticket returned between "password OK" and
+# "2FA verified/enrolled" — long enough to type a 6-digit code, short
+# enough that a leaked ticket is useless a few minutes later.
+MFA_PENDING_TTL_SEC = 300
+
+
+def _client_ip():
+    return request.headers.get('X-Forwarded-For', request.remote_addr) or 'unknown'
+
+
+def _record_login_attempt(username, success, reason=None):
+    db.session.add(LoginAttempt(username=username, ip_address=_client_ip(), success=success, reason=reason))
+    db.session.commit()
+
+
+def _recent_failed_attempts(username):
+    window_start = datetime.datetime.utcnow() - datetime.timedelta(minutes=LOCKOUT_WINDOW_MIN)
+    return LoginAttempt.query.filter(
+        LoginAttempt.username == username,
+        LoginAttempt.success.is_(False),
+        LoginAttempt.timestamp >= window_start
+    ).count()
+
+
+def is_account_locked(user):
+    return bool(user.locked_until and user.locked_until > datetime.datetime.utcnow())
+
+
+def _maybe_lock_account(user):
+    """Called after a bad password or bad 2FA/backup code for a known user —
+    escalates the lockout if the sliding-window failure count just crossed
+    the threshold."""
+    if _recent_failed_attempts(user.username) >= LOCKOUT_MAX_ATTEMPTS:
+        stage = min(user.lockout_stage, len(LOCKOUT_DURATIONS_MIN) - 1)
+        user.locked_until = datetime.datetime.utcnow() + datetime.timedelta(minutes=LOCKOUT_DURATIONS_MIN[stage])
+        user.lockout_stage = min(user.lockout_stage + 1, len(LOCKOUT_DURATIONS_MIN) - 1)
+        db.session.commit()
+
+
+def _reset_lockout(user):
+    user.lockout_stage = 0
+    user.locked_until = None
+
+
+def issue_mfa_pending_token(user, purpose):
+    return serializer.dumps({'user_id': user.id, 'purpose': purpose})
+
+
+def decode_mfa_pending_token(token, expected_purpose):
+    if not token:
+        return None
+    try:
+        data = serializer.loads(token, max_age=MFA_PENDING_TTL_SEC)
+    except Exception:
+        return None
+    if data.get('purpose') != expected_purpose:
+        return None
+    return db.session.get(User, data.get('user_id'))
+
+
+def _issue_session(user):
+    token = serializer.dumps({'user_id': user.id})
+    response = jsonify({'status': 'ok', **user.to_dict()})
+    set_auth_cookie(response, token)
+    return response
+
+
+def _resolve_mfa_enroll_actor(data):
+    """Mid-login mandatory enrollment identifies the user via a short-lived
+    mfa_token (no session exists yet); voluntary re-enrollment identifies
+    them via their existing session cookie instead. Returns (user, via_session)."""
+    mfa_token = (data or {}).get('mfa_token')
+    if mfa_token:
+        return decode_mfa_pending_token(mfa_token, 'mfa_enroll'), False
+
+    token = request.cookies.get(COOKIE_NAME)
+    if token:
+        try:
+            sess = serializer.loads(token, max_age=COOKIE_MAX_AGE)
+            if 'purpose' not in sess:
+                return db.session.get(User, sess.get('user_id')), True
+        except Exception:
+            pass
+    return None, False
 
 # Enable WAL mode for SQLite (Better concurrency)
 with app.app_context():
@@ -162,17 +269,45 @@ class User(db.Model):
     __tablename__ = 'users'
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False)
+    # --- Legacy PIN auth (retired — see password_hash below) ---
+    # pin_hash is still NOT NULL at the DB level on tables created before
+    # this change, so it can't just be left unset; new users get a random
+    # unusable placeholder hash (set_pin/check_pin are never called by any
+    # route anymore — dead code kept only so the column stays satisfiable).
     pin_hash = db.Column(db.String(256), nullable=False)
     pin = db.Column(db.String(6), default='')
-    role = db.Column(db.String(20), nullable=False) # 'admin' or 'user'
-    vacation_balance = db.Column(db.Float, default=0.0)
     must_change_pin = db.Column(db.Boolean, default=False)
 
-    def set_pin(self, pin):
+    role = db.Column(db.String(20), nullable=False) # 'admin', 'user' or 'depanneur'
+    vacation_balance = db.Column(db.Float, default=0.0)
+
+    # --- Password auth ---
+    password_hash = db.Column(db.String(300), nullable=True)
+    must_change_password = db.Column(db.Boolean, default=True)
+
+    # --- TOTP 2FA (required for MFA_REQUIRED_ROLES only — see manage_users) ---
+    mfa_enabled = db.Column(db.Boolean, default=False)
+    mfa_secret_enc = db.Column(db.String(300), nullable=True)          # confirmed secret, Fernet-encrypted (see mfa.py)
+    mfa_pending_secret_enc = db.Column(db.String(300), nullable=True)  # in-enrollment secret, not yet active
+    mfa_enrolled_at = db.Column(db.DateTime, nullable=True)
+
+    # --- Brute-force lockout (see _maybe_lock_account) ---
+    lockout_stage = db.Column(db.Integer, default=0)  # 0=none, escalates through LOCKOUT_DURATIONS_MIN, never auto-decreases
+    locked_until = db.Column(db.DateTime, nullable=True)
+
+    def set_pin(self, pin):  # pragma: no cover — retired, kept only so the column stays satisfiable
         self.pin_hash = generate_password_hash(pin)
 
-    def check_pin(self, pin):
+    def check_pin(self, pin):  # pragma: no cover — retired, never called
         return check_password_hash(self.pin_hash, pin)
+
+    def set_password(self, password):
+        self.password_hash = generate_password_hash(password, method='pbkdf2:sha256:600000')
+
+    def check_password(self, password):
+        if not self.password_hash:
+            return False
+        return check_password_hash(self.password_hash, password)
 
     def to_dict(self):
         return {
@@ -180,8 +315,34 @@ class User(db.Model):
             'username': self.username,
             'role': self.role,
             'vacation_balance': self.vacation_balance,
-            'must_change_pin': self.must_change_pin
+            'must_change_password': self.must_change_password,
+            'mfa_enabled': self.mfa_enabled,
+            'mfa_required': self.role in MFA_REQUIRED_ROLES,
         }
+
+class MfaBackupCode(db.Model):
+    """One-time recovery codes generated at 2FA enrollment — a used one is
+    marked (used_at set) rather than deleted, for audit purposes."""
+    __tablename__ = 'mfa_backup_codes'
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
+    code_hash = db.Column(db.String(300), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+    used_at = db.Column(db.DateTime, nullable=True)
+
+
+class LoginAttempt(db.Model):
+    """Every login/2FA attempt, success or failure — the sliding-window
+    source of truth for account lockout (see _recent_failed_attempts),
+    and a plain audit trail of who tried to log in from where."""
+    __tablename__ = 'login_attempts'
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(80), nullable=False, index=True)
+    ip_address = db.Column(db.String(64), nullable=True, index=True)
+    success = db.Column(db.Boolean, nullable=False)
+    reason = db.Column(db.String(40), nullable=True)  # bad_credentials, bad_mfa_code, bad_mfa_backup_code, ...
+    timestamp = db.Column(db.DateTime, default=datetime.datetime.utcnow, index=True)
+
 
 class Chantier(db.Model):
     __tablename__ = 'chantiers'
@@ -719,6 +880,23 @@ def init_db():
                     conn.execute(text("ALTER TABLE users ADD COLUMN must_change_pin BOOLEAN DEFAULT 0"))
                     conn.commit()
 
+                # PIN login retired — password + role-gated 2FA (see MFA_REQUIRED_ROLES).
+                auth_new_cols = {
+                    'password_hash': 'VARCHAR(300)',
+                    'must_change_password': 'BOOLEAN DEFAULT 1',
+                    'mfa_enabled': 'BOOLEAN DEFAULT 0',
+                    'mfa_secret_enc': 'VARCHAR(300)',
+                    'mfa_pending_secret_enc': 'VARCHAR(300)',
+                    'mfa_enrolled_at': 'DATETIME',
+                    'lockout_stage': 'INTEGER DEFAULT 0',
+                    'locked_until': 'DATETIME',
+                }
+                for col_name, col_type in auth_new_cols.items():
+                    if col_name not in cols:
+                        logger.info(f"Migrating users: adding {col_name}")
+                        conn.execute(text(f"ALTER TABLE users ADD COLUMN {col_name} {col_type}"))
+                        conn.commit()
+
             # 2. Chantiers Table
             if 'chantiers' in existing_tables:
                 cols = [c['name'] for c in inspector.get_columns('chantiers')]
@@ -879,13 +1057,34 @@ def init_db():
             db.session.add(SequenceCounter(name='chantier_numero', value=Chantier.query.count()))
             db.session.commit()
 
+        # One-time migration: PIN login retired — every account created
+        # before this change has no password_hash yet. Generate a random
+        # temp password per account (well above the 12-char/complexity bar
+        # on its own — cryptographically random, never in the common-password
+        # list), force a change at next login, and log it the same way the
+        # very first Admin bootstrap always has (below) — it's the only
+        # place these temp credentials exist, hand them to each user directly.
+        legacy_users = User.query.filter(User.password_hash.is_(None)).all()
+        for legacy_user in legacy_users:
+            temp_password = secrets.token_urlsafe(12)
+            legacy_user.pin_hash = generate_password_hash(secrets.token_hex(16))  # orphan the old PIN, unusable
+            legacy_user.set_password(temp_password)
+            legacy_user.must_change_password = True
+            logger.warning(
+                f"⚠️ PIN login retired for user '{legacy_user.username}' — TEMP PASSWORD: {temp_password} "
+                f"— give it to them, they'll be asked to change it{' and set up 2FA' if legacy_user.role in MFA_REQUIRED_ROLES else ''} at next login."
+            )
+        if legacy_users:
+            db.session.commit()
+
         # Create default admin if not exists
         if not User.query.filter_by(username='Admin').first():
-            default_pin = str(secrets.randbelow(900000) + 100000)  # Random 6-digit PIN
-            admin = User(username='Admin', pin_hash=generate_password_hash(default_pin), role='admin', must_change_pin=True)
+            default_password = secrets.token_urlsafe(12)
+            admin = User(username='Admin', pin_hash=generate_password_hash(secrets.token_hex(16)), role='admin', must_change_password=True)
+            admin.set_password(default_password)
             db.session.add(admin)
             db.session.commit()
-            logger.warning(f"⚠️ Default Admin created with PIN: {default_pin} — CHANGE IT IMMEDIATELY!")
+            logger.warning(f"⚠️ Default Admin created with PASSWORD: {default_password} — CHANGE IT IMMEDIATELY! (2FA setup required on first login)")
 
 # --- Routes ---
 
@@ -898,21 +1097,210 @@ def not_found(e):
     return send_from_directory(app.static_folder, 'index.html')
 
 # API Routes
+
+# --- Auth: username + password, then role-gated 2FA (see MFA_REQUIRED_ROLES) ---
+# Three-state contract every step below funnels into, mirrored exactly by
+# the frontend's Login.tsx: status is 'ok' (session issued), 'mfa_required'
+# (password OK, enter the 6-digit code) or 'mfa_enroll_required' (password
+# OK, this account needs 2FA set up before it can get a session).
+
 @app.route('/api/login', methods=['POST'])
 @limiter.limit("5 per minute")
 def login():
-    data = request.json
-    pin = data.get('pin')
-    
-    # Secure PIN auth with hash comparison
-    users = User.query.all()
-    user = next((u for u in users if u.check_pin(pin)), None)
-    if user:
-        token = serializer.dumps({'user_id': user.id})
-        response = jsonify(user.to_dict())
-        set_auth_cookie(response, token)
-        return response
-    return jsonify({'error': 'Invalid PIN'}), 401
+    data = request.json or {}
+    username = (data.get('username') or '').strip()
+    password = data.get('password') or ''
+    if not username or not password:
+        return jsonify({'error': "Nom d'utilisateur et mot de passe requis"}), 400
+
+    user = User.query.filter_by(username=username).first()
+    if user and is_account_locked(user):
+        return jsonify({'error': 'Compte temporairement verrouillé après plusieurs échecs — réessayez plus tard'}), 423
+
+    # Same generic error either way — never confirm/deny whether the
+    # username exists (account enumeration).
+    if not user or not user.check_password(password):
+        _record_login_attempt(username, False, 'bad_credentials')
+        if user:
+            _maybe_lock_account(user)
+        return jsonify({'error': "Nom d'utilisateur ou mot de passe incorrect"}), 401
+
+    _record_login_attempt(username, True)
+    _reset_lockout(user)
+    db.session.commit()
+
+    if user.role in MFA_REQUIRED_ROLES:
+        purpose = 'mfa_verify' if user.mfa_enabled else 'mfa_enroll'
+        return jsonify({
+            'status': 'mfa_required' if user.mfa_enabled else 'mfa_enroll_required',
+            'mfa_token': issue_mfa_pending_token(user, purpose),
+        })
+
+    return _issue_session(user)
+
+
+@app.route('/api/mfa/verify', methods=['POST'])
+@limiter.limit("10 per minute")
+def mfa_verify():
+    data = request.json or {}
+    user = decode_mfa_pending_token(data.get('mfa_token'), 'mfa_verify')
+    if not user:
+        return jsonify({'error': 'Session de connexion expirée — reconnectez-vous'}), 401
+    if is_account_locked(user):
+        return jsonify({'error': 'Compte temporairement verrouillé après plusieurs échecs — réessayez plus tard'}), 423
+
+    code = (data.get('code') or '').strip()
+    if not user.mfa_enabled or not user.mfa_secret_enc or not mfa_service.verify_totp(mfa_service.decrypt_secret(user.mfa_secret_enc), code):
+        _record_login_attempt(user.username, False, 'bad_mfa_code')
+        _maybe_lock_account(user)
+        return jsonify({'error': 'Code de vérification incorrect'}), 401
+
+    _record_login_attempt(user.username, True)
+    _reset_lockout(user)
+    db.session.commit()
+    return _issue_session(user)
+
+
+@app.route('/api/mfa/verify-backup', methods=['POST'])
+@limiter.limit("10 per minute")
+def mfa_verify_backup():
+    data = request.json or {}
+    user = decode_mfa_pending_token(data.get('mfa_token'), 'mfa_verify')
+    if not user:
+        return jsonify({'error': 'Session de connexion expirée — reconnectez-vous'}), 401
+    if is_account_locked(user):
+        return jsonify({'error': 'Compte temporairement verrouillé après plusieurs échecs — réessayez plus tard'}), 423
+
+    backup_code = (data.get('backup_code') or '').strip()
+    matched = None
+    if backup_code:
+        for candidate in MfaBackupCode.query.filter_by(user_id=user.id, used_at=None).all():
+            if mfa_service.verify_backup_code(backup_code, candidate.code_hash):
+                matched = candidate
+                break
+
+    if not matched:
+        _record_login_attempt(user.username, False, 'bad_mfa_backup_code')
+        _maybe_lock_account(user)
+        return jsonify({'error': 'Code de récupération incorrect ou déjà utilisé'}), 401
+
+    matched.used_at = datetime.datetime.utcnow()
+    _record_login_attempt(user.username, True)
+    _reset_lockout(user)
+    db.session.commit()
+    return _issue_session(user)
+
+
+@app.route('/api/mfa/enroll/start', methods=['POST'])
+@limiter.limit("10 per minute")
+def mfa_enroll_start():
+    user, _via_session = _resolve_mfa_enroll_actor(request.json or {})
+    if not user:
+        return jsonify({'error': 'Session expirée — reconnectez-vous'}), 401
+
+    secret = mfa_service.generate_secret()
+    user.mfa_pending_secret_enc = mfa_service.encrypt_secret(secret)
+    db.session.commit()
+
+    uri = mfa_service.provisioning_uri(secret, user.username)
+    return jsonify({
+        'qr_code_data_uri': mfa_service.qr_code_data_uri(uri),
+        'manual_entry_key': secret,
+    })
+
+
+@app.route('/api/mfa/enroll/confirm', methods=['POST'])
+@limiter.limit("10 per minute")
+def mfa_enroll_confirm():
+    data = request.json or {}
+    user, via_session = _resolve_mfa_enroll_actor(data)
+    if not user:
+        return jsonify({'error': 'Session expirée — reconnectez-vous'}), 401
+    if not user.mfa_pending_secret_enc:
+        return jsonify({'error': 'Aucun enrôlement 2FA en cours — recommencez'}), 400
+
+    code = (data.get('code') or '').strip()
+    if not mfa_service.verify_totp(mfa_service.decrypt_secret(user.mfa_pending_secret_enc), code):
+        return jsonify({'error': 'Code de vérification incorrect'}), 401
+
+    user.mfa_secret_enc = user.mfa_pending_secret_enc
+    user.mfa_pending_secret_enc = None
+    user.mfa_enabled = True
+    user.mfa_enrolled_at = datetime.datetime.utcnow()
+
+    # Fresh backup codes replace any previous set — shown to the user
+    # exactly once, right now; there is no way to view them again later.
+    MfaBackupCode.query.filter_by(user_id=user.id).delete()
+    plaintext_codes = mfa_service.generate_backup_codes()
+    for code_plain in plaintext_codes:
+        db.session.add(MfaBackupCode(user_id=user.id, code_hash=mfa_service.hash_backup_code(code_plain)))
+    db.session.commit()
+
+    if via_session:
+        return jsonify({'backup_codes': plaintext_codes, 'session_issued': False, **user.to_dict()})
+
+    # Mandatory mid-login enrollment — completes the login in the same call.
+    _record_login_attempt(user.username, True)
+    _reset_lockout(user)
+    db.session.commit()
+    response_body = {'backup_codes': plaintext_codes, 'session_issued': True, 'status': 'ok', **user.to_dict()}
+    response = jsonify(response_body)
+    token = serializer.dumps({'user_id': user.id})
+    set_auth_cookie(response, token)
+    return response
+
+
+@app.route('/api/mfa/status', methods=['GET'])
+@token_required
+def mfa_status(current_user):
+    remaining = MfaBackupCode.query.filter_by(user_id=current_user.id, used_at=None).count()
+    return jsonify({'mfa_enabled': current_user.mfa_enabled, 'backup_codes_remaining': remaining})
+
+
+@app.route('/api/mfa/disable', methods=['POST'])
+@token_required
+def mfa_disable(current_user):
+    """Resets the caller's own 2FA. If their role still requires it
+    (MFA_REQUIRED_ROLES), enrollment is simply triggered again at next
+    login — this is a reset/recovery path (e.g. lost authenticator app),
+    not a way to permanently opt out of a mandatory policy."""
+    data = request.json or {}
+    if not current_user.check_password(data.get('password') or ''):
+        return jsonify({'error': 'Mot de passe incorrect'}), 401
+    current_user.mfa_enabled = False
+    current_user.mfa_secret_enc = None
+    current_user.mfa_pending_secret_enc = None
+    current_user.mfa_enrolled_at = None
+    MfaBackupCode.query.filter_by(user_id=current_user.id).delete()
+    db.session.commit()
+    audit_log('auth', current_user, 'reset their own 2FA (will be re-required at next login if their role requires it)')
+    return jsonify({'message': '2FA réinitialisée'})
+
+
+@app.route('/api/mfa/admin-reset/<int:user_id>', methods=['POST'])
+@token_required
+def mfa_admin_reset(current_user, user_id):
+    """Recovery path when a DIFFERENT admin lost their authenticator and
+    backup codes both — requires the acting admin's own password, never
+    the target's."""
+    if current_user.role != 'admin':
+        return jsonify({'error': 'Admin access required'}), 403
+    data = request.json or {}
+    if not current_user.check_password(data.get('password') or ''):
+        return jsonify({'error': 'Mot de passe incorrect'}), 401
+    target = db.session.get(User, user_id)
+    if not target:
+        return jsonify({'error': 'User not found'}), 404
+
+    target.mfa_enabled = False
+    target.mfa_secret_enc = None
+    target.mfa_pending_secret_enc = None
+    target.mfa_enrolled_at = None
+    MfaBackupCode.query.filter_by(user_id=target.id).delete()
+    db.session.commit()
+    audit_log('auth', current_user, f"reset 2FA for {target.username} (id={target.id})")
+    return jsonify({'message': f'2FA réinitialisée pour {target.username}'})
+
 
 @app.route('/api/logout', methods=['POST'])
 def logout():
@@ -925,21 +1313,23 @@ def logout():
 def get_me(current_user):
     return jsonify(current_user.to_dict())
 
-@app.route('/api/change-pin', methods=['POST'])
+@app.route('/api/change-password', methods=['POST'])
 @token_required
-def change_pin(current_user):
-    data = request.json
-    new_pin = data.get('new_pin')
-    if not new_pin or len(new_pin) != 6 or not new_pin.isdigit():
-        return jsonify({'error': 'PIN must be exactly 6 digits'}), 400
-    # Check uniqueness
-    users = User.query.all()
-    if any(u.check_pin(new_pin) for u in users if u.id != current_user.id):
-        return jsonify({'error': 'PIN already in use'}), 400
-    current_user.set_pin(new_pin)
-    current_user.must_change_pin = False
+def change_password(current_user):
+    data = request.json or {}
+    if not current_user.check_password(data.get('current_password') or ''):
+        return jsonify({'error': 'Mot de passe actuel incorrect'}), 401
+
+    new_password = data.get('new_password') or ''
+    error = validate_password(new_password)
+    if error:
+        return jsonify({'error': error}), 400
+
+    current_user.set_password(new_password)
+    current_user.must_change_password = False
     db.session.commit()
-    return jsonify({'message': 'PIN changed successfully'})
+    audit_log('auth', current_user, 'changed their own password')
+    return jsonify({'message': 'Mot de passe changé avec succès'})
 
 @app.route('/api/users', methods=['GET', 'POST', 'DELETE'])
 @token_required
@@ -950,33 +1340,33 @@ def manage_users(current_user):
 
     if request.method == 'GET':
         users = User.query.all()
-        # Security: Mask PINs
-        return jsonify([{**u.to_dict(), 'pin': '******'} for u in users])
+        return jsonify([u.to_dict() for u in users])  # to_dict() never includes a secret — no masking needed
 
     if request.method == 'POST':
         data = request.json or {}
         username = (data.get('username') or '').strip()
-        pin = data.get('pin') or ''
+        password = data.get('password') or ''
         role = data.get('role')
 
         if not username:
             return jsonify({'error': 'Username is required'}), 400
-        if len(pin) != 6 or not pin.isdigit():
-            return jsonify({'error': 'PIN must be exactly 6 digits'}), 400
         if role not in ['admin', 'user', 'depanneur']:
             return jsonify({'error': 'Invalid role'}), 400
-
         if User.query.filter_by(username=username).first():
              return jsonify({'error': 'Username exists'}), 400
 
-        # Check PIN uniqueness via hash comparison
-        users = User.query.all()
-        if any(u.check_pin(pin) for u in users):
-            return jsonify({'error': 'PIN already in use'}), 400
+        error = validate_password(password)
+        if error:
+            return jsonify({'error': error}), 400
 
-        new_user = User(username=username, pin_hash=generate_password_hash(pin), role=role)
+        new_user = User(
+            username=username, role=role, must_change_password=True,
+            pin_hash=generate_password_hash(secrets.token_hex(16)),  # orphan legacy column, never used
+        )
+        new_user.set_password(password)
         db.session.add(new_user)
         db.session.commit()
+        audit_log('auth', current_user, f"created user {username} (role={role})")
         return jsonify(new_user.to_dict()), 201
 
     return jsonify({'error': 'Method not allowed on this endpoint, use /api/users/<id>'}), 405
@@ -999,7 +1389,7 @@ def user_operations(current_user, user_id):
     if request.method == 'PUT':
         data = request.json
         new_username = data.get('username')
-        new_pin = data.get('pin')
+        new_password = data.get('password')
         new_role = data.get('role')
 
         # Validation: Check uniqueness if changed
@@ -1007,17 +1397,15 @@ def user_operations(current_user, user_id):
             if User.query.filter_by(username=new_username).first():
                 return jsonify({'error': 'Username exists'}), 400
             user.username = new_username
-        
-        if new_pin and new_pin != '******': # Ignore masked PIN
-             # Validate PIN format (6 digits)
-            if len(new_pin) != 6 or not new_pin.isdigit():
-                 return jsonify({'error': 'Invalid PIN format'}), 400
-            # Check uniqueness via hash comparison
-            users = User.query.all()
-            if any(u.check_pin(new_pin) for u in users if u.id != user.id):
-                return jsonify({'error': 'PIN already in use'}), 400
-            user.set_pin(new_pin)
-            
+
+        if new_password:
+            error = validate_password(new_password)
+            if error:
+                return jsonify({'error': error}), 400
+            user.set_password(new_password)
+            user.must_change_password = True  # admin-set password is always a temp one
+            audit_log('auth', current_user, f"reset password for {user.username} (id={user.id})")
+
         if new_role:
             if new_role not in ['admin', 'user', 'depanneur']:
                 return jsonify({'error': 'Invalid role'}), 400

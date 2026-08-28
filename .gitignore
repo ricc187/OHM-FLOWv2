@@ -23,6 +23,7 @@ data/
 backups/
 npm/
 *.pem
+.mfa_key
 
 # Dev leftovers
 *.log

@@ -2,9 +2,18 @@ export interface User {
     id: number;
     username: string;
     role: 'admin' | 'user' | 'depanneur';
-    pin?: string; // Optional for security in list views
     vacation_balance: number;
+    must_change_password: boolean;
+    mfa_enabled: boolean;
+    mfa_required: boolean; // true for roles in MFA_REQUIRED_ROLES (admin) — informational, server enforces it
 }
+
+// The 3-state contract every step of the login flow funnels into (mirrors
+// the backend exactly — see app.py's /api/login, /api/mfa/*).
+export type LoginResult =
+    | ({ status: 'ok' } & User)
+    | { status: 'mfa_required'; mfa_token: string }
+    | { status: 'mfa_enroll_required'; mfa_token: string };
 
 export type ChantierStatus = 'FUTURE' | 'ACTIVE' | 'DONE';
 

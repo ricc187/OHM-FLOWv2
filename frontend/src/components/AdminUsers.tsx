@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { User } from '../types';
 import { AwesomeSelect } from './ui/AwesomeSelect';
 import { api } from '../api';
+import { ShieldCheck, ShieldAlert, KeyRound } from 'lucide-react';
 
 export const AdminUsers: React.FC = () => {
     const [users, setUsers] = useState<User[]>([]);
@@ -9,11 +10,16 @@ export const AdminUsers: React.FC = () => {
     const [editingUser, setEditingUser] = useState<User | null>(null);
     const [formData, setFormData] = useState({
         username: '',
-        pin: '',
+        password: '',
         role: 'user' as 'admin' | 'user' | 'depanneur'
     });
+    const [formError, setFormError] = useState('');
 
-
+    // "Réinitialiser 2FA" requires the ACTING admin's own password — a
+    // small side prompt rather than a full modal, since it's a rare action.
+    const [mfaResetTarget, setMfaResetTarget] = useState<User | null>(null);
+    const [mfaResetPassword, setMfaResetPassword] = useState('');
+    const [mfaResetError, setMfaResetError] = useState('');
 
     useEffect(() => {
         fetchUsers();
@@ -32,36 +38,47 @@ export const AdminUsers: React.FC = () => {
 
     const handleOpenCreate = () => {
         setEditingUser(null);
-        setFormData({ username: '', pin: '', role: 'user' });
+        setFormData({ username: '', password: '', role: 'user' });
+        setFormError('');
         setShowModal(true);
     };
 
     const handleOpenEdit = (user: User) => {
         setEditingUser(user);
-        setFormData({ username: user.username, pin: user.pin || '', role: user.role });
+        setFormData({ username: user.username, password: '', role: user.role });
+        setFormError('');
         setShowModal(true);
     };
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
-        if (!formData.username || formData.pin.length !== 6) {
-            alert('Veuillez saisir un nom et un PIN de 6 chiffres');
+        setFormError('');
+        if (!formData.username) {
+            setFormError('Le nom est requis');
+            return;
+        }
+        if (!editingUser && !formData.password) {
+            setFormError('Un mot de passe initial est requis');
             return;
         }
 
         try {
-            if (editingUser) {
-                const res = await api.put(`/api/users/${editingUser.id}`, formData);
-                if (!res.ok) throw new Error('Update failed');
-            } else {
-                const res = await api.post('/api/users', formData);
-                if (!res.ok) throw new Error('Create failed');
+            const payload: any = { username: formData.username, role: formData.role };
+            if (formData.password) payload.password = formData.password;
+
+            const res = editingUser
+                ? await api.put(`/api/users/${editingUser.id}`, payload)
+                : await api.post('/api/users', payload);
+
+            if (!res.ok) {
+                const data = await res.json().catch(() => ({}));
+                throw new Error(data.error || 'Erreur lors de l\'enregistrement');
             }
 
             fetchUsers();
             setShowModal(false);
-        } catch (err) {
-            alert("Erreur lors de l'enregistrement (Vérifiez si le nom existe déjà)");
+        } catch (err: any) {
+            setFormError(err.message || "Erreur lors de l'enregistrement");
         }
     };
 
@@ -70,6 +87,21 @@ export const AdminUsers: React.FC = () => {
             const res = await api.delete(`/api/users/${id}`);
             if (res.ok) fetchUsers();
         }
+    };
+
+    const handleMfaReset = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!mfaResetTarget) return;
+        setMfaResetError('');
+        const res = await api.post(`/api/mfa/admin-reset/${mfaResetTarget.id}`, { password: mfaResetPassword });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+            setMfaResetError(data.error || 'Erreur');
+            return;
+        }
+        setMfaResetTarget(null);
+        setMfaResetPassword('');
+        fetchUsers();
     };
 
     const handleBackup = async () => {
@@ -125,12 +157,12 @@ export const AdminUsers: React.FC = () => {
 
             <div className="bg-ohm-surface border border-slate-200 rounded-2xl shadow-xl overflow-hidden">
                 <div className="overflow-x-auto">
-                    <table className="w-full text-left min-w-[560px]">
+                    <table className="w-full text-left min-w-[640px]">
                         <thead>
                             <tr className="text-[10px] font-black text-slate-500 uppercase tracking-widest bg-white/50">
                                 <th className="px-6 py-3">Nom / Username</th>
-                                <th className="px-6 py-3 text-center">Code PIN</th>
                                 <th className="px-6 py-3">Rôle</th>
+                                <th className="px-6 py-3">2FA</th>
                                 <th className="px-6 py-3 text-right">Actions</th>
                             </tr>
                         </thead>
@@ -140,9 +172,11 @@ export const AdminUsers: React.FC = () => {
                                     <td className="px-6 py-4">
                                         <div className="flex flex-col">
                                             <span className="font-bold text-slate-900">{user.username}</span>
+                                            {user.must_change_password && (
+                                                <span className="text-[10px] text-amber-600 font-bold uppercase mt-0.5">Mot de passe temporaire</span>
+                                            )}
                                         </div>
                                     </td>
-                                    <td className="px-6 py-4 text-center font-mono text-ohm-primary text-lg tracking-[0.2em]">{user.pin}</td>
                                     <td className="px-6 py-4">
                                         <span className={`text-[10px] font-black uppercase px-2 py-0.5 rounded ${user.role === 'admin'
                                                 ? 'bg-ohm-primary/20 text-ohm-primary border border-ohm-primary/30'
@@ -153,8 +187,30 @@ export const AdminUsers: React.FC = () => {
                                             {user.role === 'admin' ? 'Admin' : user.role === 'depanneur' ? 'Dépanneur' : 'Employé'}
                                         </span>
                                     </td>
+                                    <td className="px-6 py-4">
+                                        {!user.mfa_required ? (
+                                            <span className="text-xs text-slate-400">—</span>
+                                        ) : user.mfa_enabled ? (
+                                            <span className="flex items-center gap-1.5 text-xs font-bold text-green-600">
+                                                <ShieldCheck size={14} /> Activée
+                                            </span>
+                                        ) : (
+                                            <span className="flex items-center gap-1.5 text-xs font-bold text-amber-600">
+                                                <ShieldAlert size={14} /> Requise — pas encore configurée
+                                            </span>
+                                        )}
+                                    </td>
                                     <td className="px-6 py-4 text-right">
                                         <div className="flex items-center justify-end gap-2">
+                                            {user.mfa_enabled && (
+                                                <button
+                                                    onClick={() => { setMfaResetTarget(user); setMfaResetPassword(''); setMfaResetError(''); }}
+                                                    className="p-2 text-slate-500 hover:text-amber-500 hover:bg-amber-500/10 rounded-lg transition-all"
+                                                    title="Réinitialiser la 2FA"
+                                                >
+                                                    <KeyRound className="w-5 h-5" />
+                                                </button>
+                                            )}
                                             <button
                                                 onClick={() => handleOpenEdit(user)}
                                                 className="p-2 text-slate-500 hover:text-ohm-primary hover:bg-ohm-primary/10 rounded-lg transition-all"
@@ -206,17 +262,21 @@ export const AdminUsers: React.FC = () => {
                                 />
                             </div>
                             <div>
-                                <label className="block text-[10px] font-black uppercase text-slate-500 mb-2 tracking-widest">Code PIN (6 chiffres)</label>
+                                <label className="block text-[10px] font-black uppercase text-slate-500 mb-2 tracking-widest">
+                                    {editingUser ? 'Nouveau mot de passe (laisser vide pour ne pas changer)' : 'Mot de passe initial (12 caractères min.)'}
+                                </label>
                                 <input
                                     type="text"
-                                    inputMode="numeric"
-                                    pattern="[0-9]*"
-                                    required
-                                    maxLength={6}
-                                    value={formData.pin}
-                                    onChange={(e) => setFormData({ ...formData, pin: e.target.value.replace(/\D/g, '') })}
-                                    className="w-full bg-white border border-slate-300 rounded-xl px-4 py-3 text-slate-900 text-center text-xl font-black tracking-[0.5em] focus:ring-2 focus:ring-ohm-primary/50 transition-all outline-none"
+                                    autoComplete="off"
+                                    value={formData.password}
+                                    onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+                                    className="w-full bg-white border border-slate-300 rounded-xl px-4 py-3 text-slate-900 font-mono focus:ring-2 focus:ring-ohm-primary/50 transition-all outline-none"
                                 />
+                                <p className="text-[10px] text-slate-400 mt-1.5">
+                                    {editingUser
+                                        ? "L'utilisateur devra en choisir un nouveau à sa prochaine connexion."
+                                        : "Communiquez-le à l'utilisateur — il devra en choisir un nouveau à sa première connexion."}
+                                </p>
                             </div>
                             <div>
                                 <label className="block text-[10px] font-black uppercase text-slate-500 mb-2 tracking-widest">Rôle</label>
@@ -226,10 +286,11 @@ export const AdminUsers: React.FC = () => {
                                     options={[
                                         { value: 'user', label: 'Utilisateur' },
                                         { value: 'depanneur', label: 'Dépanneur' },
-                                        { value: 'admin', label: 'Admin' }
+                                        { value: 'admin', label: 'Admin (2FA obligatoire)' }
                                     ]}
                                 />
                             </div>
+                            {formError && <p className="text-red-500 text-sm font-bold">{formError}</p>}
                             <button
                                 type="submit"
                                 className="w-full bg-ohm-primary text-ohm-bg font-black py-4 rounded-xl shadow-lg hover:bg-yellow-300 transition-all uppercase tracking-widest active:scale-95"
@@ -238,6 +299,38 @@ export const AdminUsers: React.FC = () => {
                             </button>
                         </form>
                     </div>
+                </div>
+            )}
+
+            {mfaResetTarget && (
+                <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+                    <div className="absolute inset-0 bg-ohm-bg/80 backdrop-blur-sm" onClick={() => setMfaResetTarget(null)}></div>
+                    <form onSubmit={handleMfaReset} className="relative w-full max-w-sm bg-ohm-surface rounded-3xl border border-slate-300 shadow-2xl p-6 space-y-4 animate-in zoom-in duration-200">
+                        <h3 className="font-black text-slate-900 uppercase tracking-widest text-sm">
+                            Réinitialiser la 2FA de {mfaResetTarget.username}
+                        </h3>
+                        <p className="text-xs text-slate-500">
+                            Confirmez avec VOTRE propre mot de passe. {mfaResetTarget.username} devra reconfigurer sa 2FA à sa prochaine connexion.
+                        </p>
+                        <input
+                            type="password"
+                            required
+                            autoFocus
+                            placeholder="Votre mot de passe"
+                            value={mfaResetPassword}
+                            onChange={(e) => setMfaResetPassword(e.target.value)}
+                            className="w-full bg-white border border-slate-300 rounded-xl px-4 py-3 text-slate-900 focus:ring-2 focus:ring-ohm-primary/50 transition-all outline-none"
+                        />
+                        {mfaResetError && <p className="text-red-500 text-sm font-bold">{mfaResetError}</p>}
+                        <div className="flex gap-2">
+                            <button type="button" onClick={() => setMfaResetTarget(null)} className="flex-1 py-3 rounded-xl bg-slate-100 text-slate-600 font-bold hover:bg-slate-200 transition-all">
+                                Annuler
+                            </button>
+                            <button type="submit" className="flex-1 py-3 rounded-xl bg-ohm-primary text-ohm-bg font-black hover:bg-yellow-300 transition-all">
+                                Confirmer
+                            </button>
+                        </div>
+                    </form>
                 </div>
             )}
         </div>
