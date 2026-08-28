@@ -300,12 +300,19 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, activeView, onLo
             {/* pt uses calc() instead of the safe-top utility: the fixed mobile header's
                 own height already includes the safe-area inset (via its safe-top class),
                 so content below it needs header-height (4rem) PLUS that same inset —
-                a plain pt-16 was letting the header's notch-padding overlap the page title. */}
+                a plain pt-16 was letting the header's notch-padding overlap the page title.
+                The scroll container itself stays full-bleed (flex-1, only reserving the
+                sidebar's own space via lg:pl-28) — the 1920px cap + centering lives on
+                the inner wrapper below, so on an ultra-wide screen (e.g. 4500px) the
+                leftover space splits evenly on both sides of the content instead of
+                piling up as one big gutter on the right. */}
             <main
                 onScroll={(e) => setScrolled(e.currentTarget.scrollTop > 24)}
-                className={`flex-1 w-full max-w-[1920px] transition-all duration-300 min-h-0 z-10 pt-[calc(4rem+env(safe-area-inset-top))] lg:pt-8 lg:ml-28 px-4 pb-8 lg:pr-8 lg:pl-0 safe-bottom safe-left safe-right overflow-x-hidden ${(drawerOpen || pageModalOpen) ? 'overflow-y-hidden' : 'overflow-y-auto'}`}
+                className={`flex-1 w-full transition-all duration-300 min-h-0 z-10 pt-[calc(4rem+env(safe-area-inset-top))] lg:pt-8 lg:pl-28 px-4 pb-8 lg:pr-8 safe-bottom safe-left safe-right overflow-x-hidden ${(drawerOpen || pageModalOpen) ? 'overflow-y-hidden' : 'overflow-y-auto'}`}
             >
-                {children}
+                <div className="max-w-[1920px] mx-auto">
+                    {children}
+                </div>
             </main>
 
             {/* Offline-queued entries — stays until they've actually sent.
