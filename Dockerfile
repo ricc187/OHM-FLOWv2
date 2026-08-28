@@ -28,6 +28,16 @@ COPY --from=build /app/dist ./dist
 # Create data directory structure
 RUN mkdir -p data/uploads
 
+# app.py and its sibling modules (financier_calculs.py, auth_security.py,
+# mfa.py — all plain `import x`, no package-relative dots, since app.py is
+# normally just run directly as `python backend/app.py`) live in backend/,
+# not on gunicorn's import path here: gunicorn imports "backend.app" as a
+# package member, which only puts /app (WORKDIR, the cwd app.py's own data/
+# dir resolution still depends on) on sys.path — not /app/backend itself.
+# Add it explicitly rather than converting every sibling import to a
+# relative one, which would break running app.py directly the normal way.
+ENV PYTHONPATH=/app/backend
+
 EXPOSE 5000
 
 # Run Flask with Gunicorn.
