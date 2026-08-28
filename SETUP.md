@@ -1,102 +1,76 @@
-# Tâches à effectuer avant de lancer l'application
+# Déploiement Docker
 
-Voici les étapes préalables nécessaires avant de pouvoir démarrer l'application avec `docker-compose up -d`.
+Étapes pour lancer l'application via `docker compose`. Exposition publique
+par tunnel Cloudflare (`cloudflared`) — pas de port ouvert sur l'hôte, pas de
+certificat à gérer, pas de nom de domaine requis.
 
-## 1. Génération du certificat SSL (Auto-signé)
-
-Afin de sécuriser les connexions (HTTPS) pour l'application, un certificat SSL doit être généré. 
-
-Exécutez la commande `openssl` suivante dans votre terminal (à la racine de votre projet ou dans le dossier où seront stockés les certificats) :
-
-```bash
-openssl req -x509 -newkey rsa:4096 -sha256 -days 365 -nodes \
-    -keyout key.pem -out cert.pem \
-    -subj "/CN=ohmflow.com" \
-    -addext "subjectAltName=DNS:ohmflow.com,DNS:www.ohmflow.com"
-```
-
-Cette commande va créer deux fichiers :
-- `key.pem` : La clé privée.
-- `cert.pem` : Le certificat public.
-
-*(Assurez-vous ensuite que Nginx Proxy Manager ou votre configuration reverse proxy est configuré pour pointer vers ces fichiers si vous n'utilisez pas directement Let's Encrypt).*
-
-## 2. Configuration des variables d'environnement
-
-Vous devez copier le fichier d'exemple pour créer votre configuration locale :
+## 1. Configuration des variables d'environnement
 
 ```bash
 cp .env.example .env
 ```
 
-Ensuite, éditez le fichier `.env` pour y renseigner les valeurs requises.
+Éditez `.env` :
 
-> **⚠️ IMPORTANT** : La variable `SECRET_KEY` est **obligatoire**. L'application refusera de démarrer si elle est absente. Générez-en une avec :
-> ```bash
-> python3 -c "import secrets; print(secrets.token_hex(32))"
-> ```
-> Puis collez le résultat dans votre `.env` :
-> ```
-> SECRET_KEY=votre_clef_generee_ici
-> ```
+- **`SECRET_KEY`** (obligatoire — l'app refuse de démarrer sans) : signe les
+  cookies de session. Générez-en une :
+  ```bash
+  python3 -c "import secrets; print(secrets.token_hex(32))"
+  ```
+- **`MFA_ENCRYPTION_KEY`** (recommandé) : chiffre les secrets TOTP (2FA) en
+  base — clé Fernet, distincte de `SECRET_KEY`. Si absente, une clé est
+  générée et persistée dans `backend/.mfa_key` au premier démarrage (marche,
+  mais dépend alors de ce fichier — le fixer explicitement ici est plus sûr
+  pour un redéploiement propre). Générez-en une :
+  ```bash
+  python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+  ```
+- **`FLASK_ENV=production`** — active le cookie `Secure` (HTTPS uniquement).
 
-## 3. Configuration CORS (si test en local)
-
-Par défaut, le CORS est restreint à `https://ohmflow.com`. Si vous testez en local, ajoutez temporairement votre origine dans `backend/app.py` (ligne 25) :
-
-```python
-CORS(app, origins=["https://ohmflow.com", "https://www.ohmflow.com", "http://localhost"])
-```
-
-## 4. Configuration du chemin de sauvegarde (Backup)
-
-D'origine, les sauvegardes (`.zip`) seront stockées dans un dossier local `./backups`. 
-Si vous souhaitez exporter ces sauvegardes vers un autre emplacement sur votre serveur (par défaut ou un disque dur externe), vous devez modifier le fichier `docker-compose.yml`.
-
-Ouvrez `docker-compose.yml` et sous le service `backup`, modifiez la ligne du volume :
-
-```yaml
-  backup:
-    ...
-    volumes:
-      - ./data:/data:ro
-      - /votre/chemin/absolu/vers/les/backups:/backups # <-- Modifiez cette ligne
-```
-
----
-
-## 5. Lancer l'application
-
-Une fois toutes les étapes ci-dessus complétées :
+## 2. Lancer l'application
 
 ```bash
-docker-compose up -d --build
+docker compose up -d --build
 ```
 
----
+Trois services : `web` (l'app), `backup` (zip mensuel de `data/` vers
+`./backups`), `cloudflared` (tunnel public). `web` n'a aucun port publié sur
+l'hôte — seul `cloudflared` y accède, via le réseau interne de compose.
 
-# Tâches à effectuer après le premier lancement
-
-## 6. Récupérer le PIN Admin
-
-Au premier démarrage, un compte Admin est créé automatiquement avec un **PIN aléatoire** à 6 chiffres. Ce PIN est affiché **une seule fois** dans les logs Docker.
-
-Pour le récupérer :
+## 3. Récupérer le lien public
 
 ```bash
-docker-compose logs web | grep "Default Admin"
+docker compose logs cloudflared | grep -o 'https://[a-zA-Z0-9-]*\.trycloudflare\.com'
 ```
 
-Vous verrez une ligne comme :
+C'est un tunnel **quick** (gratuit, sans compte Cloudflare) : l'URL change à
+chaque redémarrage du conteneur `cloudflared`. Pour un lien stable, il faut
+un tunnel Cloudflare nommé (compte + domaine Cloudflare) — hors scope ici.
+
+## 4. Récupérer le mot de passe Admin temporaire
+
+Un compte `Admin` est créé au premier démarrage avec un **mot de passe
+aléatoire**, affiché une seule fois dans les logs :
+
+```bash
+docker compose logs web | grep "Default Admin"
 ```
-⚠️ Default Admin created with PIN: 482739 — CHANGE IT IMMEDIATELY!
+
+```
+⚠️ Default Admin created with PASSWORD: xxxxxxxxxxxxxxxx — CHANGE IT IMMEDIATELY! (2FA setup required on first login)
 ```
 
-> **⚠️ IMPORTANT** : Notez ce PIN, connectez-vous avec, puis changez-le immédiatement via l'application (l'app vous forcera à le changer au premier login).
+Connectez-vous avec, l'app forcera un changement de mot de passe immédiat —
+et, le rôle `admin` exigeant la 2FA, un enrôlement TOTP (scanner un QR code)
+juste après.
 
-## 7. Configurer Nginx Proxy Manager
+## Notes
 
-Accédez à l'interface NPM sur `http://<IP_SERVEUR>:81` :
-- **Identifiants par défaut** : `admin@example.com` / `changeme`
-- Créez un Proxy Host ciblant `web:5000` (schéma `http`).
-- Activez le SSL avec Let's Encrypt ou importez vos certificats `cert.pem` / `key.pem`.
+- **Emplacement des sauvegardes** : par défaut `./backups`. Pour un autre
+  chemin, modifiez le volume du service `backup` dans `docker-compose.yml`.
+- **Sauvegarder `backend/.mfa_key`** (si `MFA_ENCRYPTION_KEY` n'est pas fixée
+  dans `.env`) au même titre que `data/` — sans elle, les secrets 2FA déjà
+  chiffrés en base deviennent illisibles et tous les admins doivent
+  réenrôler leur 2FA.
+- **CORS** : aucun à configurer — le frontend est servi par Flask lui-même
+  (même origine), pas d'appel cross-origin.
