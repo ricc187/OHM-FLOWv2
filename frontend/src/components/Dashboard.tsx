@@ -32,9 +32,12 @@ export const Dashboard: React.FC<Props> = ({ currentUser, onSelectChantier }) =>
     const [exportYear, setExportYear] = useState<number | null>(new Date().getFullYear());
     const [exportSemester, setExportSemester] = useState<'ALL' | 'S1' | 'S2'>('ALL');
 
-    // Create Form State
+    // Create Form State — nomenclature imposée {AA}{NNNNN}-Commune-Client
+    // (ex: 2600347-Martigny-Dupont). Le numéro est généré par le serveur ;
+    // ici on ne collecte que Commune + Client/repère.
     const [newChantier, setNewChantier] = useState({
-        nom: '',
+        commune: '',
+        client_repere: '',
         annee: new Date().getFullYear(),
         status: 'FUTURE' as ChantierStatus,
         address_work: '',
@@ -122,7 +125,8 @@ export const Dashboard: React.FC<Props> = ({ currentUser, onSelectChantier }) =>
         const res = await api.post('/api/chantiers', payload);
         if (res.ok) {
             setNewChantier({
-                nom: '',
+                commune: '',
+                client_repere: '',
                 annee: new Date().getFullYear(),
                 status: 'FUTURE',
                 address_work: '',
@@ -285,18 +289,50 @@ export const Dashboard: React.FC<Props> = ({ currentUser, onSelectChantier }) =>
                     <h3 className="text-xl font-bold text-slate-900 mb-6 border-l-4 border-primary pl-4">Nouveau Projet</h3>
 
                     <form onSubmit={handleCreateChantier} className="space-y-6">
+                        {/* Nomenclature imposée : {AA}{NNNNN}-Commune-Client — le numéro
+                            (année + compteur) est généré par le serveur, jamais saisi.
+                            On ne collecte que Commune et Client/repère. */}
+                        <div className="bg-slate-900/5 border border-primary/20 rounded-xl px-4 py-3 text-sm text-slate-600 font-mono">
+                            Le chantier sera nommé :{' '}
+                            <span className="font-bold text-slate-900">
+                                {String(newChantier.annee).slice(-2)}NNNNN-{newChantier.commune || 'Commune'}-{newChantier.client_repere || 'Client'}
+                            </span>
+                            <div className="text-xs text-slate-400 font-sans mt-1">Le numéro séquentiel (NNNNN) est attribué automatiquement à la création.</div>
+                        </div>
+
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                             <div>
-                                <label className="text-xs font-bold text-primary/80 uppercase tracking-widest mb-2 block">Nom du chantier</label>
+                                <label className="text-xs font-bold text-primary/80 uppercase tracking-widest mb-2 block">Commune / Localité</label>
                                 <input
                                     type="text"
                                     autoFocus
                                     className="input-field"
-                                    value={newChantier.nom}
-                                    onChange={e => setNewChantier({ ...newChantier, nom: e.target.value })}
+                                    value={newChantier.commune}
+                                    onChange={e => setNewChantier({ ...newChantier, commune: e.target.value })}
                                     required
-                                    placeholder="Ex: Rénovation Villa..."
+                                    placeholder="Ex: Martigny"
                                 />
+                            </div>
+                            <div>
+                                <label className="text-xs font-bold text-primary/80 uppercase tracking-widest mb-2 block">Client / Repère</label>
+                                <input
+                                    type="text"
+                                    className="input-field"
+                                    value={newChantier.client_repere}
+                                    onChange={e => setNewChantier({ ...newChantier, client_repere: e.target.value })}
+                                    required
+                                    placeholder="Ex: Dupont"
+                                />
+                            </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <div>
+                                <label className="text-xs font-bold text-primary/80 uppercase tracking-widest mb-2 block">Période (Début - Fin)</label>
+                                <div className="flex flex-col gap-3">
+                                    <AwesomeDatePicker value={newChantier.date_start} onChange={d => setNewChantier({ ...newChantier, date_start: d })} placeholder="Date de début" />
+                                    <AwesomeDatePicker value={newChantier.date_end} onChange={d => setNewChantier({ ...newChantier, date_end: d })} minDate={newChantier.date_start} placeholder="Date de fin" />
+                                </div>
                             </div>
                             <div>
                                 <label className="text-xs font-bold text-primary/80 uppercase tracking-widest mb-2 block">Année</label>
@@ -314,19 +350,9 @@ export const Dashboard: React.FC<Props> = ({ currentUser, onSelectChantier }) =>
 
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                             <div>
-                                <label className="text-xs font-bold text-primary/80 uppercase tracking-widest mb-2 block">Période (Début - Fin)</label>
-                                <div className="flex flex-col gap-3">
-                                    <AwesomeDatePicker value={newChantier.date_start} onChange={d => setNewChantier({ ...newChantier, date_start: d })} placeholder="Date de début" />
-                                    <AwesomeDatePicker value={newChantier.date_end} onChange={d => setNewChantier({ ...newChantier, date_end: d })} minDate={newChantier.date_start} placeholder="Date de fin" />
-                                </div>
-                            </div>
-                            <div>
                                 <label className="text-xs font-bold text-primary/80 uppercase tracking-widest mb-2 block">Adresse Travaux</label>
                                 <input type="text" className="input-field" value={newChantier.address_work} onChange={e => setNewChantier({ ...newChantier, address_work: e.target.value })} placeholder="Rue, Ville..." />
                             </div>
-                        </div>
-
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                             <div>
                                 <label className="text-xs font-bold text-primary/80 uppercase tracking-widest mb-2 block">Adresse Facturation</label>
                                 <input type="text" className="input-field" value={newChantier.address_billing} onChange={e => setNewChantier({ ...newChantier, address_billing: e.target.value })} placeholder="Si différente..." />

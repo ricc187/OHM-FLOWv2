@@ -21,8 +21,21 @@ export interface Chantier {
     remarque?: string;
     status: ChantierStatus;
     archived?: boolean; // documents zipped + originals freed (set on close, cleared on reopen)
+    numero?: string; // {AA}{NNNNN} nomenclature prefix, e.g. "2600347" — undefined on legacy chantiers
+    commune?: string;
+    client_repere?: string;
     hours_total?: number;
     members: number[]; // Array of User IDs
+}
+
+export interface AdminNotice {
+    id: number;
+    message: string;
+    date_start: string; // YYYY-MM-DD
+    duration_days: number;
+    active: boolean;
+    created_by: string | null;
+    created_at: string | null;
 }
 
 export type DocumentCategory = 'document' | 'photo';

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { OhmIcon } from './Icons';
-import { LayoutDashboard, Calendar, Users, ClipboardCheck, LogOut, BarChart3, Menu, X, ChevronRight, CloudOff } from 'lucide-react';
+import { LayoutDashboard, Calendar, Users, ClipboardCheck, LogOut, BarChart3, Menu, X, ChevronRight, CloudOff, Megaphone } from 'lucide-react';
 import { MODAL_STATE_EVENT } from '../modalState';
 import { api } from '../api';
 import { getQueuedEntries, onQueueChange } from '../offlineQueue';
@@ -11,7 +11,7 @@ interface User {
     role: string;
 }
 
-type View = 'dashboard' | 'admin' | 'admin-entries' | 'planning' | 'stats';
+type View = 'dashboard' | 'admin' | 'admin-entries' | 'planning' | 'stats' | 'notices';
 
 interface LayoutProps {
     children: React.ReactNode;
@@ -30,6 +30,7 @@ const ADMIN_NAV_ITEMS = [
     { path: 'stats', view: 'stats' as View, icon: BarChart3, label: 'Statistiques' },
     { path: 'admin-users', view: 'admin' as View, icon: Users, label: 'Gestion Utilisateurs' },
     { path: 'admin-entries', view: 'admin-entries' as View, icon: ClipboardCheck, label: 'Validation Saisies' },
+    { path: 'notices', view: 'notices' as View, icon: Megaphone, label: 'Annonces' },
 ];
 
 export const Layout: React.FC<LayoutProps> = ({ children, user, activeView, onLogout, onNavigate }) => {

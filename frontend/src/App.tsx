@@ -3,6 +3,7 @@ import { User, Chantier } from './types.ts';
 import { Dashboard } from './components/Dashboard';
 import { Login } from './components/Login';
 import { Layout } from './components/Layout';
+import { NoticeBanner } from './components/NoticeBanner';
 import { api, UNAUTHORIZED_EVENT } from './api';
 import { trySyncQueue } from './offlineQueue';
 
@@ -14,6 +15,7 @@ const AdminUsers = lazy(() => import('./components/AdminUsers').then(m => ({ def
 const AdminEntries = lazy(() => import('./components/AdminEntries').then(m => ({ default: m.AdminEntries })));
 const Planning = lazy(() => import('./components/Planning').then(m => ({ default: m.Planning })));
 const GlobalStats = lazy(() => import('./components/GlobalStats').then(m => ({ default: m.GlobalStats })));
+const AdminNotices = lazy(() => import('./components/AdminNotices').then(m => ({ default: m.AdminNotices })));
 
 const PageLoader = () => (
     <div className="flex items-center justify-center h-full min-h-[50vh]">
@@ -21,8 +23,8 @@ const PageLoader = () => (
     </div>
 );
 
-type View = 'dashboard' | 'admin' | 'admin-entries' | 'planning' | 'stats';
-const VALID_VIEWS: View[] = ['dashboard', 'admin', 'admin-entries', 'planning', 'stats'];
+type View = 'dashboard' | 'admin' | 'admin-entries' | 'planning' | 'stats' | 'notices';
+const VALID_VIEWS: View[] = ['dashboard', 'admin', 'admin-entries', 'planning', 'stats', 'notices'];
 
 // Reads the current view/selected-chantier out of the URL — used both on
 // first load and whenever the user hits browser back/forward.
@@ -149,6 +151,7 @@ function App() {
         else if (path === 'admin-entries') next = 'admin-entries';
         else if (path === 'planning') next = 'planning';
         else if (path === 'stats') next = 'stats';
+        else if (path === 'notices') next = 'notices';
         setView(next);
         pushUrl(next, null);
     };
@@ -180,6 +183,7 @@ function App() {
             onLogout={handleLogout}
             onNavigate={handleNavigate}
         >
+            <NoticeBanner />
             <Suspense fallback={<PageLoader />}>
                 {view === 'admin' ? (
                     <AdminUsers />
@@ -189,6 +193,8 @@ function App() {
                     <GlobalStats />
                 ) : view === 'admin-entries' ? (
                     <AdminEntries currentUser={user} />
+                ) : view === 'notices' ? (
+                    <AdminNotices />
                 ) : selectedChantier ? (
                     <ChantierDetail
                         chantier={selectedChantier}

@@ -208,6 +208,16 @@ class Chantier(db.Model):
     # own name, sanitized (see chantier_storage_dirname). Tracked explicitly
     # so a rename can locate + move the existing folder instead of losing it.
     storage_dir = db.Column(db.String(150), nullable=True)
+
+    # --- Nomenclature (see _next_chantier_numero) ---
+    # nom is now always built as f"{numero}-{commune}-{client_repere}" for
+    # chantiers created through the enforced flow. numero/commune/client_repere
+    # are nullable so pre-existing chantiers (created before this scheme) keep
+    # their free-form nom untouched — they just never populate these columns.
+    numero = db.Column(db.String(10), unique=True, nullable=True)
+    commune = db.Column(db.String(100), nullable=True)
+    client_repere = db.Column(db.String(100), nullable=True)
+
     # Relationships
     members = db.relationship('User', secondary=chantier_members, lazy='subquery',
         backref=db.backref('chantiers', lazy=True))
@@ -226,6 +236,9 @@ class Chantier(db.Model):
             'remarque': self.remarque,
             'status': self.status,
             'archived': bool(self.archived),
+            'numero': self.numero,
+            'commune': self.commune,
+            'client_repere': self.client_repere,
             'hours_total': round(self._get_hours_total(), 2),
             'members': [u.id for u in self.members]
         }
@@ -246,6 +259,82 @@ class Chantier(db.Model):
         return db.session.query(func.coalesce(func.sum(Entry.heures), 0.0)).filter(
             Entry.chantier_id == self.id
         ).scalar()
+
+
+class SequenceCounter(db.Model):
+    """Generic named monotonic counter — backs the chantier numéro (see
+    _next_chantier_numero) and never reuses a value, even if the chantier
+    that got it is later deleted ("unique à vie")."""
+    __tablename__ = 'sequence_counters'
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(50), unique=True, nullable=False)
+    value = db.Column(db.Integer, nullable=False, default=0)
+
+
+def _next_chantier_numero(annee):
+    """Nomenclature: {YY}{NNNNN} — 2-digit année + compteur global sur 5
+    chiffres qui n'est jamais remis à zéro ni réutilisé, pour trier
+    chronologiquement tout en gardant chaque numéro unique à vie.
+    Exemple : chantier n°347 créé en 2026 -> '2600347'."""
+    counter = SequenceCounter.query.filter_by(name='chantier_numero').first()
+    if not counter:
+        counter = SequenceCounter(name='chantier_numero', value=0)
+        db.session.add(counter)
+        db.session.flush()
+    counter.value += 1
+    db.session.flush()
+    year_2d = str(annee)[-2:].zfill(2)
+    return f"{year_2d}{counter.value:05d}"
+
+
+class AdminNotice(db.Model):
+    """A note an admin broadcasts to everyone on next app open (e.g. "l'échelle
+    est à gauche de l'atelier"). Shown from date_start for duration_days, once
+    per user — see NoticeAck."""
+    __tablename__ = 'admin_notices'
+    id = db.Column(db.Integer, primary_key=True)
+    message = db.Column(db.Text, nullable=False)
+    date_start = db.Column(db.String(20), nullable=False)  # YYYY-MM-DD
+    duration_days = db.Column(db.Integer, nullable=False, default=7)
+    active = db.Column(db.Boolean, default=True)  # admin can end it early
+    created_by_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+
+    created_by = db.relationship('User', foreign_keys=[created_by_id])
+
+    def is_in_window(self, today_str):
+        if not self.active:
+            return False
+        try:
+            start = datetime.datetime.strptime(self.date_start, "%Y-%m-%d").date()
+            today = datetime.datetime.strptime(today_str, "%Y-%m-%d").date()
+        except ValueError:
+            return False
+        end = start + datetime.timedelta(days=self.duration_days)
+        return start <= today <= end
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'message': self.message,
+            'date_start': self.date_start,
+            'duration_days': self.duration_days,
+            'active': bool(self.active),
+            'created_by': self.created_by.username if self.created_by else None,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+class NoticeAck(db.Model):
+    """One row per (notice, user) who clicked 'J'ai pris note' — that notice
+    never shows again for that user."""
+    __tablename__ = 'notice_acks'
+    id = db.Column(db.Integer, primary_key=True)
+    notice_id = db.Column(db.Integer, db.ForeignKey('admin_notices.id'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    acked_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+
+    __table_args__ = (db.UniqueConstraint('notice_id', 'user_id', name='uq_notice_user'),)
 
 class Entry(db.Model):
     __tablename__ = 'entries'
@@ -644,6 +733,9 @@ def init_db():
                     'archived': "BOOLEAN DEFAULT 0",
                     'archive_zip_path': "VARCHAR(255)",
                     'storage_dir': "VARCHAR(150)",
+                    'numero': "VARCHAR(10)",
+                    'commune': "VARCHAR(100)",
+                    'client_repere': "VARCHAR(100)",
                 }
                 for col_name, col_type in new_cols.items():
                     if col_name not in cols:
@@ -777,6 +869,15 @@ def init_db():
                     chantier.storage_dir = str(chantier.id)
                     chantier_storage_dirname(chantier)  # renames on disk + persists the new name
                     logger.info(f"Renamed chantier {chantier.id} document folder to its own name")
+
+        # Seed the chantier numéro counter once — start it at the current
+        # chantier count rather than 0, so the first nomenclature-enforced
+        # chantier doesn't visually restart at "00001" while dozens of
+        # legacy chantiers already exist. Purely cosmetic continuity; the
+        # counter itself never resets or reuses a value once created.
+        if not SequenceCounter.query.filter_by(name='chantier_numero').first():
+            db.session.add(SequenceCounter(name='chantier_numero', value=Chantier.query.count()))
+            db.session.commit()
 
         # Create default admin if not exists
         if not User.query.filter_by(username='Admin').first():
@@ -1026,11 +1127,25 @@ def manage_chantiers(current_user):
 
     if request.method == 'POST':
         data = request.json or {}
-        if not (data.get('nom') or '').strip():
-            return jsonify({'error': 'Nom is required'}), 400
+
+        # Nomenclature imposée : {AA}{NNNNN}-Commune-Client (ex: 2600347-Martigny-Dupont).
+        # Le numéro (année + compteur global) est généré côté serveur, jamais
+        # saisi — c'est ce qui garantit qu'il reste unique et croissant.
+        commune = (data.get('commune') or '').strip()
+        client_repere = (data.get('client_repere') or '').strip()
+        if not commune or not client_repere:
+            return jsonify({'error': 'Commune et client/repère sont requis'}), 400
+
+        annee = data.get('annee', datetime.datetime.now().year)
+        numero = _next_chantier_numero(annee)
+        nom = f"{numero}-{commune}-{client_repere}"
+
         new_chantier = Chantier(
-            nom=data['nom'],
-            annee=data.get('annee', 2024),
+            nom=nom,
+            numero=numero,
+            commune=commune,
+            client_repere=client_repere,
+            annee=annee,
             pdf_path=data.get('pdf_path', ''),
             address_work=data.get('address_work'),
             address_billing=data.get('address_billing'),
@@ -1039,7 +1154,7 @@ def manage_chantiers(current_user):
             remarque=data.get('remarque'),
             status=data.get('status', 'FUTURE')
         )
-        
+
         # Members assignment removed
 
         db.session.add(new_chantier)
@@ -1667,6 +1782,101 @@ def manage_single_alert(current_user, alert_id):
         alert.is_resolved = data.get('is_resolved', alert.is_resolved)
         db.session.commit()
         return jsonify(alert.to_dict())
+
+# --- Annonces admin (bandeau "au prochain login") ---
+
+@app.route('/api/notices', methods=['GET', 'POST'])
+@token_required
+def manage_notices(current_user):
+    if current_user.role != 'admin':
+        return jsonify({'error': 'Admin access required'}), 403
+
+    if request.method == 'GET':
+        notices = AdminNotice.query.order_by(AdminNotice.created_at.desc()).all()
+        return jsonify([n.to_dict() for n in notices])
+
+    if request.method == 'POST':
+        data = request.json or {}
+        message = (data.get('message') or '').strip()
+        if not message:
+            return jsonify({'error': 'Message is required'}), 400
+        date_start = data.get('date_start') or datetime.datetime.now().strftime('%Y-%m-%d')
+        try:
+            datetime.datetime.strptime(date_start, "%Y-%m-%d")
+        except ValueError:
+            return jsonify({'error': 'date_start must be YYYY-MM-DD'}), 400
+        try:
+            duration_days = int(data.get('duration_days', 7))
+        except (TypeError, ValueError):
+            return jsonify({'error': 'duration_days must be an integer'}), 400
+        if duration_days < 1:
+            return jsonify({'error': 'duration_days must be at least 1'}), 400
+
+        notice = AdminNotice(
+            message=message,
+            date_start=date_start,
+            duration_days=duration_days,
+            created_by_id=current_user.id,
+        )
+        db.session.add(notice)
+        db.session.commit()
+        audit_log('notices', current_user, f"created notice #{notice.id}: \"{message[:80]}\" (from {date_start}, {duration_days}j)")
+        return jsonify(notice.to_dict()), 201
+
+
+@app.route('/api/notices/<int:notice_id>', methods=['PUT', 'DELETE'])
+@token_required
+def manage_single_notice(current_user, notice_id):
+    if current_user.role != 'admin':
+        return jsonify({'error': 'Admin access required'}), 403
+    notice = db.session.get(AdminNotice, notice_id)
+    if not notice:
+        return jsonify({'error': 'Notice not found'}), 404
+
+    if request.method == 'DELETE':
+        NoticeAck.query.filter_by(notice_id=notice.id).delete()
+        db.session.delete(notice)
+        db.session.commit()
+        audit_log('notices', current_user, f"deleted notice #{notice_id}")
+        return jsonify({'message': 'Notice deleted'})
+
+    if request.method == 'PUT':
+        data = request.json or {}
+        if 'message' in data:
+            notice.message = data['message'].strip()
+        if 'date_start' in data:
+            notice.date_start = data['date_start']
+        if 'duration_days' in data:
+            notice.duration_days = int(data['duration_days'])
+        if 'active' in data:
+            notice.active = bool(data['active'])
+        db.session.commit()
+        audit_log('notices', current_user, f"edited notice #{notice.id}")
+        return jsonify(notice.to_dict())
+
+
+@app.route('/api/notices/active', methods=['GET'])
+@token_required
+def get_active_notices(current_user):
+    """Notices currently in their display window, active, and not yet
+    acknowledged by the calling user — what the app checks on open."""
+    today_str = datetime.datetime.now().strftime('%Y-%m-%d')
+    acked_ids = {a.notice_id for a in NoticeAck.query.filter_by(user_id=current_user.id).all()}
+    notices = AdminNotice.query.filter_by(active=True).all()
+    pending = [n for n in notices if n.id not in acked_ids and n.is_in_window(today_str)]
+    pending.sort(key=lambda n: n.created_at or datetime.datetime.min)
+    return jsonify([n.to_dict() for n in pending])
+
+
+@app.route('/api/notices/<int:notice_id>/ack', methods=['POST'])
+@token_required
+def ack_notice(current_user, notice_id):
+    if not db.session.get(AdminNotice, notice_id):
+        return jsonify({'error': 'Notice not found'}), 404
+    if not NoticeAck.query.filter_by(notice_id=notice_id, user_id=current_user.id).first():
+        db.session.add(NoticeAck(notice_id=notice_id, user_id=current_user.id))
+        db.session.commit()
+    return jsonify({'message': 'ok'})
 
 # --- Module financier ---
 # Admin-only across the board — margins/costs are the most sensitive business
