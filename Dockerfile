@@ -45,4 +45,12 @@ EXPOSE 5000
 # SQLite is in WAL mode (see app.py) specifically so this is safe: WAL allows
 # many concurrent readers alongside a single writer without locking errors —
 # the old 1-worker setting predated WAL and was serializing every request.
-CMD ["gunicorn", "-w", "4", "--timeout", "60", "-b", "0.0.0.0:5000", "backend.app:app"]
+# --preload: app.py runs init_db() unconditionally at import time (schema
+# migrations + seeding the default Admin) — without --preload, gunicorn
+# imports the module separately in each of the 4 workers, so all 4 race to
+# migrate/insert-if-missing at once and one loses a UNIQUE constraint race
+# on the Admin row. --preload imports once in the master before forking,
+# so init_db() runs exactly once; workers then fork from that already-
+# initialized state (safe here — SQLite/Flask-SQLAlchemy don't hold a
+# connection open at fork time, nothing to duplicate across the fork).
+CMD ["gunicorn", "--preload", "-w", "4", "--timeout", "60", "-b", "0.0.0.0:5000", "backend.app:app"]
