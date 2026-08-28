@@ -6,6 +6,7 @@ import { AwesomeDatePicker } from './ui/AwesomeDatePicker';
 import { AwesomeSelect } from './ui/AwesomeSelect';
 import { api } from '../api';
 import { useEscapeKey } from '../hooks/useEscapeKey';
+import { useAutoRefresh } from '../hooks/useAutoRefresh';
 
 interface Props {
     currentUser: User;
@@ -67,6 +68,10 @@ export const Dashboard: React.FC<Props> = ({ currentUser, onSelectChantier }) =>
         const res = await api.get(`/api/chantiers?status=ALL`);
         if (res.ok) setChantiers(await res.json());
     };
+
+    // Keep the list honest while it stays open — a chantier someone else
+    // touches elsewhere shouldn't need a manual reload to show up here.
+    useAutoRefresh(fetchChantiers, 20000, !showCreate);
 
     const handleExport = async () => {
         const params = new URLSearchParams();

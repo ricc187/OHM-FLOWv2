@@ -131,7 +131,15 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, activeView, onLo
             </div>
 
             {/* ===== Desktop Sidebar (lg and up) ===== */}
-            <aside className="hidden lg:flex fixed left-4 top-4 bottom-4 z-50 w-20 hover:w-72 bg-glass backdrop-blur-xl border border-black/5 shadow-glass rounded-2xl transition-all duration-500 ease-in-out group flex-col overflow-hidden">
+            {/* Hidden (not just dimmed) while a page-level modal is open — same
+                reasoning as the mobile header below: at in-between widths its
+                hover-expand (w-20 -> w-72) sits right where a centered modal's
+                left edge lands, so left visible it visually overlaps/bleeds
+                through the modal's own left content (e.g. DocumentExplorer's
+                folder sidebar). pointer-events-none also stops its :hover
+                expansion from triggering through the modal backdrop. */}
+            <aside className={`hidden lg:flex fixed left-4 top-4 bottom-4 z-50 w-20 hover:w-72 bg-glass backdrop-blur-xl border border-black/5 shadow-glass rounded-2xl transition-all duration-500 ease-in-out group flex-col overflow-hidden ${pageModalOpen ? '!opacity-0 !pointer-events-none -translate-x-4' : 'opacity-100 translate-x-0'
+                }`}>
                 <div className="h-24 flex items-center justify-start px-0 relative w-full shrink-0">
                     <button onClick={() => handleNavigate('dashboard')} className="flex items-center w-full h-full px-4 group-hover:px-6 transition-all duration-300">
                         <div className="w-12 h-12 flex items-center justify-center flex-shrink-0 relative">

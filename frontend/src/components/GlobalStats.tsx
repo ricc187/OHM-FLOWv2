@@ -1,366 +1,491 @@
-import React, { useEffect, useState, useRef, useMemo } from 'react';
-import { Clock, DollarSign, FileText, Activity, TrendingUp } from 'lucide-react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api';
 
-interface MonthlyStats {
-    month: string;
-    hours: number;
-    material: number;
-}
+// Page "Statistiques" — vue d'ensemble opérationnelle (heures/matériel dans
+// le temps) + vue financière agrégée (marge, avancement, CA prévu/réel par
+// chantier), construite selon la méthode dataviz : forme choisie par le job
+// des données, couleur categorical/diverging/status assignée par rôle (jamais
+// décorative), légende dès 2 séries, tooltip au survol, table en repli.
 
+// --- Palette (validée — voir dataviz skill) ---
+// Diverging : polarité (marge positive/négative, CA au-dessus/en-dessous du
+// prévu) — le neutre au zéro est juste la ligne de base (slate-300 en JSX),
+// pas une couleur de remplissage.
+const D_POS = '#2a78d6';
+const D_NEG = '#e34948';
+// Status (avancement vs budget) — mêmes seuils que l'onglet Finances d'un chantier.
+const S_GOOD = '#16a34a';
+const S_WARN = '#f59e0b';
+const S_CRIT = '#ef4444';
+const S_NONE = '#cbd5e1';
+
+const GRID = '#e2e8f0';      // slate-200
+
+interface MonthlyStats { month: string; hours: number; material: number; }
 interface StatsData {
     total_entries: number;
     total_hours: number;
     total_material: number;
     active_chantiers: number;
     history: MonthlyStats[];
-    comparison?: {
-        hours_growth: number;
-        material_growth: number;
-        hours_curr: number;
-        hours_last: number;
-    };
+    comparison?: { hours_growth: number; material_growth: number; hours_curr: number; hours_last: number };
 }
 
-// Helper Components
-const StatCard = ({ icon: Icon, label, value, unit, color, bg, border }: any) => (
-    <div className={`glass-panel p-6 ${border} transition-all group hover-card hover:-translate-y-1`}>
-        <div className="flex items-center justify-between mb-4">
-            <div className={`p-3 ${bg} rounded-xl ${color} shadow-lg shadow-black/20`}>
-                <Icon size={24} />
-            </div>
-            <span className="text-xs font-bold text-slate-500 uppercase tracking-widest">{label}</span>
-        </div>
-        <div className="text-4xl font-display font-bold text-slate-900">
-            {value} <span className="text-sm font-bold text-slate-400">{unit}</span>
-        </div>
-    </div>
-);
+interface ChantierFinancierStat {
+    id: number; nom: string; status: string;
+    ca_prevu: number; ca_reel: number;
+    marge_prevue: number; marge_reelle: number;
+    pct_marge_prevue: number | null; pct_marge_reelle: number | null;
+    debourse_sec_prevu: number; debourse_sec_reel: number;
+    pct_avancement_ca: number | null; pct_avancement_materiel: number | null;
+    pct_avancement_mo: number | null; pct_avancement_debourse_sec: number | null;
+}
+interface FinancierTotals {
+    chantiers_count: number; chantiers_positive_marge: number; chantiers_negative_marge: number;
+    ca_prevu: number; ca_reel: number;
+    marge_prevue: number; marge_reelle: number; pct_marge_reelle: number | null;
+    debourse_sec_prevu: number; debourse_sec_reel: number;
+    pct_avancement_ca: number | null; pct_avancement_materiel: number | null;
+    pct_avancement_mo: number | null; pct_avancement_debourse_sec: number | null;
+}
+interface FinancierStatsData { chantiers: ChantierFinancierStat[]; totals: FinancierTotals | null; }
 
+const formatCHF = (v: number | null | undefined, compact = false) => {
+    if (v == null) return '—';
+    if (compact) {
+        const abs = Math.abs(v);
+        if (abs >= 1_000_000) return `${(v / 1_000_000).toLocaleString('fr-CH', { maximumFractionDigits: 1 })}M`;
+        if (abs >= 10_000) return `${(v / 1_000).toLocaleString('fr-CH', { maximumFractionDigits: 0 })}k`;
+    }
+    return v.toLocaleString('fr-CH', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+};
+const formatPct = (v: number | null | undefined) => v == null ? '—' : `${(v * 100).toLocaleString('fr-CH', { maximumFractionDigits: 1 })}%`;
 const formatMonth = (ym: string) => {
     if (!ym) return '';
     const [y, m] = ym.split('-');
-    const date = new Date(parseInt(y), parseInt(m) - 1);
-    return date.toLocaleString('fr-FR', { month: 'short' }).replace('.', '');
+    return new Date(parseInt(y), parseInt(m) - 1).toLocaleString('fr-FR', { month: 'short' }).replace('.', '');
+};
+const statusColor = (pct: number | null) => pct == null ? S_NONE : pct > 1 ? S_CRIT : pct >= 0.9 ? S_WARN : S_GOOD;
+
+// --- Stat tile — label / value / delta, pas d'icône décorative (voir dataviz "figures") ---
+const StatTile: React.FC<{ label: string; value: React.ReactNode; sub?: string; delta?: { value: string; good: boolean } }> =
+    ({ label, value, sub, delta }) => (
+        <div className="card">
+            <div className="text-xs font-bold text-slate-500 uppercase tracking-wider">{label}</div>
+            <div className="mt-2 flex items-baseline gap-2 flex-wrap">
+                <div className="text-3xl font-semibold text-slate-900">{value}</div>
+                {delta && (
+                    <span className={`text-xs font-bold px-1.5 py-0.5 rounded ${delta.good ? 'text-green-700 bg-green-50' : 'text-red-700 bg-red-50'}`}>
+                        {delta.value}
+                    </span>
+                )}
+            </div>
+            {sub && <div className="mt-1 text-xs text-slate-400">{sub}</div>}
+        </div>
+    );
+
+const LegendSwatch: React.FC<{ color: string; label: string }> = ({ color, label }) => (
+    <span className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-600">
+        <span className="w-3 h-3 rounded-sm shrink-0" style={{ backgroundColor: color }} /> {label}
+    </span>
+);
+
+// --- Donut d'avancement global (réel/prévu, sommé sur tous les chantiers) ---
+const AvancementDonut: React.FC<{ label: string; pct: number | null }> = ({ label, pct }) => {
+    const size = 100, stroke = 10, r = (size - stroke) / 2, c = 2 * Math.PI * r;
+    const clamped = pct == null ? 0 : Math.max(0, Math.min(pct, 1));
+    const color = statusColor(pct);
+    return (
+        <div className="flex flex-col items-center gap-2">
+            <div className="relative" style={{ width: size, height: size }}>
+                <svg width={size} height={size} className="-rotate-90">
+                    <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={GRID} strokeWidth={stroke} />
+                    <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={color} strokeWidth={stroke}
+                        strokeDasharray={c} strokeDashoffset={c * (1 - clamped)} strokeLinecap="round"
+                        className="transition-[stroke-dashoffset] duration-500 ease-out" />
+                </svg>
+                <div className="absolute inset-0 flex items-center justify-center">
+                    {/* Le texte reste toujours en encre neutre — l'identité de statut est
+                        portée par l'anneau (le "mark"), jamais par la couleur du texte. */}
+                    <span className="text-lg font-bold text-slate-900">{formatPct(pct)}</span>
+                </div>
+            </div>
+            <span className="text-xs font-bold text-slate-600 uppercase tracking-wide text-center">{label}</span>
+        </div>
+    );
 };
 
-// Interactive SVG Line Chart
-const InteractiveLineChart = ({ data, dataKey, color, height = 250, unit = '' }: any) => {
-    const containerRef = useRef<HTMLDivElement>(null);
-    const [hoverIndex, setHoverIndex] = useState<number | null>(null);
-    const [hoverPos, setHoverPos] = useState<{ x: number, y: number } | null>(null);
-
-    if (!data || data.length === 0) return null;
-
-    const values = data.map((d: any) => d[dataKey]);
-    const max = Math.max(...values, 1) * 1.1; // Add 10% headroom
-    const min = 0;
-
-    // SVG Dimensions (Virtual)
-    const width = 1000;
-    const h = 500;
-
-    // Calculate points
-    const points = values.map((val: number, i: number) => {
-        const x = (i / (values.length - 1)) * width;
-        const y = h - ((val - min) / (max - min)) * h;
-        return { x, y, val, original: data[i] };
-    });
-
-    // Create Path command (Smooth curve using Catmull-Rom or similar simple smoothing could be better, but polyline for now is safer for exactness)
-    // Let's stick to polyline for accuracy but maybe slightly smoothed if we had a library. 
-    // Manual smooth path:
-    const pathD = `M ${points.map((p: any) => `${p.x},${p.y}`).join(' L ')}`;
-    const areaPathD = `${pathD} L ${width},${h} L 0,${h} Z`;
-
-    const updateHoverFromClientX = (clientX: number) => {
-        if (!containerRef.current) return;
-        const rect = containerRef.current.getBoundingClientRect();
-        const x = clientX - rect.left;
-        const relativeX = x / rect.width; // 0 to 1
-
-        // Find closest point
-        const index = Math.min(Math.max(Math.round(relativeX * (data.length - 1)), 0), data.length - 1);
-
-        setHoverIndex(index);
-        // Calculate tooltip position based on the data point
-        const p = points[index];
-        // Scale back to container pixels
-        setHoverPos({
-            x: (p.x / width) * rect.width,
-            y: (p.y / h) * rect.height
-        });
-    };
-
-    const handleMouseMove = (e: React.MouseEvent) => updateHoverFromClientX(e.clientX);
-    // Touch support (tap-and-drag) — mouse events don't fire reliably on phones/tablets
-    const handleTouchMove = (e: React.TouchEvent) => {
-        if (e.touches[0]) updateHoverFromClientX(e.touches[0].clientX);
-    };
-
-    const handleMouseLeave = () => {
-        setHoverIndex(null);
-        setHoverPos(null);
-    };
-
-    const activePoint = hoverIndex !== null ? points[hoverIndex] : null;
+// --- Marge par chantier — barres divergentes depuis un zéro central (job = polarité) ---
+// `maxAbsOverride` : quand on affiche deux sous-listes côte à côte (meilleures
+// / moins bonnes marges), les deux doivent partager la même échelle pour
+// rester comparables — sinon chaque moitié se recale sur son propre max.
+const MargeDivergingChart: React.FC<{ data: ChantierFinancierStat[]; maxAbsOverride?: number }> = ({ data, maxAbsOverride }) => {
+    const [hover, setHover] = useState<number | null>(null);
+    if (data.length === 0) return <div className="text-sm text-slate-400 italic py-8 text-center">Aucun chantier avec un prévisionnel configuré.</div>;
+    const maxAbs = maxAbsOverride ?? Math.max(...data.map(c => Math.abs(c.marge_reelle)), 1);
 
     return (
-        <div
-            ref={containerRef}
-            className="w-full relative select-none cursor-crosshair touch-none"
-            style={{ height: `${height}px` }}
-            onMouseMove={handleMouseMove}
-            onMouseLeave={handleMouseLeave}
-            onTouchMove={handleTouchMove}
-            onTouchStart={handleTouchMove}
-            onTouchEnd={handleMouseLeave}
-        >
-            <svg viewBox={`0 0 ${width} ${h}`} preserveAspectRatio="none" className="w-full h-full overflow-visible">
-                <defs>
-                    <linearGradient id={`grad-${color.replace('#', '')}`} x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stopColor={color} stopOpacity="0.4" />
-                        <stop offset="100%" stopColor={color} stopOpacity="0" />
-                    </linearGradient>
-                </defs>
+        <div className="space-y-2.5">
+            {data.map((c, i) => {
+                const pct = Math.min(Math.abs(c.marge_reelle) / maxAbs, 1) * 50; // % of half-width
+                const positive = c.marge_reelle >= 0;
+                return (
+                    <div key={c.id} className="group relative flex items-center gap-3" onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(null)}>
+                        <div className="w-28 sm:w-36 shrink-0 text-xs font-medium text-slate-700 truncate text-right" title={c.nom}>{c.nom}</div>
+                        <div className="flex-1 relative h-6">
+                            {/* Zero baseline, centered */}
+                            <div className="absolute inset-y-0 left-1/2 w-px bg-slate-300" />
+                            <div
+                                className="absolute inset-y-0 rounded-sm transition-[width] duration-500 ease-out"
+                                style={{
+                                    backgroundColor: positive ? D_POS : D_NEG,
+                                    width: `${pct}%`,
+                                    left: positive ? '50%' : `${50 - pct}%`,
+                                }}
+                            />
+                            {/* Value at the tip — ink, not the bar's color: the bar (the
+                                mark) carries polarity, the minus sign carries it in text. */}
+                            <div
+                                className="absolute inset-y-0 flex items-center text-[11px] font-bold tabular-nums whitespace-nowrap text-slate-700"
+                                style={{
+                                    left: positive ? `calc(50% + ${pct}% + 6px)` : undefined,
+                                    right: positive ? undefined : `calc(50% + ${pct}% + 6px)`,
+                                }}
+                            >
+                                {formatCHF(c.marge_reelle, true)}
+                            </div>
+                        </div>
+                        {hover === i && (
+                            <div className="absolute z-20 left-1/2 -translate-x-1/2 bottom-full mb-2 bg-slate-900 text-white text-xs rounded-lg shadow-xl px-3 py-2 pointer-events-none whitespace-nowrap">
+                                <div className="font-bold">{c.nom}</div>
+                                <div className="text-slate-300">Marge réelle : <span className="font-bold text-white">{formatCHF(c.marge_reelle)} CHF</span> ({formatPct(c.pct_marge_reelle)})</div>
+                                <div className="text-slate-400">Prévue : {formatCHF(c.marge_prevue)} CHF</div>
+                            </div>
+                        )}
+                    </div>
+                );
+            })}
+        </div>
+    );
+};
 
-                {/* Grid Lines (Optional) */}
-                <line x1="0" y1={h} x2={width} y2={h} stroke="rgba(255,255,255,0.1)" strokeWidth="2" />
-                <line x1="0" y1={0} x2={width} y2={0} stroke="rgba(255,255,255,0.1)" strokeWidth="2" />
+// --- CA prévu vs réel — nuage de points (scale à N'importe quel nombre de
+// chantiers, contrairement à une barre par chantier qui devient illisible
+// passé une dizaine). Un chantier = un point ; la diagonale est la référence
+// "facturé = prévu" ; la couleur (diverging) dit juste de quel côté il est. ---
+const CaScatterChart: React.FC<{ data: ChantierFinancierStat[] }> = ({ data }) => {
+    const [hover, setHover] = useState<number | null>(null);
+    if (data.length === 0) return null;
 
-                <path d={areaPathD} fill={`url(#grad-${color.replace('#', '')})`} stroke="none" />
-                <path d={pathD} fill="none" stroke={color} strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+    const width = 600, height = 420, pad = 46;
+    const maxVal = Math.max(...data.flatMap(c => [c.ca_prevu, c.ca_reel]), 1) * 1.08;
+    const sx = (v: number) => pad + (v / maxVal) * (width - pad - 16);
+    const sy = (v: number) => (height - pad) - (v / maxVal) * (height - pad - 16);
 
-                {/* Active Point Highlight */}
-                {activePoint && (
-                    <g>
-                        <line
-                            x1={activePoint.x} y1={0}
-                            x2={activePoint.x} y2={h}
-                            stroke="rgba(255,255,255,0.2)"
-                            strokeWidth="2"
-                            strokeDasharray="10,10"
-                            vectorEffect="non-scaling-stroke"
-                        />
-                        <circle
-                            cx={activePoint.x} cy={activePoint.y}
-                            r="6"
-                            fill={color}
-                            stroke="white"
-                            strokeWidth="2"
-                            vectorEffect="non-scaling-stroke"
-                        />
-                    </g>
-                )}
+    return (
+        <div className="relative w-full" style={{ height: height + 24 }}>
+            <svg viewBox={`0 0 ${width} ${height}`} className="w-full overflow-visible" style={{ height }}>
+                <line x1={pad} y1={height - pad} x2={width} y2={height - pad} stroke={GRID} strokeWidth="1" />
+                <line x1={pad} y1={height - pad} x2={pad} y2={0} stroke={GRID} strokeWidth="1" />
+                {/* Référence "facturé = prévu" */}
+                <line x1={sx(0)} y1={sy(0)} x2={sx(maxVal)} y2={sy(maxVal)} stroke="#c3c2b7" strokeWidth="1.5" strokeDasharray="5,5" />
+                {data.map((c, i) => {
+                    const x = sx(c.ca_prevu), y = sy(c.ca_reel);
+                    const over = c.ca_reel >= c.ca_prevu;
+                    const dim = hover !== null && hover !== i;
+                    return (
+                        <g key={c.id} onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(null)} className="cursor-pointer">
+                            {/* Zone de survol >= 24px, bien plus grande que le point rendu */}
+                            <circle cx={x} cy={y} r={12} fill="transparent" />
+                            <circle cx={x} cy={y} r={5} fill={over ? D_POS : D_NEG} stroke="#fff" strokeWidth="1.5"
+                                opacity={dim ? 0.3 : 1} className="transition-opacity duration-150" />
+                        </g>
+                    );
+                })}
             </svg>
-
-            {/* Floating Tooltip */}
-            {hoverIndex !== null && hoverPos && activePoint && (
+            <div className="absolute bottom-0 left-1/2 -translate-x-1/2 text-[10px] text-slate-400 font-mono uppercase tracking-wide">CA prévu →</div>
+            <div className="absolute top-1/2 left-0 -translate-y-1/2 -rotate-90 text-[10px] text-slate-400 font-mono uppercase tracking-wide origin-left">CA réel →</div>
+            {hover !== null && (
                 <div
-                    className="absolute z-20 pointer-events-none transition-all duration-75 ease-out"
+                    className="absolute z-20 bg-slate-900 text-white text-xs rounded-lg shadow-xl px-3 py-2 pointer-events-none whitespace-nowrap"
                     style={{
-                        left: hoverPos.x,
-                        top: 0,
-                        transform: `translate(${hoverPos.x > containerRef.current!.getBoundingClientRect().width / 2 ? '-100%' : '0%'}, -120%)`
+                        left: `${(sx(data[hover].ca_prevu) / width) * 100}%`,
+                        top: `${(sy(data[hover].ca_reel) / height) * 100}%`,
+                        transform: 'translate(-50%, -135%)',
                     }}
                 >
-                    <div className="bg-white/90 backdrop-blur border border-black/5 p-3 rounded-xl shadow-2xl min-w-[120px] ml-4 mt-4">
-                        <div className="text-slate-500 text-xs font-mono uppercase mb-1">{formatMonth(activePoint.original.month)}</div>
-                        <div className="text-slate-900 font-bold text-xl flex items-baseline gap-1">
-                            {activePoint.val}
-                            <span className="text-sm font-normal text-slate-400">{unit}</span>
-                        </div>
-                    </div>
+                    <div className="font-bold">{data[hover].nom}</div>
+                    <div className="text-slate-300">Prévu : <span className="font-bold text-white">{formatCHF(data[hover].ca_prevu)} CHF</span></div>
+                    <div className="text-slate-300">Réel : <span className="font-bold text-white">{formatCHF(data[hover].ca_reel)} CHF</span></div>
                 </div>
             )}
         </div>
     );
 };
 
-export const GlobalStats: React.FC = () => {
-    const [stats, setStats] = useState<StatsData>({
-        total_entries: 0,
-        total_hours: 0,
-        total_material: 0,
-        active_chantiers: 0,
-        history: []
-    });
+// --- Tendance mensuelle heures/matériel — courbe + barres, interaction crosshair ---
+const TrendLineChart: React.FC<{ data: MonthlyStats[]; dataKey: 'hours' | 'material'; color: string; unit: string; height?: number }> =
+    ({ data, dataKey, color, unit, height = 220 }) => {
+        const containerRef = useRef<HTMLDivElement>(null);
+        const [hoverIndex, setHoverIndex] = useState<number | null>(null);
+        if (!data || data.length === 0) return <div className="text-sm text-slate-400 italic py-8 text-center">Pas encore de données.</div>;
 
+        const values = data.map(d => d[dataKey]);
+        const max = Math.max(...values, 1) * 1.15;
+        const width = 1000, h = 400;
+        const points = values.map((val, i) => ({
+            x: data.length > 1 ? (i / (data.length - 1)) * width : width / 2,
+            y: h - (val / max) * h, val,
+        }));
+        const pathD = `M ${points.map(p => `${p.x},${p.y}`).join(' L ')}`;
+        const areaD = `${pathD} L ${width},${h} L 0,${h} Z`;
+
+        const updateHover = (clientX: number) => {
+            if (!containerRef.current) return;
+            const rect = containerRef.current.getBoundingClientRect();
+            const relX = (clientX - rect.left) / rect.width;
+            setHoverIndex(Math.min(Math.max(Math.round(relX * (data.length - 1)), 0), data.length - 1));
+        };
+        const active = hoverIndex !== null ? points[hoverIndex] : null;
+
+        return (
+            <div
+                ref={containerRef}
+                className="w-full relative select-none cursor-crosshair touch-none"
+                style={{ height }}
+                onMouseMove={e => updateHover(e.clientX)}
+                onMouseLeave={() => setHoverIndex(null)}
+                onTouchMove={e => e.touches[0] && updateHover(e.touches[0].clientX)}
+                onTouchStart={e => e.touches[0] && updateHover(e.touches[0].clientX)}
+                onTouchEnd={() => setHoverIndex(null)}
+            >
+                <svg viewBox={`0 0 ${width} ${h}`} preserveAspectRatio="none" className="w-full h-full overflow-visible">
+                    <defs>
+                        <linearGradient id={`grad-${dataKey}`} x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stopColor={color} stopOpacity="0.1" />
+                            <stop offset="100%" stopColor={color} stopOpacity="0" />
+                        </linearGradient>
+                    </defs>
+                    <line x1="0" y1={h} x2={width} y2={h} stroke={GRID} strokeWidth="1" vectorEffect="non-scaling-stroke" />
+                    <path d={areaD} fill={`url(#grad-${dataKey})`} stroke="none" />
+                    <path d={pathD} fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+                    {active && (
+                        <g>
+                            <line x1={active.x} y1={0} x2={active.x} y2={h} stroke={GRID} strokeWidth="1" vectorEffect="non-scaling-stroke" />
+                            <circle cx={active.x} cy={active.y} r="5" fill={color} stroke="#fff" strokeWidth="2" vectorEffect="non-scaling-stroke" />
+                        </g>
+                    )}
+                </svg>
+                {active && hoverIndex !== null && containerRef.current && (
+                    <div
+                        className="absolute z-20 pointer-events-none bg-slate-900 text-white rounded-lg shadow-xl px-3 py-2 text-xs"
+                        style={{
+                            left: (active.x / width) * containerRef.current.getBoundingClientRect().width,
+                            top: 0,
+                            transform: `translate(${(active.x / width) > 0.6 ? '-105%' : '5%'}, 4px)`,
+                        }}
+                    >
+                        <div className="text-slate-400 uppercase font-mono mb-0.5">{formatMonth(data[hoverIndex].month)}</div>
+                        <div className="font-bold text-sm">{active.val.toLocaleString('fr-CH')} <span className="font-normal text-slate-400">{unit}</span></div>
+                    </div>
+                )}
+            </div>
+        );
+    };
+
+export const GlobalStats: React.FC = () => {
+    const [stats, setStats] = useState<StatsData | null>(null);
+    const [fin, setFin] = useState<FinancierStatsData | null>(null);
     const [filterRange, setFilterRange] = useState<'3M' | '6M' | '1Y' | 'ALL'>('1Y');
 
     useEffect(() => {
-        const fetchStats = async () => {
-            try {
-                const res = await api.get('/api/stats');
-                if (res.ok) {
-                    setStats(await res.json());
-                }
-            } catch (error) {
-                console.error("Failed to fetch stats", error);
-            }
-        };
-        fetchStats();
+        api.get('/api/stats').then(async r => { if (r.ok) setStats(await r.json()); });
+        api.get('/api/stats/financier').then(async r => { if (r.ok) setFin(await r.json()); });
     }, []);
 
-    // Filter Logic
     const filteredHistory = useMemo(() => {
-        if (!stats.history) return [];
-        const count = stats.history.length;
-        if (filterRange === '3M') return stats.history.slice(Math.max(count - 3, 0));
-        if (filterRange === '6M') return stats.history.slice(Math.max(count - 6, 0));
-        if (filterRange === '1Y') return stats.history.slice(Math.max(count - 12, 0)); // Actually all recent 12 provided by backend usually
+        if (!stats?.history) return [];
+        const n = stats.history.length;
+        if (filterRange === '3M') return stats.history.slice(Math.max(n - 3, 0));
+        if (filterRange === '6M') return stats.history.slice(Math.max(n - 6, 0));
+        if (filterRange === '1Y') return stats.history.slice(Math.max(n - 12, 0));
         return stats.history;
-    }, [stats.history, filterRange]);
+    }, [stats, filterRange]);
 
-    const maxMaterial = Math.max(...filteredHistory.map(h => h.material), 1);
+    const totals = fin?.totals;
+    const chantiers = fin?.chantiers ?? [];
+
+    // Au-delà d'une dizaine de chantiers, une barre par chantier devient
+    // illisible (et ça va monter à ~70) — on montre les 5 meilleures/moins
+    // bonnes marges avec une échelle partagée, le détail complet reste dans
+    // la table (avec recherche) plus bas.
+    const splitMarge = chantiers.length > 10;
+    const margeTop = splitMarge ? chantiers.slice(0, 5) : chantiers;
+    const margeBottom = splitMarge ? chantiers.slice(-5) : [];
+    const margeSharedMax = splitMarge ? Math.max(...[...margeTop, ...margeBottom].map(c => Math.abs(c.marge_reelle)), 1) : undefined;
+
+    const [tableSearch, setTableSearch] = useState('');
+    const filteredChantiers = tableSearch.trim()
+        ? chantiers.filter(c => c.nom.toLowerCase().includes(tableSearch.trim().toLowerCase()))
+        : chantiers;
 
     return (
         <div className="space-y-8 animate-fade-in pb-10">
-            <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
-                <div>
-                    <h2 className="text-4xl font-display font-bold text-slate-900 flex items-center gap-3">
-                        <div className="p-3 bg-blue-500/10 rounded-2xl border border-blue-500/20 shadow-glow">
-                            <Activity className="text-blue-400" size={32} />
-                        </div>
-                        <span className="text-gradient">Statistiques</span>
-                    </h2>
-                    <p className="text-text-muted mt-2 text-lg">Vue d'ensemble et analytique de performance.</p>
-                </div>
-
-                {/* Date Controls */}
-                <div className="flex p-1 bg-white/40 backdrop-blur border border-black/5 rounded-xl overflow-hidden self-start md:self-auto">
-                    {(['3M', '6M', '1Y', 'ALL'] as const).map(range => (
-                        <button
-                            key={range}
-                            onClick={() => setFilterRange(range)}
-                            className={`px-4 py-2 text-xs font-bold transition-all ${filterRange === range
-                                ? 'bg-primary text-black shadow-lg'
-                                : 'text-slate-500 hover:text-slate-900 hover:bg-black/5'
-                                }`}
-                        >
-                            {range}
-                        </button>
-                    ))}
-                </div>
+            <div>
+                <h2 className="text-2xl sm:text-3xl font-bold text-slate-900">Statistiques</h2>
+                <p className="text-slate-500 mt-1 text-sm">Vue d'ensemble opérationnelle et financière.</p>
             </div>
 
-            {/* KPI Cards */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-                <StatCard
-                    icon={Clock}
-                    label="Total Heures"
-                    value={stats.total_hours}
-                    unit="h"
-                    color="text-primary"
-                    bg="bg-primary/10"
-                    border="hover:border-primary/50"
+            {/* ===== KPI ===== */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                <StatTile
+                    label="Marge réelle totale"
+                    value={totals ? `${formatCHF(totals.marge_reelle, true)} CHF` : '—'}
+                    sub={totals ? `${formatPct(totals.pct_marge_reelle)} du CA facturé` : undefined}
+                    delta={totals ? { value: `${totals.marge_reelle >= totals.marge_prevue ? '+' : ''}${formatCHF(totals.marge_reelle - totals.marge_prevue, true)} vs prévu`, good: totals.marge_reelle >= totals.marge_prevue } : undefined}
                 />
-                <StatCard
-                    icon={DollarSign}
-                    label="Total Dépenses"
-                    value={stats.total_material.toLocaleString('fr-CH', { minimumFractionDigits: 2 })}
-                    unit="CHF"
-                    color="text-blue-400"
-                    bg="bg-blue-500/10"
-                    border="hover:border-blue-500/50"
+                <StatTile
+                    label="Avancement CA"
+                    value={formatPct(totals?.pct_avancement_ca)}
+                    sub={totals ? `${formatCHF(totals.ca_reel, true)} facturés / ${formatCHF(totals.ca_prevu, true)} prévus` : undefined}
                 />
-                <StatCard
-                    icon={FileText}
-                    label="Nombre de Saisies"
-                    value={stats.total_entries}
-                    color="text-purple-400"
-                    bg="bg-purple-500/10"
-                    border="hover:border-purple-500/50"
+                <StatTile
+                    label="Avancement débours sec"
+                    value={formatPct(totals?.pct_avancement_debourse_sec)}
+                    sub={totals ? `${formatCHF(totals.debourse_sec_reel, true)} / ${formatCHF(totals.debourse_sec_prevu, true)} prévus` : undefined}
                 />
-                <StatCard
-                    icon={Activity}
-                    label="Chantiers Actifs"
-                    value={stats.active_chantiers}
-                    color="text-green-400"
-                    bg="bg-green-500/10"
-                    border="hover:border-green-500/50"
+                <StatTile
+                    label="Chantiers actifs"
+                    value={stats?.active_chantiers ?? '—'}
+                    sub={totals ? `${totals.chantiers_positive_marge} en marge positive · ${totals.chantiers_negative_marge} négative` : undefined}
                 />
             </div>
 
-            {/* Charts Grid */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mt-8">
+            {/* ===== Avancement global ===== */}
+            {totals && (
+                <div className="card">
+                    <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wide mb-5">Avancement global (réel / prévu, tous chantiers)</h3>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-6">
+                        <AvancementDonut label="Chiffre d'affaires" pct={totals.pct_avancement_ca} />
+                        <AvancementDonut label="Matériel" pct={totals.pct_avancement_materiel} />
+                        <AvancementDonut label="Main d'œuvre" pct={totals.pct_avancement_mo} />
+                        <AvancementDonut label="Débours sec" pct={totals.pct_avancement_debourse_sec} />
+                    </div>
+                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-5 pt-4 border-t border-slate-100">
+                        <LegendSwatch color={S_GOOD} label="< 90% — en cours" />
+                        <LegendSwatch color={S_WARN} label="90-100% — proche du budget" />
+                        <LegendSwatch color={S_CRIT} label="> 100% — dépassement" />
+                    </div>
+                </div>
+            )}
 
-                {/* Hours Trend (Curve) */}
-                <div className="glass-panel p-6 relative overflow-hidden group flex flex-col">
-                    <div className="flex items-center justify-between mb-8 relative z-10">
-                        <div className="flex items-center gap-3">
-                            <div className="p-2 bg-primary/10 rounded-lg">
-                                <TrendingUp className="text-primary" size={20} />
-                            </div>
-                            <div>
-                                <h3 className="text-lg font-bold text-slate-900">Tendance des Heures</h3>
-                                <p className="text-xs text-slate-400">Période: {filterRange}</p>
-                            </div>
+            {/* ===== Marge par chantier ===== */}
+            <div className="card">
+                <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wide mb-1">Marge réelle par chantier</h3>
+                <p className="text-xs text-slate-400 mb-5">
+                    {splitMarge
+                        ? `5 meilleures et 5 moins bonnes marges sur ${chantiers.length} chantiers — détail complet et recherche dans la table plus bas.`
+                        : 'Écart à zéro — chantiers en perte à gauche, en marge à droite.'}
+                </p>
+                {splitMarge ? (
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-x-8 gap-y-6">
+                        <div>
+                            <div className="text-xs font-bold text-slate-500 uppercase tracking-wide mb-3">Meilleures marges</div>
+                            <MargeDivergingChart data={margeTop} maxAbsOverride={margeSharedMax} />
                         </div>
-                        {stats.comparison && (
-                            <div className={`px-3 py-1 rounded-full text-xs font-bold border ${stats.comparison.hours_growth >= 0 ? 'bg-green-500/20 text-green-400 border-green-500/30' : 'bg-red-500/20 text-red-400 border-red-500/30'}`}>
+                        <div>
+                            <div className="text-xs font-bold text-slate-500 uppercase tracking-wide mb-3">Marges les plus faibles</div>
+                            <MargeDivergingChart data={margeBottom} maxAbsOverride={margeSharedMax} />
+                        </div>
+                    </div>
+                ) : (
+                    <MargeDivergingChart data={chantiers} />
+                )}
+            </div>
+
+            {/* ===== CA prévu vs réel ===== */}
+            {chantiers.length > 0 && (
+                <div className="card">
+                    <div className="flex items-center justify-between flex-wrap gap-3 mb-1">
+                        <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wide">Chiffre d'affaires — prévu vs réel</h3>
+                        <div className="flex items-center gap-4">
+                            <LegendSwatch color={D_POS} label="Au-dessus du prévu" />
+                            <LegendSwatch color={D_NEG} label="En dessous du prévu" />
+                        </div>
+                    </div>
+                    <p className="text-xs text-slate-400 mb-2">Un point par chantier — au-dessus de la diagonale, plus facturé que prévu.</p>
+                    <CaScatterChart data={chantiers} />
+                </div>
+            )}
+
+            {/* ===== Tendance mensuelle des heures ===== */}
+            <div className="card">
+                <div className="flex items-center justify-between flex-wrap gap-3 mb-1">
+                    <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wide">Heures travaillées</h3>
+                    <div className="flex items-center gap-3">
+                        {stats?.comparison && (
+                            <span className={`text-xs font-bold px-1.5 py-0.5 rounded ${stats.comparison.hours_growth >= 0 ? 'text-green-700 bg-green-50' : 'text-red-700 bg-red-50'}`}>
                                 {stats.comparison.hours_growth > 0 ? '+' : ''}{stats.comparison.hours_growth}% vs N-1
-                            </div>
+                            </span>
                         )}
-                    </div>
-
-                    <div className="flex-1 min-h-[250px] w-full relative">
-                        <InteractiveLineChart data={filteredHistory} dataKey="hours" color="#FFD700" height={250} unit="h" />
-                    </div>
-
-                    {/* X-Axis Labels */}
-                    <div className="flex justify-between mt-4 text-[10px] text-slate-400 font-mono uppercase tracking-widest px-2">
-                        {filteredHistory.length > 0 && (
-                            <>
-                                <span>{formatMonth(filteredHistory[0].month)}</span>
-                                <span className="hidden sm:inline">{formatMonth(filteredHistory[Math.floor(filteredHistory.length / 2)].month)}</span>
-                                <span>{formatMonth(filteredHistory[filteredHistory.length - 1].month)}</span>
-                            </>
-                        )}
-                    </div>
-                </div>
-
-                {/* Expenses Trend (Bar) */}
-                <div className="glass-panel p-6 relative overflow-hidden flex flex-col">
-                    <div className="flex items-center justify-between mb-8 relative z-10">
-                        <div className="flex items-center gap-3">
-                            <div className="p-2 bg-blue-500/10 rounded-lg">
-                                <DollarSign className="text-blue-400" size={20} />
-                            </div>
-                            <div>
-                                <h3 className="text-lg font-bold text-slate-900">Dépenses Matériel</h3>
-                                <p className="text-xs text-slate-400">Période: {filterRange}</p>
-                            </div>
+                        <div className="flex p-1 bg-slate-100 rounded-lg overflow-hidden">
+                            {(['3M', '6M', '1Y', 'ALL'] as const).map(range => (
+                                <button key={range} onClick={() => setFilterRange(range)}
+                                    className={`px-2.5 py-1 text-xs font-bold rounded-md transition-all ${filterRange === range ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-900'}`}>
+                                    {range}
+                                </button>
+                            ))}
                         </div>
-                        {stats.comparison && stats.comparison.material_growth !== undefined && (
-                            <div className={`px-3 py-1 rounded-full text-xs font-bold border ${stats.comparison.material_growth >= 0 ? 'bg-green-500/20 text-green-400 border-green-500/30' : 'bg-red-500/20 text-red-400 border-red-500/30'}`}>
-                                {stats.comparison.material_growth > 0 ? '+' : ''}{stats.comparison.material_growth}% vs N-1
-                            </div>
-                        )}
-                    </div>
-
-                    <div className="h-[250px] flex items-end justify-between gap-2 mt-4">
-                        {filteredHistory.map((item, index) => (
-                            <div key={index} className="flex-1 flex flex-col items-center gap-2 group h-full justify-end relative">
-                                <div
-                                    className="w-full bg-gradient-to-t from-blue-500/10 to-blue-500/40 border-t-2 border-blue-500 rounded-t-[2px] transition-all duration-300 group-hover:from-blue-500/30 group-hover:to-blue-500/60 relative"
-                                    style={{ height: `${Math.max((item.material / maxMaterial) * 100, 2)}%` }}
-                                >
-                                    {/* Tooltip for Bar Chart */}
-                                    <div className="opacity-0 group-hover:opacity-100 absolute bottom-full left-1/2 -translate-x-1/2 mb-2 bg-white border border-slate-300 p-2 rounded shadow-xl text-xs whitespace-nowrap z-20 pointer-events-none transition-all">
-                                        <div className="font-bold text-slate-900">{item.material.toLocaleString()} CHF</div>
-                                        <div className="text-slate-500">{formatMonth(item.month)}</div>
-                                    </div>
-                                </div>
-                                <span className="text-[9px] font-mono text-slate-400 uppercase rotate-45 md:rotate-0 mt-2 truncate w-full text-center">
-                                    {filteredHistory.length > 6 ? (index % 2 === 0 ? formatMonth(item.month) : '') : formatMonth(item.month)}
-                                </span>
-                            </div>
-                        ))}
                     </div>
                 </div>
-
+                <p className="text-xs text-slate-400 mb-4">Total sur la période : {stats?.total_hours ?? '—'} h</p>
+                <TrendLineChart data={filteredHistory} dataKey="hours" color="#eda100" unit="h" height={260} />
             </div>
+
+            {/* ===== Table (repli accessible — toutes les valeurs, y compris celles poussées hors des barres/points) ===== */}
+            {chantiers.length > 0 && (
+                <div className="card p-0 overflow-x-auto">
+                    <div className="flex items-center justify-between flex-wrap gap-3 px-6 pt-6 pb-4">
+                        <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wide">Détail par chantier</h3>
+                        {chantiers.length > 8 && (
+                            <input
+                                type="text" value={tableSearch} onChange={e => setTableSearch(e.target.value)}
+                                placeholder="Rechercher un chantier…"
+                                className="text-xs px-3 py-1.5 rounded-lg border border-slate-200 focus:border-ohm-primary focus:outline-none w-48"
+                            />
+                        )}
+                    </div>
+                    <table className="w-full text-sm min-w-[720px]">
+                        <thead className="bg-slate-50 text-slate-400 font-bold uppercase text-[11px] border-y border-slate-100">
+                            <tr>
+                                <th className="p-3 pl-6 text-left">Chantier</th>
+                                <th className="p-3 text-right">CA prévu</th>
+                                <th className="p-3 text-right">CA réel</th>
+                                <th className="p-3 text-right">Marge prévue</th>
+                                <th className="p-3 text-right">Marge réelle</th>
+                                <th className="p-3 text-right">% marge</th>
+                                <th className="p-3 pr-6 text-right">Avancement débours sec</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 tabular-nums">
+                            {filteredChantiers.map(c => (
+                                <tr key={c.id} className="hover:bg-slate-50/70">
+                                    <td className="p-3 pl-6 font-medium text-slate-700 whitespace-nowrap">{c.nom}</td>
+                                    <td className="p-3 text-right text-slate-600">{formatCHF(c.ca_prevu)}</td>
+                                    <td className="p-3 text-right text-slate-600">{formatCHF(c.ca_reel)}</td>
+                                    <td className="p-3 text-right text-slate-600">{formatCHF(c.marge_prevue)}</td>
+                                    <td className="p-3 text-right font-bold text-slate-900">{formatCHF(c.marge_reelle)}</td>
+                                    <td className="p-3 text-right text-slate-600">{formatPct(c.pct_marge_reelle)}</td>
+                                    <td className="p-3 pr-6 text-right font-bold text-slate-900">{formatPct(c.pct_avancement_debourse_sec)}</td>
+                                </tr>
+                            ))}
+                            {filteredChantiers.length === 0 && (
+                                <tr><td colSpan={7} className="p-6 text-center text-slate-400 italic">Aucun chantier ne correspond à la recherche.</td></tr>
+                            )}
+                        </tbody>
+                    </table>
+                </div>
+            )}
         </div>
     );
 };

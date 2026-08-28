@@ -21,14 +21,11 @@ export interface Chantier {
     remarque?: string;
     status: ChantierStatus;
     archived?: boolean; // documents zipped + originals freed (set on close, cleared on reopen)
-    no_mesure_needed?: boolean; // opt-out clearing the missing-mesure warning without a file
-    has_mesure?: boolean;
-    has_rapport?: boolean;
-    hours_this_month?: number;
+    hours_total?: number;
     members: number[]; // Array of User IDs
 }
 
-export type DocumentCategory = 'plan' | 'devis' | 'photo' | 'mesure' | 'rapport';
+export type DocumentCategory = 'document' | 'photo';
 
 export interface ChantierDocument {
     id: number;
@@ -53,6 +50,90 @@ export interface Entry {
     status: 'PENDING' | 'VALIDATED';
     created_by_id?: number;
     admin_note?: string;
+}
+
+// --- Module financier ---
+
+export interface ChantierFinancierPrevu {
+    id: number;
+    chantier_id: number;
+    charge_materiel_prevue: number;
+    taux_horaire: number;
+    pct_petites_fournitures: number;
+    created_at?: string;
+    updated_at?: string;
+}
+
+// Une ligne du CA prévisionnel (adjugé / régie / PV clients / ...) — liste à
+// taille libre, plus 3 champs fixes : un chantier peut n'avoir qu'une ligne,
+// un autre 5.
+export interface CaLignePrevue {
+    id: number;
+    chantier_id: number;
+    libelle: string;
+    montant: number;
+    heures: number;
+    created_at?: string;
+}
+
+export interface Acompte {
+    id: number;
+    chantier_id: number;
+    libelle: string;
+    montant: number;
+    // Heures réellement travaillées/facturées en face de ce versement —
+    // laissée à 0 par erreur = signal qu'il manque des heures à facturer.
+    heures: number;
+    date: string;
+    created_at?: string;
+}
+
+export type AchatType = 'facture' | 'estimation_petites_fournitures';
+
+export interface AchatMateriel {
+    id: number;
+    chantier_id: number;
+    libelle: string;
+    montant: number;
+    date?: string | null;
+    type: AchatType;
+    created_at?: string;
+}
+
+// Calculs dynamiques renvoyés par GET/PUT /financier — absents quand
+// `financier` est null (prévisionnel pas encore créé).
+export interface FinancierCalculs {
+    heures_reelles: number;
+    ca_prevu: number;
+    heures_prevues: number;
+    ca_reel: number;
+    reste_a_facturer: number;
+    total_achats_reel: number;
+    ecart_materiel: number;
+    cout_mo_prevu: number;
+    cout_mo_reel: number;
+    ecart_heures: number;
+    ecart_cout_mo: number;
+    marge_prevue: number;
+    pct_marge_prevue: number | null;
+    marge_reelle: number;
+    pct_marge_reelle: number | null;
+    ecart_marge: number;
+    // Débours sec = coût direct (main d'œuvre + matériel) et son avancement.
+    debourse_sec_prevu: number;
+    debourse_sec_reel: number;
+    pct_avancement_ca: number | null;
+    pct_avancement_materiel: number | null;
+    pct_avancement_mo: number | null;
+    pct_avancement_debourse_sec: number | null;
+}
+
+export interface FinancierPayload extends Partial<FinancierCalculs> {
+    chantier_id: number;
+    financier: ChantierFinancierPrevu | null;
+    ca_lignes: CaLignePrevue[];
+    acomptes: Acompte[];
+    achats: AchatMateriel[];
 }
 
 export interface Leave {

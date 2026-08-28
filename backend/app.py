@@ -5,7 +5,6 @@ import datetime
 import functools
 import uuid
 import re
-import unicodedata
 import zipfile
 import tempfile
 from io import BytesIO
@@ -21,6 +20,7 @@ from sqlalchemy import text, inspect, func
 from PIL import Image, ImageOps
 import fitz  # PyMuPDF
 import logging
+from financier_calculs import compute_financier
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -179,11 +179,6 @@ class Chantier(db.Model):
     # own name, sanitized (see chantier_storage_dirname). Tracked explicitly
     # so a rename can locate + move the existing folder instead of losing it.
     storage_dir = db.Column(db.String(150), nullable=True)
-    # "Pas de mesure nécessaire pour ce chantier" — the one opt-out that
-    # clears the missing-mesure warning without requiring a file. Rapport
-    # d'intervention has no equivalent opt-out; it's always required.
-    no_mesure_needed = db.Column(db.Boolean, default=False)
-
     # Relationships
     members = db.relationship('User', secondary=chantier_members, lazy='subquery',
         backref=db.backref('chantiers', lazy=True))
@@ -202,26 +197,25 @@ class Chantier(db.Model):
             'remarque': self.remarque,
             'status': self.status,
             'archived': bool(self.archived),
-            'no_mesure_needed': bool(self.no_mesure_needed),
-            'has_mesure': any(d.category == 'mesure' for d in self.documents),
-            'has_rapport': any(d.category == 'rapport' for d in self.documents),
-            'hours_this_month': round(self._get_hours_this_month(), 2),
+            'hours_total': round(self._get_hours_total(), 2),
             'members': [u.id for u in self.members]
         }
 
-    def _get_hours_this_month(self):
-        """Sum of heures logged this month, regardless of PENDING/VALIDATED
-        status — matches the "total heures" already shown elsewhere (e.g.
-        ChantierDetail's SUIVI tab), which never filtered by status either.
+    def _get_hours_total(self):
+        """Sum of all heures ever logged on this chantier, regardless of
+        PENDING/VALIDATED status — matches the "total heures" already shown
+        elsewhere (e.g. ChantierDetail's SUIVI tab), which never filtered by
+        status either. Was month-scoped before ("ce mois-ci") — simplified to
+        a plain running total, since the month filter made the card show
+        nothing for a chantier whose entries just happen to predate this month.
         Uses a precomputed value if the caller already batched it for a list
         (see manage_chantiers) to avoid one query per chantier; otherwise
         runs a single lightweight SUM aggregate instead of loading this
         chantier's entire entries history just to add up one field."""
-        if hasattr(self, '_hours_this_month_precomputed'):
-            return self._hours_this_month_precomputed
-        month_prefix = datetime.datetime.utcnow().strftime('%Y-%m')
+        if hasattr(self, '_hours_total_precomputed'):
+            return self._hours_total_precomputed
         return db.session.query(func.coalesce(func.sum(Entry.heures), 0.0)).filter(
-            Entry.chantier_id == self.id, Entry.date.like(f'{month_prefix}%')
+            Entry.chantier_id == self.id
         ).scalar()
 
 class Entry(db.Model):
@@ -311,20 +305,16 @@ class Alert(db.Model):
             'is_resolved': self.is_resolved
         }
 
-DOCUMENT_CATEGORIES = ('plan', 'devis', 'photo', 'mesure', 'rapport')
-# Categories whose filename must contain a specific word (case/accent-insensitive)
-# — a lightweight way to keep these two clearly identifiable in the on-disk
-# folder without depending on anyone remembering to name things consistently.
-CATEGORY_FILENAME_REQUIREMENTS = {'mesure': 'mesure', 'rapport': 'rapport'}
+DOCUMENT_CATEGORIES = ('document', 'photo')
 # On-disk subfolder name per category — kept distinct from the API category
 # string in case we ever want to relabel one without a filesystem migration.
-CATEGORY_FOLDERS = {'plan': 'plans', 'devis': 'devis', 'photo': 'photos', 'mesure': 'mesures', 'rapport': 'rapports_intervention'}
+CATEGORY_FOLDERS = {'document': 'documents', 'photo': 'photos'}
 
 class Document(db.Model):
     __tablename__ = 'documents'
     id = db.Column(db.Integer, primary_key=True)
     chantier_id = db.Column(db.Integer, db.ForeignKey('chantiers.id'), nullable=False)
-    category = db.Column(db.String(20), nullable=False)  # plan | devis | photo
+    category = db.Column(db.String(20), nullable=False)  # document | photo
     filename = db.Column(db.String(255), nullable=False)          # name on disk (UUID-based)
     original_filename = db.Column(db.String(255), nullable=False) # name shown to users
     size_bytes = db.Column(db.Integer, default=0)
@@ -334,8 +324,8 @@ class Document(db.Model):
 
     # selectin: one extra batched query for ALL chantiers' documents at once,
     # instead of the default lazy='select' issuing one query per chantier —
-    # to_dict()'s has_mesure/has_rapport check touches .documents on every
-    # chantier in the list (e.g. the dashboard), which was N+1 queries.
+    # archive_chantier_documents() and the zip/export routes touch .documents,
+    # so this avoids N+1 queries when those run across a list of chantiers.
     chantier = db.relationship('Chantier', backref=db.backref('documents', cascade='all, delete-orphan', lazy='selectin'))
     uploaded_by = db.relationship('User')
 
@@ -351,15 +341,121 @@ class Document(db.Model):
             'uploaded_at': self.uploaded_at.isoformat() if self.uploaded_at else None,
         }
 
-def _filename_contains_word(filename, word):
-    """Case/accent-insensitive substring check used to enforce that mesure/
-    rapport uploads are actually named as such (e.g. "Mesures_Cuisine.pdf",
-    "rapport-intervention-12.pdf") — strips accents so "Relevé Mesures.pdf"
-    also matches "mesure"."""
-    def normalize(s):
-        s = unicodedata.normalize('NFKD', s).encode('ascii', 'ignore').decode('ascii')
-        return s.lower()
-    return normalize(word) in normalize(filename)
+# --- Module financier ---
+# Amounts use Float (not Numeric) to match every other money field already in
+# this file (Entry.materiel, etc.) — SQLite has no native DECIMAL type, it
+# would just store as a float anyway.
+ACHAT_TYPES = ('facture', 'estimation_petites_fournitures')
+
+class ChantierFinancier(db.Model):
+    """Le prévisionnel d'un chantier — un seul enregistrement par chantier.
+    Le CA prévisionnel (adjugé/régie/PV clients/...) vit maintenant dans
+    CaLignePrevue — une liste à taille libre (réf. Excel C10:D14) plutôt que
+    3 champs fixes, pour permettre 1 seule ligne ou 5 selon le chantier.
+    Tout le reste (CA réel, achats, marges, écarts) est calculé à la volée
+    par financier_calculs(), jamais stocké — voir ce module pour le détail
+    des formules (copiées du classeur Excel de référence)."""
+    __tablename__ = 'chantier_financiers'
+    id = db.Column(db.Integer, primary_key=True)
+    chantier_id = db.Column(db.Integer, db.ForeignKey('chantiers.id'), nullable=False, unique=True)
+
+    charge_materiel_prevue = db.Column(db.Float, nullable=False, default=0.0)
+    taux_horaire = db.Column(db.Float, nullable=False, default=0.0)
+    pct_petites_fournitures = db.Column(db.Float, nullable=False, default=0.0)
+
+    created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+    chantier = db.relationship('Chantier', backref=db.backref('financier', uselist=False, cascade='all, delete-orphan'))
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'chantier_id': self.chantier_id,
+            'charge_materiel_prevue': self.charge_materiel_prevue,
+            'taux_horaire': self.taux_horaire,
+            'pct_petites_fournitures': self.pct_petites_fournitures,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+class CaLignePrevue(db.Model):
+    """Une ligne du chiffre d'affaires prévisionnel — montant + heures allouées
+    (réf. Excel C10:D14 : adjugé / travaux en régie / PV clients / ...).
+    Liste à taille libre : certains chantiers n'ont qu'une ligne, d'autres
+    davantage (régie facturée en plusieurs fois, etc)."""
+    __tablename__ = 'ca_lignes_prevues'
+    id = db.Column(db.Integer, primary_key=True)
+    chantier_id = db.Column(db.Integer, db.ForeignKey('chantiers.id'), nullable=False)
+    libelle = db.Column(db.String(100), nullable=False)
+    montant = db.Column(db.Float, nullable=False)
+    heures = db.Column(db.Float, nullable=False, default=0.0)
+    created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+
+    chantier = db.relationship('Chantier', backref=db.backref('ca_lignes_prevues', cascade='all, delete-orphan', lazy='selectin'))
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'chantier_id': self.chantier_id,
+            'libelle': self.libelle,
+            'montant': self.montant,
+            'heures': self.heures,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
+
+class Acompte(db.Model):
+    """Un versement facturé et encaissé — le CA réel (réf. Excel F10:G14).
+    `heures` (optionnel) : les heures effectivement travaillées/facturées
+    correspondant à cet acompte — sert à repérer un acompte facturé sans
+    heures notées en face (voir manage_financier / le rouge côté frontend)."""
+    __tablename__ = 'acomptes'
+    id = db.Column(db.Integer, primary_key=True)
+    chantier_id = db.Column(db.Integer, db.ForeignKey('chantiers.id'), nullable=False)
+    libelle = db.Column(db.String(100), nullable=False)
+    montant = db.Column(db.Float, nullable=False)
+    heures = db.Column(db.Float, nullable=False, default=0.0)
+    date = db.Column(db.String(20), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+
+    chantier = db.relationship('Chantier', backref=db.backref('acomptes', cascade='all, delete-orphan', lazy='selectin'))
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'chantier_id': self.chantier_id,
+            'libelle': self.libelle,
+            'montant': self.montant,
+            'heures': self.heures,
+            'date': self.date,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
+
+class AchatMateriel(db.Model):
+    """Un achat matériel réel (réf. Excel F19:G25). type='estimation_petites_fournitures'
+    is the one auto-computed row (montant = charge_materiel_prevue * pct_petites_fournitures,
+    réf. G19=C26*D19) — kept up to date by sync_petites_fournitures(), never hand-edited."""
+    __tablename__ = 'achats_materiel'
+    id = db.Column(db.Integer, primary_key=True)
+    chantier_id = db.Column(db.Integer, db.ForeignKey('chantiers.id'), nullable=False)
+    libelle = db.Column(db.String(150), nullable=False)
+    montant = db.Column(db.Float, nullable=False)
+    date = db.Column(db.String(20), nullable=True)
+    type = db.Column(db.String(30), nullable=False, default='facture')
+    created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+
+    chantier = db.relationship('Chantier', backref=db.backref('achats_materiel', cascade='all, delete-orphan', lazy='selectin'))
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'chantier_id': self.chantier_id,
+            'libelle': self.libelle,
+            'montant': self.montant,
+            'date': self.date,
+            'type': self.type,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
 
 def sanitize_folder_name(name):
     """Make a chantier name safe to use as a filesystem folder name."""
@@ -519,7 +615,6 @@ def init_db():
                     'archived': "BOOLEAN DEFAULT 0",
                     'archive_zip_path': "VARCHAR(255)",
                     'storage_dir': "VARCHAR(150)",
-                    'no_mesure_needed': "BOOLEAN DEFAULT 0",
                 }
                 for col_name, col_type in new_cols.items():
                     if col_name not in cols:
@@ -555,12 +650,73 @@ def init_db():
                     conn.execute(text("ALTER TABLE leaves ADD COLUMN admin_note TEXT"))
                     conn.commit()
 
+            # 5. Acomptes Table — heures facturées en face de ce versement
+            # (repéré côté frontend quand c'est resté à 0 alors qu'un montant a été noté)
+            if 'acomptes' in existing_tables:
+                cols = [c['name'] for c in inspector.get_columns('acomptes')]
+                if 'heures' not in cols:
+                    logger.info("Migrating acomptes: adding heures")
+                    conn.execute(text("ALTER TABLE acomptes ADD COLUMN heures FLOAT DEFAULT 0"))
+                    conn.commit()
+
+        # One-time migration: CA prévisionnel était 3 champs fixes sur
+        # chantier_financiers (montant_adjuge/heures_adjugees, montant_regie/
+        # heures_regie, montant_pv_clients/heures_pv_clients) — remplacés par
+        # une liste à taille libre (CaLignePrevue) pour permettre 1 ligne ou 5
+        # selon le chantier. Ces colonnes existent encore sur les tables déjà
+        # créées (jamais supprimées, juste abandonnées côté modèle) — on les
+        # relit une dernière fois en SQL brut pour semer les lignes initiales.
+        if 'chantier_financiers' in existing_tables:
+            fin_cols = {c['name'] for c in inspector.get_columns('chantier_financiers')}
+            legacy_ca_cols = {'montant_adjuge', 'heures_adjugees', 'montant_regie', 'heures_regie', 'montant_pv_clients', 'heures_pv_clients'}
+            if legacy_ca_cols.issubset(fin_cols):
+                with db.engine.connect() as legacy_conn:
+                    legacy_rows = legacy_conn.execute(text(
+                        "SELECT chantier_id, montant_adjuge, heures_adjugees, montant_regie, heures_regie, "
+                        "montant_pv_clients, heures_pv_clients FROM chantier_financiers"
+                    )).fetchall()
+                seed_specs = [
+                    ('Adjugé', 1, 2), ('Travaux en régie', 3, 4), ('PV clients', 5, 6),
+                ]
+                migrated = 0
+                for row in legacy_rows:
+                    chantier_id = row[0]
+                    if CaLignePrevue.query.filter_by(chantier_id=chantier_id).first():
+                        continue  # déjà migré (ou des lignes existent déjà pour ce chantier)
+                    for libelle, montant_idx, heures_idx in seed_specs:
+                        montant = row[montant_idx] or 0
+                        heures = row[heures_idx] or 0
+                        if not montant and not heures:
+                            continue
+                        db.session.add(CaLignePrevue(chantier_id=chantier_id, libelle=libelle, montant=montant, heures=heures))
+                        migrated += 1
+                if migrated:
+                    db.session.commit()
+                    logger.info(f"Migrated {migrated} CA prévisionnel line(s) into ca_lignes_prevues")
+
+        # One-time migration: the old Plan/Devis/Mesures/Rapports categories
+        # were merged into a single "document" category — move each affected
+        # file into the new documents/ subfolder and relabel its row. uuid-based
+        # filenames never collide, so folders merge safely.
+        legacy_folders = {'plan': 'plans', 'devis': 'devis', 'mesure': 'mesures', 'rapport': 'rapports_intervention'}
+        legacy_docs = Document.query.filter(Document.category.in_(legacy_folders.keys())).all()
+        for doc in legacy_docs:
+            old_dir = os.path.join(chantier_storage_dir(doc.chantier), legacy_folders[doc.category])
+            old_path = os.path.join(old_dir, doc.filename)
+            new_dir = category_dir(doc.chantier, 'document')
+            if os.path.isfile(old_path):
+                shutil.move(old_path, os.path.join(new_dir, doc.filename))
+            doc.category = 'document'
+        if legacy_docs:
+            db.session.commit()
+            logger.info(f"Migrated {len(legacy_docs)} document(s) into the unified 'document' category")
+
         # One-time migration: fold each chantier's old single plan_pdf_path
         # file into the new multi-document (Plan/Devis/Photos) system, so the
         # unified file explorer shows plans that were uploaded before it existed.
         for chantier in Chantier.query.filter(Chantier.plan_pdf_path.isnot(None)).all():
             already_migrated = Document.query.filter_by(
-                chantier_id=chantier.id, category='plan', original_filename=chantier.plan_pdf_path
+                chantier_id=chantier.id, category='document', original_filename=chantier.plan_pdf_path
             ).first()
             if already_migrated:
                 continue
@@ -568,11 +724,11 @@ def init_db():
             if not os.path.isfile(old_path):
                 continue
             new_filename = f"{uuid.uuid4().hex}.pdf"
-            dest_dir = category_dir(chantier, 'plan')
+            dest_dir = category_dir(chantier, 'document')
             shutil.copy2(old_path, os.path.join(dest_dir, new_filename))
             db.session.add(Document(
                 chantier_id=chantier.id,
-                category='plan',
+                category='document',
                 filename=new_filename,
                 original_filename=chantier.plan_pdf_path,
                 size_bytes=os.path.getsize(old_path),
@@ -827,17 +983,15 @@ def manage_chantiers(current_user):
         
         chantiers = query.all()
 
-        # Batch hours_this_month for the whole list in one grouped query
-        # instead of letting each chantier's to_dict() run its own —
-        # avoids reintroducing the N+1 pattern already fixed once here.
-        month_prefix = datetime.datetime.utcnow().strftime('%Y-%m')
+        # Batch hours_total for the whole list in one grouped query instead
+        # of letting each chantier's to_dict() run its own — avoids
+        # reintroducing the N+1 pattern already fixed once here.
         hours_by_chantier = dict(
             db.session.query(Entry.chantier_id, func.sum(Entry.heures))
-            .filter(Entry.date.like(f'{month_prefix}%'))
             .group_by(Entry.chantier_id).all()
         )
         for c in chantiers:
-            c._hours_this_month_precomputed = hours_by_chantier.get(c.id, 0.0)
+            c._hours_total_precomputed = hours_by_chantier.get(c.id, 0.0)
 
         return jsonify([c.to_dict() for c in chantiers])
 
@@ -886,25 +1040,7 @@ def chantier_detail(current_user, chantier_id):
         chantier.date_start = data.get('date_start', chantier.date_start)
         chantier.date_end = data.get('date_end', chantier.date_end)
         chantier.remarque = data.get('remarque', chantier.remarque)
-        chantier.no_mesure_needed = data.get('no_mesure_needed', chantier.no_mesure_needed)
         new_status = data.get('status', chantier.status)
-
-        # Can't close a chantier while a required document is missing —
-        # rapport d'intervention always, mesures unless explicitly marked
-        # not needed. Checked after applying no_mesure_needed above so
-        # ticking the box and closing in the same request works.
-        if new_status == 'DONE' and previous_status != 'DONE':
-            missing = []
-            has_rapport = any(d.category == 'rapport' for d in chantier.documents)
-            has_mesure = any(d.category == 'mesure' for d in chantier.documents)
-            if not has_rapport:
-                missing.append("le rapport d'intervention")
-            if not has_mesure and not chantier.no_mesure_needed:
-                missing.append("les mesures")
-            if missing:
-                db.session.rollback()
-                return jsonify({'error': f"Impossible de clôturer : il manque {' et '.join(missing)}."}), 409
-
         chantier.status = new_status
 
         # Closing a chantier archives its document folder (zipped + originals
@@ -1005,20 +1141,12 @@ def manage_documents(current_user, id):
     category = request.form.get('category')
     if category not in DOCUMENT_CATEGORIES:
         return jsonify({'error': 'Invalid category'}), 400
-    # Plans/devis are contractual documents — admin only. Photos, mesures and
-    # rapports d'intervention are field deliverables — any worker can add them.
-    if category in ('plan', 'devis') and current_user.role != 'admin':
-        return jsonify({'error': 'Admin access required'}), 403
 
     if 'file' not in request.files or request.files['file'].filename == '':
         return jsonify({'error': 'No file provided'}), 400
     file = request.files['file']
 
-    required_word = CATEGORY_FILENAME_REQUIREMENTS.get(category)
-    if required_word and not _filename_contains_word(file.filename, required_word):
-        return jsonify({'error': f'Le nom du fichier doit contenir le mot "{required_word}"'}), 400
-
-    if category in ('plan', 'devis', 'mesure', 'rapport'):
+    if category == 'document':
         if not file.filename.lower().endswith('.pdf'):
             return jsonify({'error': 'Only PDF files are allowed'}), 400
         header = file.read(5)
@@ -1057,6 +1185,26 @@ def manage_documents(current_user, id):
     db.session.add(doc)
     db.session.commit()
     return jsonify(doc.to_dict()), 201
+
+@app.route('/api/chantiers/<int:id>/documents/category', methods=['DELETE'])
+@token_required
+def delete_documents_category(current_user, id):
+    """Empty one whole folder (Documents or Photos) for a chantier — the
+    "delete folder" action in the explorer. Individual-file delete already
+    exists on document_detail; this just loops it under one admin check."""
+    if current_user.role != 'admin':
+        return jsonify({'error': 'Admin access required'}), 403
+    category = request.args.get('category')
+    if category not in DOCUMENT_CATEGORIES:
+        return jsonify({'error': 'Invalid category'}), 400
+    docs = Document.query.filter_by(chantier_id=id, category=category).all()
+    for doc in docs:
+        disk_path = document_disk_path(doc)
+        if os.path.isfile(disk_path):
+            os.remove(disk_path)
+        db.session.delete(doc)
+    db.session.commit()
+    return jsonify({'message': f'{len(docs)} fichier(s) supprimé(s)'})
 
 @app.route('/api/documents/<int:doc_id>', methods=['GET', 'DELETE'])
 @token_required
@@ -1448,6 +1596,296 @@ def manage_single_alert(current_user, alert_id):
         db.session.commit()
         return jsonify(alert.to_dict())
 
+# --- Module financier ---
+# Admin-only across the board — margins/costs are the most sensitive business
+# data in the app (same tier as the old plan/devis contractual documents).
+
+def _parse_amount(data, key, required, default=0.0):
+    """Pull a numeric field out of a request body: required -> 400 if absent,
+    optional -> falls back to `default`. Either way, rejects non-numbers and
+    negatives (400) rather than letting a bad value hit the DB."""
+    if key not in data or data.get(key) is None:
+        if required:
+            return None, (jsonify({'error': f'{key} is required'}), 400)
+        return default, None
+    try:
+        value = float(data[key])
+    except (TypeError, ValueError):
+        return None, (jsonify({'error': f'{key} must be a number'}), 400)
+    if value < 0:
+        return None, (jsonify({'error': f'{key} cannot be negative'}), 400)
+    return value, None
+
+def _parse_iso_date(data, key, required):
+    if key not in data or not data.get(key):
+        if required:
+            return None, (jsonify({'error': f'{key} is required'}), 400)
+        return None, None
+    try:
+        datetime.date.fromisoformat(data[key])
+    except (TypeError, ValueError):
+        return None, (jsonify({'error': f'{key} must be an ISO date (YYYY-MM-DD)'}), 400)
+    return data[key], None
+
+def sync_petites_fournitures(chantier_id, financier):
+    """Keep the one estimation_petites_fournitures achat row in sync with
+    charge_materiel_prevue * pct_petites_fournitures (réf. Excel G19=C26*D19).
+    Creates it on first use, otherwise just updates the amount — never touched
+    by the achats CRUD routes directly."""
+    row = AchatMateriel.query.filter_by(chantier_id=chantier_id, type='estimation_petites_fournitures').first()
+    montant = financier.charge_materiel_prevue * financier.pct_petites_fournitures
+    if row:
+        row.montant = montant
+    else:
+        db.session.add(AchatMateriel(
+            chantier_id=chantier_id,
+            libelle='Petites fournitures (estimation automatique)',
+            montant=montant,
+            type='estimation_petites_fournitures',
+        ))
+    db.session.commit()
+
+def _financier_payload(chantier_id):
+    """Shared by GET and PUT /financier — the full prévisionnel/réel/écart
+    structure, ready to render with no client-side recomputation."""
+    financier = ChantierFinancier.query.filter_by(chantier_id=chantier_id).first()
+    ca_lignes = CaLignePrevue.query.filter_by(chantier_id=chantier_id).order_by(CaLignePrevue.id).all()
+    acomptes = Acompte.query.filter_by(chantier_id=chantier_id).order_by(Acompte.date.desc()).all()
+    achats = AchatMateriel.query.filter_by(chantier_id=chantier_id).all()
+    payload = {
+        'chantier_id': chantier_id,
+        'financier': financier.to_dict() if financier else None,
+        'ca_lignes': [l.to_dict() for l in ca_lignes],
+        'acomptes': [a.to_dict() for a in acomptes],
+        'achats': [a.to_dict() for a in achats],
+    }
+    if financier:
+        heures_reelles = db.session.query(func.coalesce(func.sum(Entry.heures), 0.0)).filter(
+            Entry.chantier_id == chantier_id
+        ).scalar()
+        payload.update(compute_financier(
+            ca_lignes_montants=[l.montant for l in ca_lignes],
+            ca_lignes_heures=[l.heures for l in ca_lignes],
+            charge_materiel_prevue=financier.charge_materiel_prevue,
+            taux_horaire=financier.taux_horaire,
+            acomptes_montants=[a.montant for a in acomptes],
+            achats_montants=[a.montant for a in achats],
+            heures_reelles=heures_reelles,
+        ))
+    return payload
+
+@app.route('/api/chantiers/<int:chantier_id>/financier', methods=['GET', 'PUT'])
+@token_required
+def manage_financier(current_user, chantier_id):
+    if current_user.role != 'admin':
+        return jsonify({'error': 'Admin access required'}), 403
+    if not db.session.get(Chantier, chantier_id):
+        return jsonify({'error': 'Chantier not found'}), 404
+
+    if request.method == 'GET':
+        return jsonify(_financier_payload(chantier_id))
+
+    # PUT — upsert: first call creates the prévisionnel, later calls update it.
+    # Le CA prévisionnel n'est plus ici (voir /ca_lignes) — il ne reste que le
+    # matériel/taux horaire, donc plus aucun champ n'est obligatoire : un
+    # prévisionnel peut se créer "vide" puis se remplir via les lignes CA.
+    data = request.json or {}
+    financier = ChantierFinancier.query.filter_by(chantier_id=chantier_id).first()
+
+    charge_materiel_prevue, err = _parse_amount(data, 'charge_materiel_prevue', required=False, default=financier.charge_materiel_prevue if financier else 0.0)
+    if err: return err
+    taux_horaire, err = _parse_amount(data, 'taux_horaire', required=False, default=financier.taux_horaire if financier else 0.0)
+    if err: return err
+    pct_petites_fournitures, err = _parse_amount(data, 'pct_petites_fournitures', required=False, default=financier.pct_petites_fournitures if financier else 0.0)
+    if err: return err
+
+    materiel_or_pct_changed = financier is None or (
+        financier.charge_materiel_prevue != charge_materiel_prevue
+        or financier.pct_petites_fournitures != pct_petites_fournitures
+    )
+
+    if not financier:
+        financier = ChantierFinancier(chantier_id=chantier_id)
+        db.session.add(financier)
+
+    financier.charge_materiel_prevue = charge_materiel_prevue
+    financier.taux_horaire = taux_horaire
+    financier.pct_petites_fournitures = pct_petites_fournitures
+    db.session.commit()
+
+    if materiel_or_pct_changed:
+        sync_petites_fournitures(chantier_id, financier)
+
+    return jsonify(_financier_payload(chantier_id))
+
+@app.route('/api/chantiers/<int:chantier_id>/ca_lignes', methods=['POST'])
+@token_required
+def create_ca_ligne(current_user, chantier_id):
+    if current_user.role != 'admin':
+        return jsonify({'error': 'Admin access required'}), 403
+    if not db.session.get(Chantier, chantier_id):
+        return jsonify({'error': 'Chantier not found'}), 404
+    if not ChantierFinancier.query.filter_by(chantier_id=chantier_id).first():
+        return jsonify({'error': 'Configurez le prévisionnel avant d\'ajouter une ligne de CA'}), 409
+
+    data = request.json or {}
+    if not (data.get('libelle') or '').strip():
+        return jsonify({'error': 'libelle is required'}), 400
+    montant, err = _parse_amount(data, 'montant', required=True)
+    if err: return err
+    heures, err = _parse_amount(data, 'heures', required=False, default=0.0)
+    if err: return err
+
+    ligne = CaLignePrevue(chantier_id=chantier_id, libelle=data['libelle'].strip(), montant=montant, heures=heures)
+    db.session.add(ligne)
+    db.session.commit()
+    return jsonify(ligne.to_dict()), 201
+
+@app.route('/api/chantiers/<int:chantier_id>/ca_lignes/<int:ligne_id>', methods=['PUT', 'DELETE'])
+@token_required
+def ca_ligne_detail(current_user, chantier_id, ligne_id):
+    if current_user.role != 'admin':
+        return jsonify({'error': 'Admin access required'}), 403
+    ligne = CaLignePrevue.query.filter_by(id=ligne_id, chantier_id=chantier_id).first()
+    if not ligne:
+        return jsonify({'error': 'Ligne not found'}), 404
+
+    if request.method == 'DELETE':
+        db.session.delete(ligne)
+        db.session.commit()
+        return jsonify({'message': 'Ligne deleted'})
+
+    data = request.json or {}
+    if 'libelle' in data:
+        if not (data.get('libelle') or '').strip():
+            return jsonify({'error': 'libelle cannot be empty'}), 400
+        ligne.libelle = data['libelle'].strip()
+    if 'montant' in data:
+        montant, err = _parse_amount(data, 'montant', required=True)
+        if err: return err
+        ligne.montant = montant
+    if 'heures' in data:
+        heures, err = _parse_amount(data, 'heures', required=True)
+        if err: return err
+        ligne.heures = heures
+    db.session.commit()
+    return jsonify(ligne.to_dict())
+
+@app.route('/api/chantiers/<int:chantier_id>/acomptes', methods=['POST'])
+@token_required
+def create_acompte(current_user, chantier_id):
+    if current_user.role != 'admin':
+        return jsonify({'error': 'Admin access required'}), 403
+    if not db.session.get(Chantier, chantier_id):
+        return jsonify({'error': 'Chantier not found'}), 404
+
+    data = request.json or {}
+    if not (data.get('libelle') or '').strip():
+        return jsonify({'error': 'libelle is required'}), 400
+    montant, err = _parse_amount(data, 'montant', required=True)
+    if err: return err
+    heures, err = _parse_amount(data, 'heures', required=False, default=0.0)
+    if err: return err
+    date, err = _parse_iso_date(data, 'date', required=True)
+    if err: return err
+
+    acompte = Acompte(chantier_id=chantier_id, libelle=data['libelle'].strip(), montant=montant, heures=heures, date=date)
+    db.session.add(acompte)
+    db.session.commit()
+    return jsonify(acompte.to_dict()), 201
+
+@app.route('/api/chantiers/<int:chantier_id>/acomptes/<int:acompte_id>', methods=['PUT', 'DELETE'])
+@token_required
+def acompte_detail(current_user, chantier_id, acompte_id):
+    if current_user.role != 'admin':
+        return jsonify({'error': 'Admin access required'}), 403
+    acompte = Acompte.query.filter_by(id=acompte_id, chantier_id=chantier_id).first()
+    if not acompte:
+        return jsonify({'error': 'Acompte not found'}), 404
+
+    if request.method == 'DELETE':
+        db.session.delete(acompte)
+        db.session.commit()
+        return jsonify({'message': 'Acompte deleted'})
+
+    data = request.json or {}
+    if 'libelle' in data:
+        if not (data.get('libelle') or '').strip():
+            return jsonify({'error': 'libelle cannot be empty'}), 400
+        acompte.libelle = data['libelle'].strip()
+    if 'montant' in data:
+        montant, err = _parse_amount(data, 'montant', required=True)
+        if err: return err
+        acompte.montant = montant
+    if 'heures' in data:
+        heures, err = _parse_amount(data, 'heures', required=True)
+        if err: return err
+        acompte.heures = heures
+    if 'date' in data:
+        date, err = _parse_iso_date(data, 'date', required=True)
+        if err: return err
+        acompte.date = date
+    db.session.commit()
+    return jsonify(acompte.to_dict())
+
+@app.route('/api/chantiers/<int:chantier_id>/achats', methods=['POST'])
+@token_required
+def create_achat(current_user, chantier_id):
+    if current_user.role != 'admin':
+        return jsonify({'error': 'Admin access required'}), 403
+    if not db.session.get(Chantier, chantier_id):
+        return jsonify({'error': 'Chantier not found'}), 404
+
+    data = request.json or {}
+    requested_type = data.get('type', 'facture')
+    if requested_type == 'estimation_petites_fournitures':
+        return jsonify({'error': "La ligne 'estimation_petites_fournitures' est calculée automatiquement, elle ne peut pas être créée manuellement"}), 400
+    if requested_type not in ACHAT_TYPES:
+        return jsonify({'error': f'type must be one of {ACHAT_TYPES}'}), 400
+    if not (data.get('libelle') or '').strip():
+        return jsonify({'error': 'libelle is required'}), 400
+    montant, err = _parse_amount(data, 'montant', required=True)
+    if err: return err
+    date, err = _parse_iso_date(data, 'date', required=False)
+    if err: return err
+
+    achat = AchatMateriel(chantier_id=chantier_id, libelle=data['libelle'].strip(), montant=montant, date=date, type=requested_type)
+    db.session.add(achat)
+    db.session.commit()
+    return jsonify(achat.to_dict()), 201
+
+@app.route('/api/chantiers/<int:chantier_id>/achats/<int:achat_id>', methods=['PUT', 'DELETE'])
+@token_required
+def achat_detail(current_user, chantier_id, achat_id):
+    if current_user.role != 'admin':
+        return jsonify({'error': 'Admin access required'}), 403
+    achat = AchatMateriel.query.filter_by(id=achat_id, chantier_id=chantier_id).first()
+    if not achat:
+        return jsonify({'error': 'Achat not found'}), 404
+    if achat.type == 'estimation_petites_fournitures':
+        return jsonify({'error': "La ligne 'estimation_petites_fournitures' est gérée automatiquement (modifiable uniquement via charge_materiel_prevue / pct_petites_fournitures)"}), 400
+
+    if request.method == 'DELETE':
+        db.session.delete(achat)
+        db.session.commit()
+        return jsonify({'message': 'Achat deleted'})
+
+    data = request.json or {}
+    if 'libelle' in data:
+        if not (data.get('libelle') or '').strip():
+            return jsonify({'error': 'libelle cannot be empty'}), 400
+        achat.libelle = data['libelle'].strip()
+    if 'montant' in data:
+        montant, err = _parse_amount(data, 'montant', required=True)
+        if err: return err
+        achat.montant = montant
+    if 'date' in data:
+        date, err = _parse_iso_date(data, 'date', required=False)
+        if err: return err
+        achat.date = date
+    db.session.commit()
+    return jsonify(achat.to_dict())
+
 def csv_safe(value):
     """Neutralize CSV/formula injection: Excel/Sheets execute a cell starting
     with =, +, -, @, tab or CR as a formula when the file is opened. Any of
@@ -1611,6 +2049,89 @@ def get_stats(current_user):
             'hours_last': round(total_hours_last, 1)
         }
     })
+
+@app.route('/api/stats/financier', methods=['GET'])
+@token_required
+def get_financier_stats(current_user):
+    """Vue agrégée du module financier sur tous les chantiers qui ont un
+    prévisionnel configuré — alimente la page Statistiques (marge par
+    chantier, avancement global, CA prévu/réel). Réutilise compute_financier()
+    chantier par chantier, jamais un calcul dupliqué ici."""
+    if current_user.role != 'admin':
+        return jsonify({'error': 'Admin access required'}), 403
+
+    from collections import defaultdict
+
+    financiers = ChantierFinancier.query.all()
+    if not financiers:
+        return jsonify({'chantiers': [], 'totals': None})
+
+    chantier_ids = [f.chantier_id for f in financiers]
+    chantiers_by_id = {c.id: c for c in Chantier.query.filter(Chantier.id.in_(chantier_ids)).all()}
+
+    ca_lignes_by = defaultdict(list)
+    for l in CaLignePrevue.query.filter(CaLignePrevue.chantier_id.in_(chantier_ids)).all():
+        ca_lignes_by[l.chantier_id].append(l)
+    acomptes_by = defaultdict(list)
+    for a in Acompte.query.filter(Acompte.chantier_id.in_(chantier_ids)).all():
+        acomptes_by[a.chantier_id].append(a)
+    achats_by = defaultdict(list)
+    for a in AchatMateriel.query.filter(AchatMateriel.chantier_id.in_(chantier_ids)).all():
+        achats_by[a.chantier_id].append(a)
+    heures_by = dict(
+        db.session.query(Entry.chantier_id, func.sum(Entry.heures))
+        .filter(Entry.chantier_id.in_(chantier_ids))
+        .group_by(Entry.chantier_id).all()
+    )
+
+    per_chantier = []
+    for fin in financiers:
+        cid = fin.chantier_id
+        chantier = chantiers_by_id.get(cid)
+        if not chantier:
+            continue  # chantier deleted but its financier row lingered somehow
+        calc = compute_financier(
+            ca_lignes_montants=[l.montant for l in ca_lignes_by.get(cid, [])],
+            ca_lignes_heures=[l.heures for l in ca_lignes_by.get(cid, [])],
+            charge_materiel_prevue=fin.charge_materiel_prevue,
+            taux_horaire=fin.taux_horaire,
+            acomptes_montants=[a.montant for a in acomptes_by.get(cid, [])],
+            achats_montants=[a.montant for a in achats_by.get(cid, [])],
+            heures_reelles=heures_by.get(cid, 0.0),
+        )
+        per_chantier.append({'id': cid, 'nom': chantier.nom, 'status': chantier.status, **calc})
+
+    def safe_div(n, d):
+        return round(n / d, 4) if d else None
+
+    def total(key):
+        return round(sum(c[key] for c in per_chantier), 2)
+
+    totals = {
+        'chantiers_count': len(per_chantier),
+        'chantiers_positive_marge': sum(1 for c in per_chantier if c['marge_reelle'] >= 0),
+        'chantiers_negative_marge': sum(1 for c in per_chantier if c['marge_reelle'] < 0),
+        'ca_prevu': total('ca_prevu'),
+        'ca_reel': total('ca_reel'),
+        'charge_materiel_prevue': round(sum(f.charge_materiel_prevue for f in financiers), 2),
+        'total_achats_reel': total('total_achats_reel'),
+        'cout_mo_prevu': total('cout_mo_prevu'),
+        'cout_mo_reel': total('cout_mo_reel'),
+        'debourse_sec_prevu': total('debourse_sec_prevu'),
+        'debourse_sec_reel': total('debourse_sec_reel'),
+        'marge_prevue': total('marge_prevue'),
+        'marge_reelle': total('marge_reelle'),
+    }
+    # Ratios calculés sur les SOMMES (pas une moyenne des ratios par chantier)
+    # — un grand chantier ne doit pas peser autant qu'un petit dans le taux global.
+    totals['pct_marge_reelle'] = safe_div(totals['marge_reelle'], totals['ca_reel'])
+    totals['pct_avancement_ca'] = safe_div(totals['ca_reel'], totals['ca_prevu'])
+    totals['pct_avancement_materiel'] = safe_div(totals['total_achats_reel'], totals['charge_materiel_prevue'])
+    totals['pct_avancement_mo'] = safe_div(totals['cout_mo_reel'], totals['cout_mo_prevu'])
+    totals['pct_avancement_debourse_sec'] = safe_div(totals['debourse_sec_reel'], totals['debourse_sec_prevu'])
+
+    per_chantier.sort(key=lambda c: c['marge_reelle'], reverse=True)
+    return jsonify({'chantiers': per_chantier, 'totals': totals})
 
 # Error handlers: never leak a raw traceback to the client, always JSON.
 from sqlalchemy.exc import IntegrityError

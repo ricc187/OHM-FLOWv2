@@ -1,6 +1,6 @@
 import { Chantier } from '../types';
 import { StatusBadge } from './StatusBadge';
-import { AlertTriangle, Clock } from 'lucide-react';
+import { Clock } from 'lucide-react';
 
 interface ChantierCardProps {
     chantier: Chantier;
@@ -8,30 +8,12 @@ interface ChantierCardProps {
 }
 
 export const ChantierCard = ({ chantier, onClick }: ChantierCardProps) => {
-    const missing: string[] = [];
-    if (!chantier.has_rapport) missing.push("rapport d'intervention");
-    if (!chantier.has_mesure && !chantier.no_mesure_needed) missing.push('mesures');
-
     return (
         <div
             onClick={onClick}
             className="group relative glass-panel p-8 cursor-pointer hover-card overflow-hidden hover:bg-white/80 transition-all duration-500"
         >
             <div className="absolute top-0 right-0 p-6 z-10 flex items-center gap-2">
-                {missing.length > 0 && (
-                    /* This badge sits inline next to StatusBadge in a flex row —
-                       not floating over a trigger icon — so it stays in normal
-                       flow (position: static overrides .t-badge's own absolute
-                       positioning) and only borrows the dot's pop-in animation. */
-                    <div className="t-badge" data-open="true" style={{ position: 'static' }}>
-                        <div
-                            className="t-badge-dot w-7 h-7 rounded-full bg-red-600 text-white flex items-center justify-center shrink-0 shadow-[0_0_10px_rgba(220,38,38,0.6)] animate-pulse"
-                            title={`Manque : ${missing.join(', ')}`}
-                        >
-                            <AlertTriangle size={14} />
-                        </div>
-                    </div>
-                )}
                 <StatusBadge status={chantier.status} type="chantier" />
             </div>
 
@@ -63,19 +45,12 @@ export const ChantierCard = ({ chantier, onClick }: ChantierCardProps) => {
                     </div>
                 )}
 
-                {typeof chantier.hours_this_month === 'number' && chantier.hours_this_month > 0 && (
+                {typeof chantier.hours_total === 'number' && chantier.hours_total > 0 && (
                     <div className="flex items-center gap-3 p-2 rounded-lg">
                         <Clock size={20} className="shrink-0 text-primary/50" />
                         <span className="font-mono text-xs">
-                            <span className="font-bold text-slate-900">{chantier.hours_this_month} h</span> ce mois-ci
+                            <span className="font-bold text-slate-900">{chantier.hours_total} h</span> au total
                         </span>
-                    </div>
-                )}
-
-                {missing.length > 0 && (
-                    <div className="flex items-center gap-2 p-2.5 rounded-lg bg-red-600 text-white shadow-[0_0_10px_rgba(220,38,38,0.4)]">
-                        <AlertTriangle size={16} className="shrink-0" />
-                        <span className="text-xs font-bold uppercase tracking-wide">Manque : {missing.join(' et ')}</span>
                     </div>
                 )}
             </div>

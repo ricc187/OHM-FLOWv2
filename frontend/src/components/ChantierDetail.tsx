@@ -1,14 +1,16 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Chantier, Entry, User } from '../types';
-import { Plus, Minus, X, ArrowLeft, Clock, Calendar, Info, Pencil, Download, FileText, Receipt, Camera, FolderOpen, Lock, Unlock, Loader2, Ruler, ClipboardList, AlertTriangle } from 'lucide-react';
+import { Plus, Minus, X, ArrowLeft, Clock, Calendar, Info, Pencil, Download, Camera, FolderOpen, Lock, Unlock, Loader2, AlertTriangle, Wallet } from 'lucide-react';
 import { StatusBadge } from './StatusBadge';
 import { AwesomeDatePicker } from './ui/AwesomeDatePicker';
 import { AwesomeSelect } from './ui/AwesomeSelect';
 import { DocumentExplorer } from './DocumentExplorer';
+import { FinancesTab } from './FinancesTab';
 import { api } from '../api';
 import { setAppModalOpen } from '../modalState';
 import { useEscapeKey } from '../hooks/useEscapeKey';
 import { useMountTransition } from '../hooks/useMountTransition';
+import { useAutoRefresh } from '../hooks/useAutoRefresh';
 import { queueEntry } from '../offlineQueue';
 import { SlidingTabs } from './ui/SlidingTabs';
 
@@ -18,7 +20,7 @@ interface Props {
     onBack: () => void;
 }
 
-type Tab = 'SUIVI' | 'INFO';
+type Tab = 'SUIVI' | 'INFO' | 'FINANCES';
 
 export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, currentUser, onBack }) => {
     const [chantier, setChantier] = useState(initialChantier);
@@ -28,21 +30,17 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
     // Suivi Modal
     const [showEntryModal, setShowEntryModal] = useState(false);
     // Combined Entry Mode
-    const [entryForm, setEntryForm] = useState({ heures: '', materiel: '' });
+    const [entryForm, setEntryForm] = useState({ heures: '' });
     const [entryDate, setEntryDate] = useState(new Date().toISOString().split('T')[0]);
 
     // Edit Modal
     const [showEditModal, setShowEditModal] = useState(false);
     const [editForm, setEditForm] = useState(initialChantier);
 
-    // Documents (plans / devis / photos / mesures / rapports d'intervention)
+    // Documents (fichiers PDF / photos)
     const [showExplorer, setShowExplorer] = useState(false);
-    const [uploadingCategory, setUploadingCategory] = useState<'plan' | 'devis' | 'photo' | 'mesure' | 'rapport' | null>(null);
-    const planInputRef = useRef<HTMLInputElement>(null);
-    const devisInputRef = useRef<HTMLInputElement>(null);
+    const [uploadingCategory, setUploadingCategory] = useState<'photo' | null>(null);
     const photoInputRef = useRef<HTMLInputElement>(null);
-    const mesureInputRef = useRef<HTMLInputElement>(null);
-    const rapportInputRef = useRef<HTMLInputElement>(null);
 
     // Closing is blocked server-side while a required document is missing —
     // shows the reason as a small popup instead of failing silently.
@@ -90,6 +88,12 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
         }
     };
 
+    // Keep this screen honest while it stays open — someone else logging
+    // heures or editing the chantier elsewhere shouldn't require a manual
+    // reload to show up here. Paused while a modal is open so a background
+    // refetch never overwrites an edit form mid-type.
+    useAutoRefresh(fetchDetails, 20000, !anyModalOpen);
+
     const handleEditSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         const res = await api.put(`/api/chantiers/${chantier.id}`, editForm);
@@ -112,32 +116,26 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
         }
     };
 
-    const handleToggleNoMesureNeeded = async (value: boolean) => {
-        const res = await api.put(`/api/chantiers/${chantier.id}`, { no_mesure_needed: value });
-        if (res.ok) setChantier(await res.json());
-    };
-
     // --- Entry Logic (Suivi) ---
     const handleEntrySubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         const h = parseFloat(entryForm.heures) || 0;
-        const m = parseFloat(entryForm.materiel) || 0;
 
-        if (h === 0 && m === 0) return;
+        if (h === 0) return;
 
         const payload = {
             user_id: currentUser.id,
             chantier_id: chantier.id,
             date: entryDate,
             heures: h,
-            materiel: m,
+            materiel: 0,
             created_by_id: currentUser.id
         };
 
         try {
             const res = await api.post('/api/entries', payload);
             if (res.ok) {
-                setEntryForm({ heures: '', materiel: '' });
+                setEntryForm({ heures: '' });
                 setShowEntryModal(false);
                 fetchDetails();
             } else {
@@ -149,7 +147,7 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
             // instead of losing what was just typed; it sends automatically
             // once the connection comes back.
             queueEntry({ ...payload, chantier_nom: chantier.nom });
-            setEntryForm({ heures: '', materiel: '' });
+            setEntryForm({ heures: '' });
             setShowEntryModal(false);
         }
     };
@@ -174,17 +172,17 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
         }
     };
 
-    // --- Document Logic (Plans / Devis / Photos / Mesures / Rapports) ---
-    const uploadDocument = async (category: 'plan' | 'devis' | 'photo' | 'mesure' | 'rapport', file: File) => {
+    // --- Document Logic (Photos — the "Dossiers" explorer handles PDFs) ---
+    const uploadDocument = async (category: 'photo', file: File) => {
         const formData = new FormData();
         formData.append('category', category);
         formData.append('file', file);
         return api.upload(`/api/chantiers/${chantier.id}/documents`, formData);
     };
 
-    // Plan/Devis/Mesure/Rapport: one PDF at a time. Photos: the picker allows
-    // selecting several at once (from the phone's own gallery), uploaded one by one.
-    const handleDocumentInputChange = async (category: 'plan' | 'devis' | 'photo' | 'mesure' | 'rapport', e: React.ChangeEvent<HTMLInputElement>) => {
+    // The picker allows selecting several photos at once (from the phone's
+    // own gallery), uploaded one by one.
+    const handleDocumentInputChange = async (category: 'photo', e: React.ChangeEvent<HTMLInputElement>) => {
         const files = Array.from(e.target.files || []);
         e.target.value = ''; // allow re-selecting the same file(s) later
         if (!files.length) return;
@@ -200,13 +198,15 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
         }
         setUploadingCategory(null);
         if (errors.length > 0) alert(errors.join('\n'));
-        fetchDetails(); // refresh has_mesure/has_rapport so the buttons' red state updates
     };
 
     const totalHeures = entries.reduce((acc, curr) => acc + curr.heures, 0);
-    const totalMateriel = entries.reduce((acc, curr) => acc + curr.materiel, 0);
-    const mesureMissing = !chantier.has_mesure && !chantier.no_mesure_needed;
-    const rapportMissing = !chantier.has_rapport;
+
+    const visibleTabs: { id: Tab; icon: React.ReactNode; label: string }[] = [
+        { id: 'SUIVI', icon: <Clock size={16} />, label: 'Suivi' },
+        { id: 'INFO', icon: <Info size={16} />, label: 'Infos' },
+        ...(currentUser.role === 'admin' ? [{ id: 'FINANCES' as const, icon: <Wallet size={16} />, label: 'Finances' }] : []),
+    ];
 
     return (
         <div className="animate-fade-in relative pb-40 min-h-screen">
@@ -256,43 +256,13 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
                         <SlidingTabs
                             active={activeTab}
                             onChange={setActiveTab}
-                            tabs={[
-                                { id: 'SUIVI', icon: <Clock size={16} />, label: 'Suivi' },
-                                { id: 'INFO', icon: <Info size={16} />, label: 'Infos' },
-                            ]}
+                            tabs={visibleTabs}
                         />
                     </div>
 
                     <div className="grid grid-cols-2 sm:flex sm:items-center gap-2 w-full sm:w-auto">
-                        {/* Hidden native pickers, one per category — buttons below just trigger them */}
-                        <input ref={planInputRef} type="file" accept="application/pdf" className="hidden" onChange={e => handleDocumentInputChange('plan', e)} />
-                        <input ref={devisInputRef} type="file" accept="application/pdf" className="hidden" onChange={e => handleDocumentInputChange('devis', e)} />
                         <input ref={photoInputRef} type="file" accept="image/*" multiple className="hidden" onChange={e => handleDocumentInputChange('photo', e)} />
-                        <input ref={mesureInputRef} type="file" accept="application/pdf" className="hidden" onChange={e => handleDocumentInputChange('mesure', e)} />
-                        <input ref={rapportInputRef} type="file" accept="application/pdf" className="hidden" onChange={e => handleDocumentInputChange('rapport', e)} />
 
-                        {currentUser.role === 'admin' && (
-                            <>
-                                <button
-                                    onClick={() => planInputRef.current?.click()}
-                                    disabled={chantier.archived || uploadingCategory !== null}
-                                    className="flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-50 text-slate-500 hover:text-slate-900 hover:bg-slate-100 transition-colors border border-slate-300 justify-center disabled:opacity-40"
-                                    title="Importer un plan (PDF)"
-                                >
-                                    {uploadingCategory === 'plan' ? <Loader2 size={16} className="animate-spin" /> : <FileText size={16} />}
-                                    <span className="font-bold text-xs uppercase tracking-wider">Plan</span>
-                                </button>
-                                <button
-                                    onClick={() => devisInputRef.current?.click()}
-                                    disabled={chantier.archived || uploadingCategory !== null}
-                                    className="flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-50 text-slate-500 hover:text-slate-900 hover:bg-slate-100 transition-colors border border-slate-300 justify-center disabled:opacity-40"
-                                    title="Importer un devis (PDF)"
-                                >
-                                    {uploadingCategory === 'devis' ? <Loader2 size={16} className="animate-spin" /> : <Receipt size={16} />}
-                                    <span className="font-bold text-xs uppercase tracking-wider">Devis</span>
-                                </button>
-                            </>
-                        )}
                         <button
                             onClick={() => photoInputRef.current?.click()}
                             disabled={chantier.archived || uploadingCategory !== null}
@@ -302,38 +272,13 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
                             {uploadingCategory === 'photo' ? <Loader2 size={16} className="animate-spin" /> : <Camera size={16} />}
                             <span className="font-bold text-xs uppercase tracking-wider">Photos</span>
                         </button>
-                        {!chantier.no_mesure_needed && (
-                            <button
-                                onClick={() => mesureInputRef.current?.click()}
-                                disabled={chantier.archived || uploadingCategory !== null}
-                                className={`flex items-center gap-2 px-3 py-2 rounded-lg transition-colors border justify-center disabled:opacity-40 ${mesureMissing
-                                    ? 'bg-red-50 text-red-600 border-red-300 hover:bg-red-100'
-                                    : 'bg-slate-50 text-slate-500 hover:text-slate-900 hover:bg-slate-100 border-slate-300'
-                                    }`}
-                                title={mesureMissing ? "Aucune mesure — le nom du fichier doit contenir \"mesure\"" : "Ajouter des mesures (PDF)"}
-                            >
-                                {uploadingCategory === 'mesure' ? <Loader2 size={16} className="animate-spin" /> : mesureMissing ? <AlertTriangle size={16} /> : <Ruler size={16} />}
-                                <span className="font-bold text-xs uppercase tracking-wider">Mesures</span>
-                            </button>
-                        )}
-                        <button
-                            onClick={() => rapportInputRef.current?.click()}
-                            disabled={chantier.archived || uploadingCategory !== null}
-                            className={`flex items-center gap-2 px-3 py-2 rounded-lg transition-colors border justify-center disabled:opacity-40 ${rapportMissing
-                                ? 'bg-red-50 text-red-600 border-red-300 hover:bg-red-100'
-                                : 'bg-slate-50 text-slate-500 hover:text-slate-900 hover:bg-slate-100 border-slate-300'
-                                }`}
-                            title={rapportMissing ? "Aucun rapport d'intervention — le nom du fichier doit contenir \"rapport\"" : "Ajouter un rapport d'intervention (PDF)"}
-                        >
-                            {uploadingCategory === 'rapport' ? <Loader2 size={16} className="animate-spin" /> : rapportMissing ? <AlertTriangle size={16} /> : <ClipboardList size={16} />}
-                            <span className="font-bold text-xs uppercase tracking-wider">Rapport d'inter</span>
-                        </button>
                         <button
                             onClick={() => setShowExplorer(true)}
                             className="flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-50 text-slate-500 hover:text-ohm-primary hover:bg-slate-100 transition-colors border border-slate-300 justify-center"
                             title="Explorer les documents"
                         >
                             <FolderOpen size={16} />
+                            <span className="font-bold text-xs uppercase tracking-wider">Dossiers</span>
                         </button>
                         <button
                             onClick={handleExport}
@@ -349,24 +294,6 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
                     <div className="mt-3 text-xs text-amber-600 font-bold flex items-center gap-1.5">
                         <Lock size={12} /> Chantier archivé — rouvrez-le pour ajouter des documents
                     </div>
-                )}
-                {currentUser.role === 'admin' && (
-                    <label className="mt-3 text-sm sm:text-xs text-slate-500 font-medium flex items-center gap-3 sm:gap-2 cursor-pointer w-fit py-1">
-                        <span className="relative inline-flex shrink-0">
-                            <input
-                                type="checkbox"
-                                checked={!!chantier.no_mesure_needed}
-                                onChange={e => handleToggleNoMesureNeeded(e.target.checked)}
-                                className="t-check-input peer"
-                            />
-                            <span className="t-check-box w-6 h-6 sm:w-5 sm:h-5 rounded-md border-2 border-slate-300 bg-white flex items-center justify-center peer-checked:bg-ohm-primary peer-checked:border-ohm-primary peer-focus-visible:ring-2 peer-focus-visible:ring-ohm-primary peer-focus-visible:ring-offset-2">
-                                <svg viewBox="0 0 10.1668 10.1668" className="w-3.5 h-3.5 sm:w-3 sm:h-3" fill="none" stroke="white" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                                    <path d="M1 5.52L3.92 9.17L9.17 1" />
-                                </svg>
-                            </span>
-                        </span>
-                        Pas de mesure nécessaire pour ce chantier
-                    </label>
                 )}
             </div>
 
@@ -389,23 +316,13 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
                 {/* SUIVI TAB */}
                 {activeTab === 'SUIVI' && (
                     <div className="space-y-6 animate-slide-up">
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                            <div className="card bg-gradient-to-br from-surface to-slate-50 border-l-4 border-l-ohm-primary relative overflow-hidden group flex flex-col items-center justify-center text-center py-8">
-                                {/* Permanent subtle gold background */}
-                                <div className="absolute inset-0 bg-ohm-primary/5"></div>
-                                {/* Stronger on hover */}
-                                <div className="absolute inset-0 bg-ohm-mix opacity-0 group-hover:opacity-20 transition-opacity duration-500"></div>
-                                <span className="text-xs font-bold text-ohm-primary uppercase relative z-10 tracking-widest mb-2">Heures Totales</span>
-                                <div className="text-4xl font-black text-slate-900 relative z-10">{totalHeures} <span className="text-lg text-slate-500 font-normal">h</span></div>
-                            </div>
-                            <div className="card bg-gradient-to-br from-surface to-slate-50 border-l-4 border-l-secondary relative overflow-hidden group flex flex-col items-center justify-center text-center py-8">
-                                {/* Permanent subtle blue background */}
-                                <div className="absolute inset-0 bg-secondary/10"></div>
-                                {/* Stronger on hover */}
-                                <div className="absolute inset-0 bg-blue-500/20 opacity-0 group-hover:opacity-30 transition-opacity duration-500"></div>
-                                <span className="text-xs font-bold text-blue-400 uppercase relative z-10 tracking-widest mb-2">Matériel & Frais</span>
-                                <div className="text-4xl font-black text-slate-900 relative z-10">{totalMateriel} <span className="text-lg text-slate-500 font-normal">CHF</span></div>
-                            </div>
+                        <div className="card bg-gradient-to-br from-surface to-slate-50 border-l-4 border-l-ohm-primary relative overflow-hidden group flex flex-col items-center justify-center text-center py-8">
+                            {/* Permanent subtle gold background */}
+                            <div className="absolute inset-0 bg-ohm-primary/5"></div>
+                            {/* Stronger on hover */}
+                            <div className="absolute inset-0 bg-ohm-mix opacity-0 group-hover:opacity-20 transition-opacity duration-500"></div>
+                            <span className="text-xs font-bold text-ohm-primary uppercase relative z-10 tracking-widest mb-2">Heures Totales</span>
+                            <div className="text-4xl font-black text-slate-900 relative z-10">{totalHeures} <span className="text-lg text-slate-500 font-normal">h</span></div>
                         </div>
 
                         {/* Static Add Button (Moved from FAB) */}
@@ -423,7 +340,6 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
                                         <th className="p-4">Date</th>
                                         <th className="p-4">Qui</th>
                                         <th className="p-4 text-right">Heures</th>
-                                        <th className="p-4 text-right">Matériel</th>
                                         <th className="p-4 text-right">Statut</th>
                                     </tr>
                                 </thead>
@@ -436,9 +352,6 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
                                             </td>
                                             <td className="p-4 text-right font-mono font-bold text-slate-900">
                                                 {e.heures > 0 ? `${e.heures}h` : '-'}
-                                            </td>
-                                            <td className="p-4 text-right font-mono font-bold text-blue-400">
-                                                {e.materiel > 0 ? `${e.materiel}.-` : '-'}
                                             </td>
                                             <td className="p-4 text-right">
                                                 <StatusBadge status={e.status} type="entry" />
@@ -483,6 +396,11 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
                     </div>
                 )}
 
+                {/* FINANCES TAB — admin only, mirrors the backend's own admin check */}
+                {activeTab === 'FINANCES' && currentUser.role === 'admin' && (
+                    <FinancesTab chantierId={chantier.id} />
+                )}
+
             </div>
 
             {/* ENTRY MODAL */}
@@ -506,7 +424,7 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
                                 <AwesomeDatePicker value={entryDate} onChange={d => setEntryDate(d)} />
                             </div>
 
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-8">
+                            <div className="grid grid-cols-1 gap-4 sm:gap-8">
                                 <div className="bg-slate-50/50 p-4 sm:p-6 rounded-2xl border border-slate-300/50 hover:border-ohm-primary/50 transition-colors group">
                                     <label className="flex items-center gap-2 text-sm font-bold text-slate-500 uppercase mb-4 group-hover:text-slate-900 transition-colors">
                                         <Clock size={18} className="text-ohm-primary" />
@@ -548,25 +466,6 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
                                         >
                                             <Plus size={20} strokeWidth={3} />
                                         </button>
-                                    </div>
-                                </div>
-
-                                <div className="bg-slate-50/50 p-4 sm:p-6 rounded-2xl border border-slate-300/50 hover:border-blue-500/50 transition-colors group">
-                                    <label className="flex items-center gap-2 text-sm font-bold text-slate-500 uppercase mb-4 group-hover:text-slate-900 transition-colors">
-                                        <div className="w-4 h-4 rounded-full border-2 border-blue-500"></div>
-                                        Matériel / Frais
-                                    </label>
-                                    <div className="relative">
-                                        <input
-                                            type="number"
-                                            step="0.01"
-                                            inputMode="decimal"
-                                            className="w-full bg-transparent text-center text-4xl font-black text-slate-900 py-2 focus:outline-none placeholder-slate-700 appearance-none [&::-webkit-inner-spin-button]:appearance-none border-b-2 border-transparent focus:border-blue-500 transition-all"
-                                            placeholder="0.00"
-                                            value={entryForm.materiel}
-                                            onChange={e => setEntryForm({ ...entryForm, materiel: e.target.value })}
-                                        />
-                                        <span className="absolute right-0 bottom-4 text-slate-400 font-bold text-xs uppercase tracking-wider">CHF</span>
                                     </div>
                                 </div>
                             </div>
