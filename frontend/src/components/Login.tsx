@@ -10,11 +10,13 @@ interface Props {
 }
 
 // Split-screen left panel — purely visual, no logic. Hidden below 1024px
-// (the form alone carries the page on mobile/tablet).
+// (the form alone carries the page on mobile/tablet). A dark gradient, not
+// bg-ohm-bg (that token is the app's near-white page background — using it
+// here left this panel blank, with white text on white).
 const LoginVisual: React.FC = () => (
-    <div className="hidden lg:flex relative flex-col justify-between overflow-hidden bg-ohm-bg p-12 text-white">
-        <div className="absolute -top-24 -left-24 w-96 h-96 bg-ohm-primary/20 rounded-full blur-[100px]" />
-        <div className="absolute bottom-0 right-0 w-[28rem] h-[28rem] bg-blue-500/10 rounded-full blur-[120px]" />
+    <div className="hidden lg:flex relative flex-col justify-between overflow-hidden bg-gradient-to-br from-primary via-secondary to-slate-900 p-12 text-white">
+        <div className="absolute -top-24 -left-24 w-96 h-96 bg-ohm-primary/30 rounded-full blur-[100px]" />
+        <div className="absolute bottom-0 right-0 w-[28rem] h-[28rem] bg-white/10 rounded-full blur-[120px]" />
 
         <div className="relative flex items-center gap-3">
             <div className="bg-white/5 p-2 rounded-xl border border-white/10">

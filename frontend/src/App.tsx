@@ -7,6 +7,7 @@ import { Layout } from './components/Layout';
 import { NoticeBanner } from './components/NoticeBanner';
 import { api, UNAUTHORIZED_EVENT } from './api';
 import { trySyncQueue } from './offlineQueue';
+import { useInactivityLogout } from './hooks/useInactivityLogout';
 
 // Most sessions only ever touch Dashboard (and maybe one ChantierDetail) —
 // keeping Login/Dashboard in the main bundle and splitting the rest out
@@ -83,6 +84,12 @@ function App() {
         window.addEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
         return () => window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
     }, []);
+
+    // Auto-logout after 20 minutes with no interaction anywhere in the app
+    // (mouse/keyboard/touch/scroll) — an unattended unlocked device stops
+    // being a live session on its own, without waiting for the cookie's
+    // full 24h lifetime.
+    useInactivityLogout(handleLogout, 20, !!user);
 
     // Flush any offline-queued entries: on load (in case we started this
     // session already back online with leftovers), whenever the browser

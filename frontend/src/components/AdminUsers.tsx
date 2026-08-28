@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { User } from '../types';
 import { AwesomeSelect } from './ui/AwesomeSelect';
 import { api } from '../api';
-import { ShieldCheck, ShieldAlert, KeyRound } from 'lucide-react';
+import { ShieldCheck, ShieldAlert, KeyRound, LogOut } from 'lucide-react';
 
 export const AdminUsers: React.FC = () => {
     const [users, setUsers] = useState<User[]>([]);
@@ -86,6 +86,15 @@ export const AdminUsers: React.FC = () => {
         if (confirm('Supprimer définitivement cet utilisateur ?')) {
             const res = await api.delete(`/api/users/${id}`);
             if (res.ok) fetchUsers();
+        }
+    };
+
+    const handleForceLogout = async (user: User) => {
+        if (!confirm(`Déconnecter ${user.username} de partout ? Sa session en cours sera immédiatement invalidée.`)) return;
+        const res = await api.post(`/api/users/${user.id}/force-logout`);
+        if (!res.ok) {
+            const data = await res.json().catch(() => ({}));
+            alert(data.error || 'Erreur');
         }
     };
 
@@ -202,6 +211,13 @@ export const AdminUsers: React.FC = () => {
                                     </td>
                                     <td className="px-6 py-4 text-right">
                                         <div className="flex items-center justify-end gap-2">
+                                            <button
+                                                onClick={() => handleForceLogout(user)}
+                                                className="p-2 text-slate-500 hover:text-red-500 hover:bg-red-500/10 rounded-lg transition-all"
+                                                title="Déconnecter de partout"
+                                            >
+                                                <LogOut className="w-5 h-5" />
+                                            </button>
                                             {user.mfa_enabled && (
                                                 <button
                                                     onClick={() => { setMfaResetTarget(user); setMfaResetPassword(''); setMfaResetError(''); }}

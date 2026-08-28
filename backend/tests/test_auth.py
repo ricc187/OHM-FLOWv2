@@ -12,6 +12,7 @@ import os
 import sys
 import shutil
 import tempfile
+import time
 import unittest
 
 import pyotp
@@ -244,6 +245,46 @@ class AuthTestCase(unittest.TestCase):
         strong = c.post('/api/users', json={'username': 'newbie', 'password': STRONG_PASSWORD, 'role': 'user'})
         self.assertEqual(strong.status_code, 201, strong.get_json())
         self.assertTrue(strong.get_json()['must_change_password'])
+
+    def test_force_logout_revokes_existing_cookie(self):
+        admin_id = self._create_user('force_logout_admin', 'admin')
+        target_id = self._create_user('force_logout_target', 'user')
+        with ohmapp.app.app_context():
+            admin_token = ohmapp.serializer.dumps({'user_id': admin_id})
+            target_token = ohmapp.serializer.dumps({'user_id': target_id})
+
+        target_client = ohmapp.app.test_client()
+        target_client.set_cookie(ohmapp.COOKIE_NAME, target_token)
+        self.assertEqual(target_client.get('/api/me').status_code, 200)
+
+        admin_client = ohmapp.app.test_client()
+        admin_client.set_cookie(ohmapp.COOKIE_NAME, admin_token)
+        res = admin_client.post(f'/api/users/{target_id}/force-logout')
+        self.assertEqual(res.status_code, 200, res.get_json())
+
+        # Same cookie as before, still well within its own 24h max_age — but
+        # revoked, so it must now be rejected.
+        self.assertEqual(target_client.get('/api/me').status_code, 401)
+
+        # A freshly issued cookie (e.g. after logging back in) works again —
+        # itsdangerous timestamps only have 1-second resolution, so a real
+        # gap is needed to land in a strictly-later second than the revocation.
+        time.sleep(1.1)
+        with ohmapp.app.app_context():
+            fresh_token = ohmapp.serializer.dumps({'user_id': target_id})
+        fresh_client = ohmapp.app.test_client()
+        fresh_client.set_cookie(ohmapp.COOKIE_NAME, fresh_token)
+        self.assertEqual(fresh_client.get('/api/me').status_code, 200)
+
+    def test_force_logout_requires_admin(self):
+        target_id = self._create_user('non_admin_target', 'user')
+        non_admin_id = self._create_user('non_admin_actor', 'user')
+        with ohmapp.app.app_context():
+            token = ohmapp.serializer.dumps({'user_id': non_admin_id})
+        c = ohmapp.app.test_client()
+        c.set_cookie(ohmapp.COOKIE_NAME, token)
+        res = c.post(f'/api/users/{target_id}/force-logout')
+        self.assertEqual(res.status_code, 403)
 
     def test_admin_reset_requires_own_password(self):
         admin_id = self._create_user('reset_admin', 'admin')

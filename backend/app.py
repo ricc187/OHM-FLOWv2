@@ -117,7 +117,7 @@ def token_required(f):
             return jsonify({'error': 'Token is missing'}), 401
 
         try:
-            data = serializer.loads(token, max_age=COOKIE_MAX_AGE)
+            data, issued_at = serializer.loads(token, max_age=COOKIE_MAX_AGE, return_timestamp=True)
             # MFA pending tickets (see issue_mfa_pending_token) carry a
             # 'purpose' claim and must never work as a real session, even
             # though they're signed with the same key — a stolen in-flight
@@ -127,6 +127,16 @@ def token_required(f):
             current_user = User.query.get(data['user_id'])
             if not current_user:
                 raise Exception('User not found')
+            # Admin-triggered force-logout (see /api/users/<id>/force-logout) —
+            # any cookie signed at or before that action is dead, everywhere,
+            # even though its own max_age hasn't elapsed yet. itsdangerous
+            # timestamps only have 1-second resolution, so <= (not <) is the
+            # safe default for the same-second edge case: an admin force-
+            # logging someone out and that person logging back in within the
+            # same wall-clock second is vanishingly rare, and "make them log
+            # in again" is the safe failure mode there, not "let it slide".
+            if current_user.sessions_invalidated_at and issued_at.replace(tzinfo=None) <= current_user.sessions_invalidated_at:
+                raise Exception('Session revoked')
         except Exception as e:
             return jsonify({'error': 'Token is invalid or expired'}), 401
 
@@ -294,6 +304,15 @@ class User(db.Model):
     # --- Brute-force lockout (see _maybe_lock_account) ---
     lockout_stage = db.Column(db.Integer, default=0)  # 0=none, escalates through LOCKOUT_DURATIONS_MIN, never auto-decreases
     locked_until = db.Column(db.DateTime, nullable=True)
+
+    # Sessions are stateless signed cookies (no server-side session table) —
+    # this is the one thing that makes a specific already-issued cookie
+    # revocable anyway: any token whose itsdangerous signing timestamp is
+    # older than this gets rejected in token_required, regardless of its
+    # own max_age. Set by an admin's "force logout" action (see
+    # /api/users/<id>/force-logout) — every open session for that account
+    # is invalid the moment this changes, no matter which device.
+    sessions_invalidated_at = db.Column(db.DateTime, nullable=True)
 
     def set_pin(self, pin):  # pragma: no cover — retired, kept only so the column stays satisfiable
         self.pin_hash = generate_password_hash(pin)
@@ -890,6 +909,7 @@ def init_db():
                     'mfa_enrolled_at': 'DATETIME',
                     'lockout_stage': 'INTEGER DEFAULT 0',
                     'locked_until': 'DATETIME',
+                    'sessions_invalidated_at': 'DATETIME',
                 }
                 for col_name, col_type in auth_new_cols.items():
                     if col_name not in cols:
@@ -957,6 +977,60 @@ def init_db():
                     logger.info("Migrating acomptes: adding heures")
                     conn.execute(text("ALTER TABLE acomptes ADD COLUMN heures FLOAT DEFAULT 0"))
                     conn.commit()
+
+            # 6. ChantierFinancier — montant_adjuge/heures_adjugees/montant_regie/
+            # heures_regie/montant_pv_clients/heures_pv_clients were required
+            # (NOT NULL) columns before the CA-prévisionnel-became-a-list
+            # refactor (see CaLignePrevue / the migration right below). SQLite
+            # can't relax a NOT NULL via plain ALTER TABLE, so on any database
+            # that predates that refactor, EVERY chantier_financiers row
+            # created since (i.e. for any chantier that didn't already have
+            # one) fails to INSERT at all — the ORM never sets those columns
+            # since it doesn't know about them anymore. Rebuild the table
+            # once: every column stays (never dropped, per convention), only
+            # those six become nullable.
+            if 'chantier_financiers' in existing_tables:
+                fin_col_info = inspector.get_columns('chantier_financiers')
+                legacy_notnull = next(
+                    (c for c in fin_col_info if c['name'] == 'montant_adjuge' and not c['nullable']), None
+                )
+                if legacy_notnull:
+                    logger.info("Rebuilding chantier_financiers: relaxing legacy NOT NULL CA columns")
+                    conn.execute(text("""
+                        CREATE TABLE chantier_financiers_new (
+                            id INTEGER PRIMARY KEY,
+                            chantier_id INTEGER NOT NULL UNIQUE REFERENCES chantiers(id),
+                            montant_adjuge FLOAT,
+                            heures_adjugees FLOAT,
+                            montant_regie FLOAT,
+                            heures_regie FLOAT,
+                            montant_pv_clients FLOAT,
+                            heures_pv_clients FLOAT,
+                            charge_materiel_prevue FLOAT NOT NULL DEFAULT 0.0,
+                            taux_horaire FLOAT NOT NULL DEFAULT 0.0,
+                            pct_petites_fournitures FLOAT NOT NULL DEFAULT 0.0,
+                            created_at DATETIME,
+                            updated_at DATETIME
+                        )
+                    """))
+                    conn.execute(text("""
+                        INSERT INTO chantier_financiers_new (
+                            id, chantier_id, montant_adjuge, heures_adjugees, montant_regie,
+                            heures_regie, montant_pv_clients, heures_pv_clients,
+                            charge_materiel_prevue, taux_horaire, pct_petites_fournitures,
+                            created_at, updated_at
+                        )
+                        SELECT id, chantier_id, montant_adjuge, heures_adjugees, montant_regie,
+                               heures_regie, montant_pv_clients, heures_pv_clients,
+                               charge_materiel_prevue, taux_horaire, pct_petites_fournitures,
+                               created_at, updated_at
+                        FROM chantier_financiers
+                    """))
+                    conn.execute(text("DROP TABLE chantier_financiers"))
+                    conn.execute(text("ALTER TABLE chantier_financiers_new RENAME TO chantier_financiers"))
+                    conn.commit()
+                    inspector = inspect(db.engine)
+                    existing_tables = inspector.get_table_names()
 
         # One-time migration: CA prévisionnel était 3 champs fixes sur
         # chantier_financiers (montant_adjuge/heures_adjugees, montant_regie/
@@ -1413,6 +1487,29 @@ def user_operations(current_user, user_id):
 
         db.session.commit()
         return jsonify(user.to_dict())
+
+
+@app.route('/api/users/<int:user_id>/force-logout', methods=['POST'])
+@token_required
+def force_logout_user(current_user, user_id):
+    """Kills every open session for this account instantly, everywhere —
+    see sessions_invalidated_at / token_required. Also resets the account's
+    own lockout so a legitimately-forced-out user isn't accidentally left
+    unable to log back in."""
+    if current_user.role != 'admin':
+        return jsonify({'error': 'Admin access required'}), 403
+    user = db.session.get(User, user_id)
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+
+    # itsdangerous signs with second-precision timestamps — truncate to the
+    # second here too, so a token issued in the very same second as this
+    # action (e.g. logging back in right away) isn't wrongly killed by a
+    # microsecond of skew between the two clocks being compared.
+    user.sessions_invalidated_at = datetime.datetime.utcnow().replace(microsecond=0)
+    db.session.commit()
+    audit_log('auth', current_user, f"force-logged-out {user.username} (id={user.id})")
+    return jsonify({'message': f'{user.username} déconnecté de partout'})
 
 
 @app.route('/api/backup', methods=['POST'])
