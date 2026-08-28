@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Entry } from '../types';
-import { Check, X, Pencil, CheckCheck, Loader2 } from 'lucide-react';
+import { Entry, User, Chantier } from '../types';
+import { Check, X, Pencil, CheckCheck, Loader2, Plus, UserCog } from 'lucide-react';
 import { api } from '../api';
+import { AwesomeSelect } from './ui/AwesomeSelect';
 
 interface Props {
     currentUser: any;
@@ -23,13 +24,23 @@ const formatDateHeader = (dateStr: string) => {
 
 export const AdminEntries: React.FC<Props> = () => {
     const [entries, setEntries] = useState<Entry[]>([]);
+    const [users, setUsers] = useState<User[]>([]);
+    const [chantiers, setChantiers] = useState<Chantier[]>([]);
 
     // Edit state
     const [editingId, setEditingId] = useState<number | null>(null);
     const [editForm, setEditForm] = useState({
         heures: '',
-        materiel: ''
+        user_id: ''
     });
+
+    // "Nouvelle saisie au nom de quelqu'un" — admin can log hours for another
+    // worker (e.g. they forgot, or are on-site without the app).
+    const [showNewForm, setShowNewForm] = useState(false);
+    const [newForm, setNewForm] = useState({
+        user_id: '', chantier_id: '', date: todayStr, heures: ''
+    });
+    const [creatingEntry, setCreatingEntry] = useState(false);
 
     // Keyboard-first review: one entry "focused" at a time — Enter validates
     // it and moves to whatever now occupies that slot (i.e. the next one).
@@ -43,6 +54,8 @@ export const AdminEntries: React.FC<Props> = () => {
 
     useEffect(() => {
         fetchPendingEntries();
+        api.get('/api/users').then(res => res.ok && res.json()).then(data => data && setUsers(data));
+        api.get('/api/chantiers?status=ALL').then(res => res.ok && res.json()).then(data => data && setChantiers(data));
     }, []);
 
     const fetchPendingEntries = async () => {
@@ -71,7 +84,7 @@ export const AdminEntries: React.FC<Props> = () => {
     const handleSaveEdit = async (entryId: number) => {
         const res = await api.put(`/api/entries/${entryId}`, {
             heures: parseFloat(editForm.heures) || 0,
-            materiel: parseFloat(editForm.materiel) || 0
+            user_id: parseInt(editForm.user_id, 10)
         });
 
         if (res.ok) {
@@ -86,8 +99,34 @@ export const AdminEntries: React.FC<Props> = () => {
         setEditingId(entry.id);
         setEditForm({
             heures: entry.heures.toString(),
-            materiel: entry.materiel.toString()
+            user_id: entry.user_id.toString()
         });
+    };
+
+    const handleCreateForOther = async () => {
+        if (!newForm.user_id || !newForm.chantier_id || !newForm.date) {
+            alert('Utilisateur, chantier et date sont requis');
+            return;
+        }
+        setCreatingEntry(true);
+        try {
+            const res = await api.post('/api/entries', {
+                user_id: parseInt(newForm.user_id, 10),
+                chantier_id: parseInt(newForm.chantier_id, 10),
+                date: newForm.date,
+                heures: parseFloat(newForm.heures) || 0,
+                materiel: 0
+            });
+            if (res.ok) {
+                setShowNewForm(false);
+                setNewForm({ user_id: '', chantier_id: '', date: todayStr, heures: '' });
+                fetchPendingEntries();
+            } else {
+                alert('Erreur lors de la création');
+            }
+        } finally {
+            setCreatingEntry(false);
+        }
     };
 
     const handleReject = async (entryId: number) => {
@@ -157,10 +196,66 @@ export const AdminEntries: React.FC<Props> = () => {
                     </h2>
                     <p className="text-slate-500 mt-1">Entrée = valider la saisie surlignée · ↑↓ pour naviguer</p>
                 </div>
-                <div className="bg-slate-50 px-4 py-2 rounded-lg text-slate-900 font-mono font-bold">
-                    {entries.length} En attente
+                <div className="flex items-center gap-3">
+                    <button
+                        onClick={() => setShowNewForm(v => !v)}
+                        className="flex items-center gap-2 px-4 py-2 rounded-lg bg-slate-900 text-white hover:bg-slate-700 transition-all font-bold text-sm"
+                    >
+                        <Plus size={16} /> Saisie pour un tiers
+                    </button>
+                    <div className="bg-slate-50 px-4 py-2 rounded-lg text-slate-900 font-mono font-bold">
+                        {entries.length} En attente
+                    </div>
                 </div>
             </div>
+
+            {showNewForm && (
+                <div className="card p-4 space-y-3 border border-slate-200 bg-slate-50/60 animate-fade-in">
+                    <div className="text-sm font-bold text-slate-700 flex items-center gap-2">
+                        <UserCog size={16} /> Enregistrer une saisie au nom d'un autre utilisateur
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+                        <AwesomeSelect
+                            placeholder="Utilisateur"
+                            value={newForm.user_id}
+                            onChange={val => setNewForm({ ...newForm, user_id: val })}
+                            options={users.map(u => ({ value: u.id.toString(), label: u.username }))}
+                        />
+                        <AwesomeSelect
+                            placeholder="Chantier"
+                            value={newForm.chantier_id}
+                            onChange={val => setNewForm({ ...newForm, chantier_id: val })}
+                            options={chantiers.map(c => ({ value: c.id.toString(), label: c.nom }))}
+                        />
+                        <input
+                            type="date"
+                            className="w-full bg-white border border-slate-300 rounded-xl px-4 py-3 text-slate-900 focus:outline-none focus:border-ohm-primary"
+                            value={newForm.date}
+                            onChange={e => setNewForm({ ...newForm, date: e.target.value })}
+                        />
+                        <input
+                            type="number" step="0.5" inputMode="decimal"
+                            placeholder="Heures"
+                            className="w-full bg-white border border-slate-300 rounded-xl px-4 py-3 text-slate-900 focus:outline-none focus:border-ohm-primary"
+                            value={newForm.heures}
+                            onChange={e => setNewForm({ ...newForm, heures: e.target.value })}
+                        />
+                    </div>
+                    <div className="flex justify-end gap-2">
+                        <button onClick={() => setShowNewForm(false)} className="px-4 py-2 rounded-lg bg-slate-100 text-slate-600 hover:bg-slate-200 transition-all text-sm font-bold">
+                            Annuler
+                        </button>
+                        <button
+                            onClick={handleCreateForOther}
+                            disabled={creatingEntry}
+                            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-ohm-primary text-ohm-bg hover:bg-yellow-300 transition-all text-sm font-bold disabled:opacity-50"
+                        >
+                            {creatingEntry ? <Loader2 size={16} className="animate-spin" /> : <Plus size={16} />}
+                            Créer la saisie
+                        </button>
+                    </div>
+                </div>
+            )}
 
             <div className="space-y-6">
                 {sorted.map((e, idx) => {
@@ -202,7 +297,7 @@ export const AdminEntries: React.FC<Props> = () => {
                                 </div>
 
                                 {isEditing ? (
-                                    <div className="flex items-center gap-2" onClick={ev => ev.stopPropagation()}>
+                                    <div className="flex items-center gap-2 flex-wrap" onClick={ev => ev.stopPropagation()}>
                                         <input
                                             type="number" step="0.5" inputMode="decimal"
                                             className="w-20 bg-white border border-black/10 rounded px-2 py-1.5 text-right font-mono font-bold focus:outline-none focus:border-ohm-primary"
@@ -210,12 +305,14 @@ export const AdminEntries: React.FC<Props> = () => {
                                             onChange={ev => setEditForm({ ...editForm, heures: ev.target.value })}
                                             autoFocus
                                         />
-                                        <input
-                                            type="number" step="0.01" inputMode="decimal"
-                                            className="w-20 bg-white border border-black/10 rounded px-2 py-1.5 text-right font-mono font-bold text-blue-500 focus:outline-none focus:border-blue-500"
-                                            value={editForm.materiel}
-                                            onChange={ev => setEditForm({ ...editForm, materiel: ev.target.value })}
-                                        />
+                                        <div className="w-44">
+                                            <AwesomeSelect
+                                                placeholder="Utilisateur"
+                                                value={editForm.user_id}
+                                                onChange={val => setEditForm({ ...editForm, user_id: val })}
+                                                options={users.map(u => ({ value: u.id.toString(), label: u.username }))}
+                                            />
+                                        </div>
                                         <button onClick={() => setEditingId(null)} className="p-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-900 transition-all" title="Annuler">
                                             <X size={18} />
                                         </button>
@@ -227,9 +324,6 @@ export const AdminEntries: React.FC<Props> = () => {
                                     <>
                                         <div className="text-right font-mono font-bold text-slate-900 w-16 shrink-0">
                                             {e.heures > 0 ? `${e.heures} h` : '-'}
-                                        </div>
-                                        <div className="text-right font-mono font-bold text-blue-500 w-16 shrink-0">
-                                            {e.materiel > 0 ? `${e.materiel} .-` : '-'}
                                         </div>
 
                                         {/* Modifier/Refuser stay secondary — dim by default, need the mouse

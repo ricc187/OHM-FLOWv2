@@ -26,6 +26,35 @@ from financier_calculs import compute_financier
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# --- Audit log (who did what) -----------------------------------------
+# Separate small log files per action category, under backend/logs/. Kept
+# apart from the app's own stdout logger above (that one is for ops/errors,
+# this one is a durable "who touched what" trail for admin actions on data
+# other people entered — reassigning an entry, editing someone's hours,
+# deleting/validating on their behalf, etc). *.log is already gitignored.
+AUDIT_LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logs')
+os.makedirs(AUDIT_LOG_DIR, exist_ok=True)
+_audit_loggers = {}
+
+def _audit_logger(category):
+    if category not in _audit_loggers:
+        lg = logging.getLogger(f'audit.{category}')
+        lg.setLevel(logging.INFO)
+        lg.propagate = False
+        if not lg.handlers:
+            handler = logging.FileHandler(os.path.join(AUDIT_LOG_DIR, f'{category}.log'), encoding='utf-8')
+            handler.setFormatter(logging.Formatter('%(asctime)s | %(message)s'))
+            lg.addHandler(handler)
+        _audit_loggers[category] = lg
+    return _audit_loggers[category]
+
+def audit_log(category, actor, message):
+    """actor: the User performing the action (current_user). Writes one line
+    to backend/logs/<category>.log, e.g. audit_log('entries', current_user,
+    'entry #42 (chantier Baita): heures 5.0 -> 7.5')."""
+    who = f'{actor.username} (id={actor.id}, role={actor.role})' if actor else 'system'
+    _audit_logger(category).info(f'{who} | {message}')
+
 class Base(DeclarativeBase):
     pass
 
@@ -1373,6 +1402,14 @@ def add_entry(current_user):
     )
     db.session.add(new_entry)
     db.session.commit()
+
+    if target_user_id != current_user.id:
+        target_user = db.session.get(User, target_user_id)
+        chantier = db.session.get(Chantier, chantier_id)
+        audit_log('entries', current_user,
+                   f"created entry #{new_entry.id} on behalf of {target_user.username if target_user else target_user_id} "
+                   f"(chantier {chantier.nom if chantier else chantier_id}, date {date}, heures {heures})")
+
     return jsonify(new_entry.to_dict()), 201
 
 @app.route('/api/entries/pending', methods=['GET'])
@@ -1393,6 +1430,9 @@ def validate_entry(current_user, entry_id):
         return jsonify({'error': 'Entry not found'}), 404
     entry.status = 'VALIDATED'
     db.session.commit()
+    audit_log('entries', current_user,
+               f"validated entry #{entry.id} ({entry.user.username}, chantier {entry.chantier.nom if entry.chantier else entry.chantier_id}, "
+               f"date {entry.date}, {entry.heures}h)")
     return jsonify(entry.to_dict())
 
 @app.route('/api/entries/<int:entry_id>', methods=['PUT', 'DELETE'])
@@ -1405,6 +1445,9 @@ def manage_entry(current_user, entry_id):
         return jsonify({'error': 'Entry not found'}), 404
 
     if request.method == 'DELETE':
+        audit_log('entries', current_user,
+                   f"deleted/rejected entry #{entry.id} ({entry.user.username}, chantier {entry.chantier.nom if entry.chantier else entry.chantier_id}, "
+                   f"date {entry.date}, {entry.heures}h, materiel {entry.materiel})")
         db.session.delete(entry)
         db.session.commit()
         return jsonify({'message': 'Entry deleted'})
@@ -1418,14 +1461,43 @@ def manage_entry(current_user, entry_id):
             return jsonify({'error': 'heures/materiel must be numbers'}), 400
         if heures < 0 or materiel < 0:
             return jsonify({'error': 'heures/materiel cannot be negative'}), 400
+
+        # Admin can reassign an entry to a different user (e.g. it was logged
+        # under the wrong name).
+        new_user_id = data.get('user_id')
+        old_user = entry.user
+        reassigned_to = None
+        if new_user_id is not None and int(new_user_id) != entry.user_id:
+            new_user = db.session.get(User, int(new_user_id))
+            if not new_user:
+                return jsonify({'error': 'User not found'}), 404
+            reassigned_to = new_user
+            entry.user_id = new_user.id
+
+        changes = []
+        if heures != entry.heures:
+            changes.append(f'heures {entry.heures} -> {heures}')
+        if materiel != entry.materiel:
+            changes.append(f'materiel {entry.materiel} -> {materiel}')
+        if reassigned_to:
+            changes.append(f'user {old_user.username} -> {reassigned_to.username}')
+
         entry.heures = heures
         entry.materiel = materiel
         if 'status' in data:
+            if data['status'] != entry.status:
+                changes.append(f"status {entry.status} -> {data['status']}")
             entry.status = data['status']
         if 'admin_note' in data:
             entry.admin_note = data['admin_note']
 
         db.session.commit()
+
+        if changes:
+            audit_log('entries', current_user,
+                       f"edited entry #{entry.id} (chantier {entry.chantier.nom if entry.chantier else entry.chantier_id}, date {entry.date}): "
+                       + '; '.join(changes))
+
         return jsonify(entry.to_dict())
 
 def compute_days_count(date_start, date_end):
