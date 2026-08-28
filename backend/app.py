@@ -2825,7 +2825,10 @@ def set_security_headers(response):
     response.headers['X-Frame-Options'] = 'DENY'
     response.headers['X-XSS-Protection'] = '1; mode=block'
     response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
-    response.headers['Content-Security-Policy'] = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'"
+    # img-src explicitly allows data: — the 2FA enrollment QR code is
+    # rendered server-side as an inline data:image/svg+xml URI (see mfa.py),
+    # which default-src 'self' alone silently blocks (no data: scheme).
+    response.headers['Content-Security-Policy'] = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:"
     return response
 
 # Initialize Database (Run migration)
