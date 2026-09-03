@@ -35,15 +35,22 @@ class ChantierNomenclatureTestCase(unittest.TestCase):
         with ohmapp.app.app_context():
             admin = ohmapp.User.query.filter_by(username='Admin').first()
             cls.token = ohmapp.serializer.dumps({'user_id': admin.id})
+            cls.admin_id = admin.id
         cls.client.set_cookie(ohmapp.COOKIE_NAME, cls.token)
 
     def test_create_requires_commune_and_client(self):
-        res = self.client.post('/api/chantiers', json={'annee': 2026})
+        res = self.client.post('/api/chantiers', json={'annee': 2026, 'referent_id': self.admin_id})
+        self.assertEqual(res.status_code, 400)
+
+    def test_create_requires_referent(self):
+        res = self.client.post('/api/chantiers', json={
+            'annee': 2026, 'commune': 'Martigny', 'client_repere': 'Dupont'
+        })
         self.assertEqual(res.status_code, 400)
 
     def test_create_generates_numero_and_nom(self):
         res = self.client.post('/api/chantiers', json={
-            'annee': 2026, 'commune': 'Martigny', 'client_repere': 'Dupont'
+            'annee': 2026, 'commune': 'Martigny', 'client_repere': 'Dupont', 'referent_id': self.admin_id
         })
         self.assertEqual(res.status_code, 201, res.get_json())
         body = res.get_json()
@@ -54,18 +61,123 @@ class ChantierNomenclatureTestCase(unittest.TestCase):
         self.assertEqual(body['nom'], f"{body['numero']}-Martigny-Dupont")
 
     def test_numero_is_sequential_and_unique(self):
-        res1 = self.client.post('/api/chantiers', json={'annee': 2026, 'commune': 'Sion', 'client_repere': 'A'})
-        res2 = self.client.post('/api/chantiers', json={'annee': 2026, 'commune': 'Sion', 'client_repere': 'B'})
+        res1 = self.client.post('/api/chantiers', json={'annee': 2026, 'commune': 'Sion', 'client_repere': 'A', 'referent_id': self.admin_id})
+        res2 = self.client.post('/api/chantiers', json={'annee': 2026, 'commune': 'Sion', 'client_repere': 'B', 'referent_id': self.admin_id})
         n1 = int(res1.get_json()['numero'])
         n2 = int(res2.get_json()['numero'])
         self.assertEqual(n2, n1 + 1)
 
     def test_numero_ignores_client_supplied_value(self):
         res = self.client.post('/api/chantiers', json={
-            'annee': 2026, 'commune': 'Sion', 'client_repere': 'C', 'numero': '00000'
+            'annee': 2026, 'commune': 'Sion', 'client_repere': 'C', 'numero': '00000', 'referent_id': self.admin_id
         })
         body = res.get_json()
         self.assertNotEqual(body['numero'], '00000')
+
+    def test_create_sets_referent(self):
+        res = self.client.post('/api/chantiers', json={
+            'annee': 2026, 'commune': 'Sion', 'client_repere': 'D', 'referent_id': self.admin_id
+        })
+        body = res.get_json()
+        self.assertEqual(body['referent_id'], self.admin_id)
+        self.assertEqual(body['referent_name'], 'Admin')
+        self.assertFalse(body['has_assignments'])
+
+    def test_create_unknown_referent_rejected(self):
+        res = self.client.post('/api/chantiers', json={
+            'annee': 2026, 'commune': 'Sion', 'client_repere': 'E', 'referent_id': 999999
+        })
+        self.assertEqual(res.status_code, 404)
+
+    def test_has_assignments_filter_on_list(self):
+        # Sans affectation -> visible seulement dans has_assignments=false.
+        created = self.client.post('/api/chantiers', json={
+            'annee': 2026, 'commune': 'Sion', 'client_repere': 'PotFilter', 'referent_id': self.admin_id
+        }).get_json()
+        cid = created['id']
+
+        pot = self.client.get('/api/chantiers?has_assignments=false').get_json()
+        self.assertIn(cid, [c['id'] for c in pot])
+        planned = self.client.get('/api/chantiers?has_assignments=true').get_json()
+        self.assertNotIn(cid, [c['id'] for c in planned])
+
+        with ohmapp.app.app_context():
+            worker = ohmapp.User.query.filter_by(username='Referent1').first()
+            if not worker:
+                worker = ohmapp.User(username='Referent1', role='user')
+                worker.set_pin('1234')
+                ohmapp.db.session.add(worker)
+                ohmapp.db.session.commit()
+            worker_id = worker.id
+        res = self.client.post('/api/calendar/chantier-assignments', json={
+            'chantier_id': cid, 'user_ids': [worker_id],
+            'date_debut': '2026-09-10', 'date_fin': '2026-09-10', 'toute_la_journee': True
+        })
+        self.assertEqual(res.status_code, 201, res.get_json())
+
+        pot_after = self.client.get('/api/chantiers?has_assignments=false').get_json()
+        self.assertNotIn(cid, [c['id'] for c in pot_after])
+        planned_after = self.client.get('/api/chantiers?has_assignments=true').get_json()
+        self.assertIn(cid, [c['id'] for c in planned_after])
+
+    # --- PUT /api/chantiers/<id> (edit) — numero stays permanent -----------
+    # Regression: the edit form used to send a free-text `nom`, which let
+    # someone edit the numero prefix embedded in it right out from under it.
+
+    def test_edit_cannot_change_numero(self):
+        created = self.client.post('/api/chantiers', json={
+            'annee': 2026, 'commune': 'Martigny', 'client_repere': 'Dupont', 'referent_id': self.admin_id
+        }).get_json()
+        res = self.client.put(f"/api/chantiers/{created['id']}", json={
+            'numero': '00000', 'nom': '00000-Fake-Client', 'commune': 'Martigny', 'client_repere': 'Dupont'
+        })
+        self.assertEqual(res.status_code, 200, res.get_json())
+        body = res.get_json()
+        self.assertEqual(body['numero'], created['numero'])
+        self.assertTrue(body['nom'].startswith(created['numero']))
+
+    def test_edit_updates_commune_and_client_recomputes_nom(self):
+        created = self.client.post('/api/chantiers', json={
+            'annee': 2026, 'commune': 'Martigny', 'client_repere': 'Dupont', 'referent_id': self.admin_id
+        }).get_json()
+        res = self.client.put(f"/api/chantiers/{created['id']}", json={
+            'commune': 'Sion', 'client_repere': 'Morand'
+        })
+        self.assertEqual(res.status_code, 200, res.get_json())
+        body = res.get_json()
+        self.assertEqual(body['numero'], created['numero'])  # unchanged
+        self.assertEqual(body['commune'], 'Sion')
+        self.assertEqual(body['client_repere'], 'Morand')
+        self.assertEqual(body['nom'], f"{created['numero']}-Sion-Morand")
+
+    def test_edit_can_change_referent(self):
+        created = self.client.post('/api/chantiers', json={
+            'annee': 2026, 'commune': 'Martigny', 'client_repere': 'Referent-Test', 'referent_id': self.admin_id
+        }).get_json()
+        with ohmapp.app.app_context():
+            other = ohmapp.User(username='OtherReferent', role='user')
+            other.set_pin('1234')
+            ohmapp.db.session.add(other)
+            ohmapp.db.session.commit()
+            other_id = other.id
+        res = self.client.put(f"/api/chantiers/{created['id']}", json={'referent_id': other_id})
+        self.assertEqual(res.status_code, 200, res.get_json())
+        body = res.get_json()
+        self.assertEqual(body['referent_id'], other_id)
+        self.assertEqual(body['referent_name'], 'OtherReferent')
+
+    def test_edit_legacy_chantier_without_numero_keeps_free_form_nom(self):
+        # A chantier predating the nomenclature (numero never set) has no
+        # numero to protect — the old free-form nom edit still applies.
+        with ohmapp.app.app_context():
+            legacy = ohmapp.Chantier(nom='Ancien Chantier Libre', annee=2020, status='DONE')
+            ohmapp.db.session.add(legacy)
+            ohmapp.db.session.commit()
+            legacy_id = legacy.id
+        res = self.client.put(f'/api/chantiers/{legacy_id}', json={'nom': 'Nouveau Nom Libre'})
+        self.assertEqual(res.status_code, 200, res.get_json())
+        self.assertEqual(res.get_json()['nom'], 'Nouveau Nom Libre')
+        self.assertIsNone(res.get_json()['numero'])
 
 
 class NoticesApiTestCase(unittest.TestCase):

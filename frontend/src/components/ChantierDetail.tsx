@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Chantier, Entry, User } from '../types';
-import { Plus, Minus, X, ArrowLeft, Clock, Calendar, Info, Pencil, Download, Camera, FolderOpen, Lock, Unlock, Loader2, AlertTriangle, Wallet } from 'lucide-react';
+import { Plus, Minus, X, ArrowLeft, Clock, User as UserIcon, Info, Pencil, Download, Camera, FolderOpen, Lock, Unlock, Loader2, AlertTriangle, Wallet } from 'lucide-react';
 import { StatusBadge } from './StatusBadge';
+import { chantierPhase } from '../chantierPhase';
 import { AwesomeDatePicker } from './ui/AwesomeDatePicker';
 import { AwesomeSelect } from './ui/AwesomeSelect';
 import { DocumentExplorer } from './DocumentExplorer';
@@ -234,7 +235,7 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
                         <div className="flex-1 min-w-0">
                             <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
                                 <h1 className="text-2xl sm:text-3xl font-black text-slate-900 uppercase tracking-tight truncate">{chantier.nom}</h1>
-                                <StatusBadge status={chantier.status} type="chantier" />
+                                <StatusBadge status={chantierPhase(chantier)} type="chantier" />
                             </div>
                             <div className="flex items-center gap-2 text-sm text-slate-500 font-mono mt-1">
                                 <span>{chantier.annee}</span>
@@ -385,10 +386,10 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
                     <div className="card space-y-6 animate-slide-up">
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                             <div>
-                                <label className="text-xs font-bold text-slate-400 uppercase">Dates</label>
+                                <label className="text-xs font-bold text-slate-400 uppercase">Référent</label>
                                 <div className="mt-2 text-slate-900 font-mono flex items-center gap-2">
-                                    <Calendar size={16} className="text-ohm-primary" />
-                                    {chantier.date_start || 'Non défini'} → {chantier.date_end || '...'}
+                                    <UserIcon size={16} className="text-ohm-primary" />
+                                    {chantier.referent_name || 'Non défini'}
                                 </div>
                             </div>
                             <div>
@@ -517,38 +518,51 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
                             <button onClick={() => setShowEditModal(false)}><X className="text-slate-500" /></button>
                         </div>
                         <form onSubmit={handleEditSubmit} className="space-y-4">
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            {/* numero is permanent (unique, generated once at creation) — never
+                                editable, here or server-side (see PUT /api/chantiers/<id>).
+                                A chantier created through the enforced nomenclature (numero
+                                set) edits Commune/Client separately, same as at creation; nom
+                                itself is derived server-side, not a free-text field anymore —
+                                that's what let numero get edited out from under it before. A
+                                legacy chantier (no numero) keeps the old free-form Nom field. */}
+                            {chantier.numero ? (
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                    <div>
+                                        <label className="text-xs font-bold text-slate-400 uppercase">N° (fixe)</label>
+                                        <div className="input-field mt-1 bg-slate-100 text-slate-500 font-mono cursor-not-allowed">{chantier.numero}</div>
+                                    </div>
+                                    <div>
+                                        <label className="text-xs font-bold text-slate-400 uppercase">Commune</label>
+                                        <input type="text" required autoFocus className="input-field mt-1" value={editForm.commune || ''} onChange={e => setEditForm({ ...editForm, commune: e.target.value })} />
+                                    </div>
+                                    <div>
+                                        <label className="text-xs font-bold text-slate-400 uppercase">Client / Repère</label>
+                                        <input type="text" required className="input-field mt-1" value={editForm.client_repere || ''} onChange={e => setEditForm({ ...editForm, client_repere: e.target.value })} />
+                                    </div>
+                                </div>
+                            ) : (
                                 <div>
                                     <label className="text-xs font-bold text-slate-400 uppercase">Nom</label>
                                     <input type="text" required autoFocus className="input-field mt-1" value={editForm.nom} onChange={e => setEditForm({ ...editForm, nom: e.target.value })} />
                                 </div>
-                                <div>
-                                    <label className="text-xs font-bold text-slate-400 uppercase">Année</label>
-                                    <input type="number" inputMode="numeric" pattern="[0-9]*" required className="input-field mt-1" value={editForm.annee} onChange={e => setEditForm({ ...editForm, annee: parseInt(e.target.value) })} />
-                                </div>
+                            )}
+                            <div className="max-w-[calc(50%-0.5rem)]">
+                                <label className="text-xs font-bold text-slate-400 uppercase">Année</label>
+                                <input type="number" inputMode="numeric" pattern="[0-9]*" required className="input-field mt-1" value={editForm.annee} onChange={e => setEditForm({ ...editForm, annee: parseInt(e.target.value) })} />
                             </div>
 
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 min-w-0">
-                                <div className="min-w-0">
-                                    <label className="text-xs font-bold text-slate-400 uppercase mb-2 block">Dates</label>
-                                    <div className="flex flex-col gap-2 mt-1">
-                                        <AwesomeDatePicker value={editForm.date_start || ''} onChange={d => setEditForm({ ...editForm, date_start: d })} placeholder="Début" />
-                                        <AwesomeDatePicker value={editForm.date_end || ''} onChange={d => setEditForm({ ...editForm, date_end: d })} minDate={editForm.date_start} placeholder="Fin" />
-                                    </div>
-                                </div>
-                                <div>
-                                    <label className="text-xs font-bold text-slate-400 uppercase mb-2 block">Statut</label>
-                                    <div className="mt-1">
-                                        <AwesomeSelect
-                                            value={editForm.status}
-                                            onChange={(v: string) => setEditForm({ ...editForm, status: v as any })}
-                                            options={[
-                                                { value: 'FUTURE', label: 'À venir' },
-                                                { value: 'ACTIVE', label: 'En cours' },
-                                                { value: 'DONE', label: 'Terminé' }
-                                            ]}
-                                        />
-                                    </div>
+                            <div className="min-w-0">
+                                <label className="text-xs font-bold text-slate-400 uppercase mb-2 block">Référent</label>
+                                {/* Le statut (Non planifié / En cours / Terminé) n'est plus un champ
+                                    éditable ici — il se déduit de has_assignments, sauf Terminé qui
+                                    reste géré par le bouton dédié Clôturer/Ré-ouvrir ci-dessus
+                                    (handleToggleStatus), pas par ce formulaire. */}
+                                <div className="mt-1">
+                                    <AwesomeSelect
+                                        value={editForm.referent_id?.toString() || ''}
+                                        onChange={(v: string) => setEditForm({ ...editForm, referent_id: v ? parseInt(v, 10) : null })}
+                                        options={allUsers.map(u => ({ value: u.id.toString(), label: u.username }))}
+                                    />
                                 </div>
                             </div>
 
