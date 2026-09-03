@@ -67,6 +67,27 @@ export const Dashboard: React.FC<Props> = ({ currentUser, onSelectChantier }) =>
         api.get('/api/users').then(res => res.ok && res.json()).then((data: User[] | false) => data && setUsers(data));
     }, []);
 
+    // Tri appliqué sur la vue courante (peu importe l'onglet EN COURS/NON
+    // PLANIFIÉ/etc.) — "Nom" = alphabétique sur le libellé affiché sur la
+    // carte (client_repere si présent, sinon nom) ; "Deadline" = la plus
+    // proche en premier, chantiers sans deadline toujours en dernier quel
+    // que soit le sens (une absence de deadline n'est jamais "urgente").
+    const [sortBy, setSortBy] = useState<'nom' | 'deadline'>('nom');
+    const sortChantiers = (list: Chantier[]) => {
+        const sorted = [...list];
+        if (sortBy === 'nom') {
+            sorted.sort((a, b) => (a.client_repere || a.nom).localeCompare(b.client_repere || b.nom, 'fr'));
+        } else {
+            sorted.sort((a, b) => {
+                if (!a.deadline && !b.deadline) return 0;
+                if (!a.deadline) return 1;
+                if (!b.deadline) return -1;
+                return a.deadline.localeCompare(b.deadline);
+            });
+        }
+        return sorted;
+    };
+
     useEffect(() => {
         const statusFiltered = filterStatus === 'ALL'
             ? chantiers
@@ -74,14 +95,14 @@ export const Dashboard: React.FC<Props> = ({ currentUser, onSelectChantier }) =>
 
         if (selectedChantierId && !statusFiltered.some(c => c.id.toString() === selectedChantierId)) {
             setSelectedChantierId('');
-            setFilteredChantiers(statusFiltered);
+            setFilteredChantiers(sortChantiers(statusFiltered));
             return;
         }
 
-        setFilteredChantiers(
+        setFilteredChantiers(sortChantiers(
             selectedChantierId ? statusFiltered.filter(c => c.id.toString() === selectedChantierId) : statusFiltered
-        );
-    }, [filterStatus, chantiers, selectedChantierId]);
+        ));
+    }, [filterStatus, chantiers, selectedChantierId, sortBy]);
 
     const fetchChantiers = async () => {
         const res = await api.get(`/api/chantiers?status=ALL`);
@@ -257,21 +278,39 @@ export const Dashboard: React.FC<Props> = ({ currentUser, onSelectChantier }) =>
                 ))}
             </div>
 
-            {/* Search Dropdown */}
-            <div className="relative z-20">
-                <InlineSearchSelect
-                    value={selectedChantierId || undefined}
-                    onChange={(v: string) => setSelectedChantierId(v)}
-                    placeholder={`Rechercher un chantier${filterStatus !== 'ALL' ? ` « ${FILTER_LABELS[filterStatus]} »` : ''}…`}
-                    icon={<Search size={18} />}
-                    options={(filterStatus === 'ALL' ? chantiers : chantiers.filter(c => chantierPhase(c) === filterStatus)).map(c => ({
-                        // nom = "{numero}-{commune}-{client_repere}" (voir Dashboard
-                        // formulaire création) — chercher dans ce texte complet couvre
-                        // déjà numéro, ville et client en une seule recherche substring.
-                        value: c.id.toString(),
-                        label: c.nom
-                    }))}
-                />
+            <div className="flex flex-col sm:flex-row gap-3">
+                {/* Search Dropdown */}
+                <div className="relative z-20 flex-1">
+                    <InlineSearchSelect
+                        value={selectedChantierId || undefined}
+                        onChange={(v: string) => setSelectedChantierId(v)}
+                        placeholder={`Rechercher un chantier${filterStatus !== 'ALL' ? ` « ${FILTER_LABELS[filterStatus]} »` : ''}…`}
+                        icon={<Search size={18} />}
+                        options={(filterStatus === 'ALL' ? chantiers : chantiers.filter(c => chantierPhase(c) === filterStatus)).map(c => ({
+                            // nom = "{numero}-{commune}-{client_repere}" (voir Dashboard
+                            // formulaire création) — chercher dans ce texte complet couvre
+                            // déjà numéro, ville et client en une seule recherche substring.
+                            value: c.id.toString(),
+                            label: c.nom
+                        }))}
+                    />
+                </div>
+
+                {/* Tri — s'applique à la vue courante, quel que soit l'onglet actif. */}
+                <div className="flex items-center gap-2 shrink-0 px-1">
+                    <span className="text-xs font-bold text-text-muted uppercase tracking-wide">Trier :</span>
+                    <div className="flex p-1 bg-white/40 backdrop-blur-2xl border border-black/5 rounded-xl shadow-glass">
+                        {(['nom', 'deadline'] as const).map(s => (
+                            <button
+                                key={s}
+                                onClick={() => setSortBy(s)}
+                                className={`px-3 py-1.5 rounded-lg text-xs font-bold uppercase tracking-wide transition-all ${sortBy === s ? 'bg-primary text-black shadow-sm' : 'text-text-muted hover:text-slate-900'}`}
+                            >
+                                {s === 'nom' ? 'Nom' : 'Deadline'}
+                            </button>
+                        ))}
+                    </div>
+                </div>
             </div>
 
             {/* Large Static Create Button */}

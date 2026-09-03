@@ -1,8 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Chantier, Entry, User } from '../types';
-import { Plus, Minus, X, ArrowLeft, Clock, User as UserIcon, Info, Pencil, Download, Camera, FolderOpen, Lock, Unlock, Loader2, AlertTriangle, Wallet } from 'lucide-react';
+import { Plus, Minus, X, ArrowLeft, Clock, User as UserIcon, Info, Pencil, Download, Camera, FolderOpen, Lock, Unlock, Loader2, AlertTriangle, Wallet, CalendarClock } from 'lucide-react';
 import { StatusBadge } from './StatusBadge';
 import { chantierPhase } from '../chantierPhase';
+import { deadlineSeverity, deadlineDaysLabel, DEADLINE_TEXT_CLASSES } from '../deadlineSeverity';
 import { AwesomeDatePicker } from './ui/AwesomeDatePicker';
 import { AwesomeSelect } from './ui/AwesomeSelect';
 import { DocumentExplorer } from './DocumentExplorer';
@@ -399,6 +400,15 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
                             <div>
                                 <label className="text-xs font-bold text-slate-400 uppercase">Adresse Facturation</label>
                                 <div className="mt-2 text-slate-900">{chantier.address_billing || '-'}</div>
+                            </div>
+                            <div>
+                                <label className="text-xs font-bold text-slate-400 uppercase">Deadline</label>
+                                <div className={`mt-2 font-mono flex items-center gap-2 ${chantier.deadline ? DEADLINE_TEXT_CLASSES[deadlineSeverity(chantier)] : 'text-slate-900'}`}>
+                                    <CalendarClock size={16} className="shrink-0" />
+                                    {chantier.deadline
+                                        ? <>{chantier.deadline}{deadlineSeverity(chantier) !== 'none' && <> · {deadlineDaysLabel(chantier.deadline)}</>}</>
+                                        : 'Non définie'}
+                                </div>
                             </div>
                             <div className="col-span-full">
                                 <label className="text-xs font-bold text-slate-400 uppercase">Remarques</label>
