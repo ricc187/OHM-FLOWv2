@@ -100,6 +100,25 @@ class ChantierNomenclatureTestCase(unittest.TestCase):
         }).get_json()
         self.assertIsNone(created['deadline'])
 
+    def test_edit_sets_and_validates_avancement_declare(self):
+        created = self.client.post('/api/chantiers', json={
+            'annee': 2026, 'commune': 'Sion', 'client_repere': 'AvancementTest', 'referent_id': self.admin_id
+        }).get_json()
+        self.assertIsNone(created['avancement_declare'])
+
+        res = self.client.put(f"/api/chantiers/{created['id']}", json={'avancement_declare': 42.5})
+        self.assertEqual(res.status_code, 200, res.get_json())
+        self.assertEqual(res.get_json()['avancement_declare'], 42.5)
+
+        res = self.client.put(f"/api/chantiers/{created['id']}", json={'avancement_declare': 150})
+        self.assertEqual(res.status_code, 400)
+        res = self.client.put(f"/api/chantiers/{created['id']}", json={'avancement_declare': -5})
+        self.assertEqual(res.status_code, 400)
+
+        res = self.client.put(f"/api/chantiers/{created['id']}", json={'avancement_declare': None})
+        self.assertEqual(res.status_code, 200, res.get_json())
+        self.assertIsNone(res.get_json()['avancement_declare'])
+
     def test_create_unknown_referent_rejected(self):
         res = self.client.post('/api/chantiers', json={
             'annee': 2026, 'commune': 'Sion', 'client_repere': 'E', 'referent_id': 999999

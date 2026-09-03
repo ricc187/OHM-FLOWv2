@@ -433,6 +433,13 @@ class Chantier(db.Model):
     # frontend (jours restants avant deadline).
     deadline = db.Column(db.String(20), nullable=True)
 
+    # Avancement PHYSIQUE du chantier (0-100), déclaré à la main par un admin
+    # — distinct des pourcentages d'avancement CA/matériel/MO/débours sec
+    # (compute_financier, ChantierFinancier) qui sont calculés depuis le
+    # budget. Affiché à côté de ces derniers dans l'onglet Finances pour
+    # comparer "où on en est vraiment" vs "où on en est côté budget".
+    avancement_declare = db.Column(db.Float, nullable=True)
+
     # Relationships
     members = db.relationship('User', secondary=chantier_members, lazy='subquery',
         backref=db.backref('chantiers', lazy=True))
@@ -457,6 +464,7 @@ class Chantier(db.Model):
             'referent_name': self.referent.username if self.referent else None,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'deadline': self.deadline,
+            'avancement_declare': self.avancement_declare,
             'hours_total': round(self._get_hours_total(), 2),
             'members': [u.id for u in self.members],
             'has_assignments': self._get_has_assignments(),
@@ -568,8 +576,15 @@ class Entry(db.Model):
     chantier_id = db.Column(db.Integer, db.ForeignKey('chantiers.id'), nullable=False)
     date = db.Column(db.String(20), nullable=False)
     heures = db.Column(db.Float, nullable=False, default=0.0)
+    # NOT NULL hérité du schéma d'origine — SQLite ne permet pas de relâcher
+    # une contrainte NOT NULL sans reconstruire toute la table, donc la
+    # colonne reste mappée avec un défaut automatique pour que les INSERT
+    # continuent de fonctionner. Plus jamais lue/écrite/exposée ailleurs
+    # (to_dict, POST/PUT /api/entries) : le suivi matériel se fait au niveau
+    # du chantier (module financier : AchatMateriel/charge_materiel_prevue),
+    # pas par saisie d'heure.
     materiel = db.Column(db.Float, nullable=False, default=0.0)
-    
+
     # New fields
     status = db.Column(db.String(20), default='PENDING') # PENDING, VALIDATED
     created_by_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
@@ -580,6 +595,12 @@ class Entry(db.Model):
     # done instead of creating a duplicate entry. Nullable/non-unique at the
     # DB level (old entries never set it); add_entry does the existence check.
     client_ref = db.Column(db.String(64), nullable=True, index=True)
+    # Ce que l'employé a fait sur le chantier ce jour-là. Nullable en base
+    # (les entries créées avant cette fonctionnalité n'en ont pas) mais
+    # obligatoire pour toute NOUVELLE saisie — voir la validation dans
+    # POST /api/entries (le formulaire de saisie appelle littéralement son
+    # bouton "Valider la Saisie", d'où la contrainte à la création).
+    description = db.Column(db.Text, nullable=True)
 
     user = db.relationship('User', foreign_keys=[user_id], backref='entries')
     created_by = db.relationship('User', foreign_keys=[created_by_id])
@@ -594,10 +615,10 @@ class Entry(db.Model):
             'chantier_nom': self.chantier.nom if self.chantier else 'Chantier Inconnu',
             'date': self.date,
             'heures': self.heures,
-            'materiel': self.materiel,
             'status': self.status,
             'created_by_id': self.created_by_id,
-            'admin_note': self.admin_note
+            'admin_note': self.admin_note,
+            'description': self.description,
         }
 
 class Leave(db.Model):
@@ -803,7 +824,7 @@ class Document(db.Model):
 
 # --- Module financier ---
 # Amounts use Float (not Numeric) to match every other money field already in
-# this file (Entry.materiel, etc.) — SQLite has no native DECIMAL type, it
+# this file (Entry.heures, etc.) — SQLite has no native DECIMAL type, it
 # would just store as a float anyway.
 ACHAT_TYPES = ('facture', 'estimation_petites_fournitures')
 
@@ -1099,6 +1120,7 @@ def init_db():
                     'referent_id': "INTEGER REFERENCES users(id)",
                     'created_at': "DATETIME",
                     'deadline': "VARCHAR(20)",
+                    'avancement_declare': "FLOAT",
                 }
                 for col_name, col_type in new_cols.items():
                     if col_name not in cols:
@@ -1124,6 +1146,10 @@ def init_db():
                 if 'client_ref' not in cols:
                     logger.info("Migrating entries: adding client_ref")
                     conn.execute(text("ALTER TABLE entries ADD COLUMN client_ref VARCHAR(64)"))
+                    conn.commit()
+                if 'description' not in cols:
+                    logger.info("Migrating entries: adding description")
+                    conn.execute(text("ALTER TABLE entries ADD COLUMN description TEXT"))
                     conn.commit()
 
             # 4. Leaves Table
@@ -1930,6 +1956,18 @@ def chantier_detail(current_user, chantier_id):
                 chantier.referent_id = None
         chantier.remarque = data.get('remarque', chantier.remarque)
         chantier.deadline = data.get('deadline', chantier.deadline)
+        if 'avancement_declare' in data:
+            raw = data.get('avancement_declare')
+            if raw is None or raw == '':
+                chantier.avancement_declare = None
+            else:
+                try:
+                    pct = float(raw)
+                except (TypeError, ValueError):
+                    return jsonify({'error': 'avancement_declare must be a number'}), 400
+                if pct < 0 or pct > 100:
+                    return jsonify({'error': 'avancement_declare must be between 0 and 100'}), 400
+                chantier.avancement_declare = pct
         new_status = data.get('status', chantier.status)
         chantier.status = new_status
 
@@ -2235,11 +2273,14 @@ def add_entry(current_user):
 
     try:
         heures = float(data.get('heures', 0))
-        materiel = float(data.get('materiel', 0))
     except (TypeError, ValueError):
-        return jsonify({'error': 'heures/materiel must be numbers'}), 400
-    if heures < 0 or materiel < 0:
-        return jsonify({'error': 'heures/materiel cannot be negative'}), 400
+        return jsonify({'error': 'heures must be a number'}), 400
+    if heures < 0:
+        return jsonify({'error': 'heures cannot be negative'}), 400
+
+    description = (data.get('description') or '').strip()
+    if not description:
+        return jsonify({'error': 'Description de la tâche requise'}), 400
 
     # Offline-queued submissions (see frontend offlineQueue.ts) carry a
     # client-generated ref — if a retry's earlier attempt actually succeeded
@@ -2256,10 +2297,10 @@ def add_entry(current_user):
         chantier_id=chantier_id,
         date=date,
         heures=heures,
-        materiel=materiel,
         status='PENDING',
         created_by_id=data.get('created_by_id', current_user.id),
-        client_ref=client_ref
+        client_ref=client_ref,
+        description=description
     )
     db.session.add(new_entry)
     db.session.commit()
@@ -2459,7 +2500,7 @@ def manage_entry(current_user, entry_id):
     if request.method == 'DELETE':
         audit_log('entries', current_user,
                    f"deleted/rejected entry #{entry.id} ({entry.user.username}, chantier {entry.chantier.nom if entry.chantier else entry.chantier_id}, "
-                   f"date {entry.date}, {entry.heures}h, materiel {entry.materiel})")
+                   f"date {entry.date}, {entry.heures}h)")
         db.session.delete(entry)
         db.session.commit()
         return jsonify({'message': 'Entry deleted'})
@@ -2468,11 +2509,10 @@ def manage_entry(current_user, entry_id):
         data = request.json or {}
         try:
             heures = float(data.get('heures', entry.heures))
-            materiel = float(data.get('materiel', entry.materiel))
         except (TypeError, ValueError):
-            return jsonify({'error': 'heures/materiel must be numbers'}), 400
-        if heures < 0 or materiel < 0:
-            return jsonify({'error': 'heures/materiel cannot be negative'}), 400
+            return jsonify({'error': 'heures must be a number'}), 400
+        if heures < 0:
+            return jsonify({'error': 'heures cannot be negative'}), 400
 
         # Admin can reassign an entry to a different user (e.g. it was logged
         # under the wrong name).
@@ -2489,19 +2529,21 @@ def manage_entry(current_user, entry_id):
         changes = []
         if heures != entry.heures:
             changes.append(f'heures {entry.heures} -> {heures}')
-        if materiel != entry.materiel:
-            changes.append(f'materiel {entry.materiel} -> {materiel}')
         if reassigned_to:
             changes.append(f'user {old_user.username} -> {reassigned_to.username}')
 
         entry.heures = heures
-        entry.materiel = materiel
         if 'status' in data:
             if data['status'] != entry.status:
                 changes.append(f"status {entry.status} -> {data['status']}")
             entry.status = data['status']
         if 'admin_note' in data:
             entry.admin_note = data['admin_note']
+        if 'description' in data:
+            new_description = (data['description'] or '').strip()
+            if not new_description:
+                return jsonify({'error': 'Description de la tâche requise'}), 400
+            entry.description = new_description
 
         db.session.commit()
 
@@ -3603,8 +3645,8 @@ def export_data(current_user):
     si = io.StringIO()
     cw = csv.writer(si)
     # Headers
-    cw.writerow(['ID', 'Date', 'Chantier', 'Ouvrier', 'Heures', 'Materiel', 'Statut'])
-    
+    cw.writerow(['ID', 'Date', 'Chantier', 'Ouvrier', 'Heures', 'Description', 'Statut'])
+
     for e in filtered_entries:
         cw.writerow([
             e.id,
@@ -3612,7 +3654,7 @@ def export_data(current_user):
             csv_safe(e.chantier.nom if e.chantier else 'Supprimé'),
             csv_safe(e.user.username if e.user else 'Inconnu'),
             e.heures,
-            e.materiel,
+            csv_safe(e.description or ''),
             e.status
         ])
     
@@ -3641,8 +3683,7 @@ def get_stats(current_user):
     
     total_entries = db.session.query(func.count(Entry.id)).scalar() or 0
     total_hours = db.session.query(func.sum(Entry.heures)).scalar() or 0
-    total_material = db.session.query(func.sum(Entry.materiel)).scalar() or 0
-    
+
     # "Actifs" = phase EN_COURS côté frontend (voir chantierPhase.ts) : pas
     # DONE et au moins une chantier_assignment. Chantier.status=='ACTIVE' ne
     # veut plus dire grand-chose depuis que ce champ n'est plus édité
@@ -3658,62 +3699,50 @@ def get_stats(current_user):
     entries = Entry.query.all()
     
     # Group by Month and Year for Comparison
-    monthly_data = defaultdict(lambda: {'hours': 0, 'material': 0})
+    monthly_data = defaultdict(lambda: {'hours': 0})
     current_year = datetime.now().year
     last_year = current_year - 1
-    
+
     total_hours_curr = 0
     total_hours_last = 0
-    total_mat_curr = 0
-    total_mat_last = 0
 
     for e in entries:
         try:
             # Assumes e.date is YYYY-MM-DD
             year = int(e.date[:4])
             month_key = e.date[:7] # YYYY-MM
-            
+
             monthly_data[month_key]['hours'] += e.heures
-            monthly_data[month_key]['material'] += e.materiel
-            
+
             if year == current_year:
                 total_hours_curr += e.heures
-                total_mat_curr += e.materiel
             elif year == last_year:
                 total_hours_last += e.heures
-                total_mat_last += e.materiel
         except:
             continue
-            
+
     # Format for Frontend (Sorted keys)
     sorted_months = sorted(monthly_data.keys())[-12:] # Last 12 months
-    
+
     history = []
     for m in sorted_months:
         history.append({
             'month': m,
             'hours': round(monthly_data[m]['hours'], 1),
-            'material': round(monthly_data[m]['material'], 2)
         })
 
     # Calculate Growth
     hours_growth = 0
     if total_hours_last > 0:
         hours_growth = ((total_hours_curr - total_hours_last) / total_hours_last) * 100
-        
-    mat_growth = 0
-    if total_mat_last > 0:
-        mat_growth = ((total_mat_curr - total_mat_last) / total_mat_last) * 100
 
     return jsonify({
         'total_entries': total_entries,
         'total_hours': round(total_hours, 1),
-        'total_material': round(total_material, 2),
         'active_chantiers': active_chantiers,
         'history': history,
         'comparison': {
             'hours_growth': round(hours_growth, 1),
-            'material_growth': round(mat_growth, 1),
             'hours_curr': round(total_hours_curr, 1),
             'hours_last': round(total_hours_last, 1)
         }

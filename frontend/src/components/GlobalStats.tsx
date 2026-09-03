@@ -6,8 +6,8 @@ import { D_POS, D_NEG, GRID, formatPct, StatTile, LegendSwatch } from './statsUi
 
 type StatsTab = 'FINANCIER' | 'RH';
 
-// Page "Statistiques" — vue d'ensemble opérationnelle (heures/matériel dans
-// le temps) + vue financière agrégée (marge, avancement, CA prévu/réel par
+// Page "Statistiques" — vue d'ensemble opérationnelle (heures dans le
+// temps) + vue financière agrégée (marge, avancement, CA prévu/réel par
 // chantier), construite selon la méthode dataviz : forme choisie par le job
 // des données, couleur categorical/diverging/status assignée par rôle (jamais
 // décorative), légende dès 2 séries, tooltip au survol, table en repli.
@@ -20,14 +20,13 @@ const S_WARN = '#f59e0b';
 const S_CRIT = '#ef4444';
 const S_NONE = '#cbd5e1';
 
-interface MonthlyStats { month: string; hours: number; material: number; }
+interface MonthlyStats { month: string; hours: number; }
 interface StatsData {
     total_entries: number;
     total_hours: number;
-    total_material: number;
     active_chantiers: number;
     history: MonthlyStats[];
-    comparison?: { hours_growth: number; material_growth: number; hours_curr: number; hours_last: number };
+    comparison?: { hours_growth: number; hours_curr: number; hours_last: number };
 }
 
 interface ChantierFinancierStat {
@@ -198,8 +197,8 @@ const CaScatterChart: React.FC<{ data: ChantierFinancierStat[] }> = ({ data }) =
     );
 };
 
-// --- Tendance mensuelle heures/matériel — courbe + barres, interaction crosshair ---
-const TrendLineChart: React.FC<{ data: MonthlyStats[]; dataKey: 'hours' | 'material'; color: string; unit: string; height?: number }> =
+// --- Tendance mensuelle des heures — courbe + aire, interaction crosshair ---
+const TrendLineChart: React.FC<{ data: MonthlyStats[]; dataKey: 'hours'; color: string; unit: string; height?: number }> =
     ({ data, dataKey, color, unit, height = 220 }) => {
         const containerRef = useRef<HTMLDivElement>(null);
         const [hoverIndex, setHoverIndex] = useState<number | null>(null);

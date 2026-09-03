@@ -188,7 +188,7 @@ class StatsRhTestCase(unittest.TestCase):
             # Heures réelles pointées sur le même chantier dans la période.
             entry = ohmapp.Entry(
                 user_id=self.worker_a_id, chantier_id=self.chantier_id,
-                date=MONDAY.isoformat(), heures=8.0, materiel=0.0,
+                date=MONDAY.isoformat(), heures=8.0,
             )
             ohmapp.db.session.add(entry)
             ohmapp.db.session.commit()

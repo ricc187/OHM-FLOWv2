@@ -35,6 +35,7 @@ export interface Chantier {
     referent_name?: string | null;
     created_at?: string | null; // ISO — null sur les chantiers créés avant l'ajout de cette colonne
     deadline?: string | null; // YYYY-MM-DD, optionnelle — pilote le code couleur de ChantierCard
+    avancement_declare?: number | null; // 0-100, déclaré à la main par un admin (distinct des % calculés du module Finances)
     hours_total?: number;
     // true dès qu'une chantier_assignment existe (proposition ou confirmée) —
     // false = chantier encore dans le "Pot à chantier", pas encore planifié.
@@ -99,10 +100,12 @@ export interface Entry {
     chantier_nom: string;
     date: string;
     heures: number;
-    materiel: number;
     status: 'PENDING' | 'VALIDATED';
     created_by_id?: number;
     admin_note?: string;
+    // Obligatoire pour toute nouvelle saisie (voir POST /api/entries) — optionnel
+    // ici seulement pour les entries créées avant l'ajout de cette colonne.
+    description?: string | null;
 }
 
 // --- Module financier ---

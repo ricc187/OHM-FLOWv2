@@ -15,6 +15,9 @@ import { useAutoRefresh } from '../hooks/useAutoRefresh';
 
 interface Props {
     chantierId: number;
+    // Avancement physique déclaré à la main sur la fiche chantier (0-100, voir
+    // ChantierDetail) — affiché ici pour comparer avec les % calculés du budget.
+    avancementDeclare?: number | null;
 }
 
 const formatCHF = (v: number | null | undefined) =>
@@ -108,10 +111,13 @@ const SectionCard: React.FC<{ children: React.ReactNode }> = ({ children }) => (
 // --- Donut d'avancement (% réel / prévu) ---
 // <90% = neutre (encore en cours), 90-100% = ambre (bientôt au budget),
 // >100% = rouge (dépassement). null (dénominateur nul) = gris "—".
-const DonutStat: React.FC<{ label: string; pct: number | null }> = ({ label, pct }) => {
+const DonutStat: React.FC<{ label: string; pct: number | null; colorOverride?: string }> = ({ label, pct, colorOverride }) => {
     const size = 108, stroke = 11, r = (size - stroke) / 2, c = 2 * Math.PI * r;
     const clamped = pct == null ? 0 : Math.max(0, Math.min(pct, 1));
-    const color = pct == null ? '#94a3b8' : pct > 1 ? '#ef4444' : pct >= 0.9 ? '#f59e0b' : '#16a34a';
+    // colorOverride : pour un % qui n'est pas un "avancement vs budget" (donc
+    // sans notion de dépassement) — l'avancement déclaré par exemple, où le
+    // vert/ambre/rouge habituel (90%/100% de BUDGET) n'a pas de sens.
+    const color = colorOverride ?? (pct == null ? '#94a3b8' : pct > 1 ? '#ef4444' : pct >= 0.9 ? '#f59e0b' : '#16a34a');
     return (
         <div className="flex flex-col items-center gap-2">
             <div className="relative" style={{ width: size, height: size }}>
@@ -139,7 +145,7 @@ const toDraft = (f: ChantierFinancierPrevu, keys: (keyof ChantierFinancierPrevu)
 type CaLigneDraftShape = { libelle: string; montant: string; heures: string };
 type AcompteDraftShape = { libelle: string; montant: string; date: string };
 
-export const FinancesTab: React.FC<Props> = ({ chantierId }) => {
+export const FinancesTab: React.FC<Props> = ({ chantierId, avancementDeclare }) => {
     const [data, setData] = useState<FinancierPayload | null>(null);
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
@@ -394,15 +400,27 @@ export const FinancesTab: React.FC<Props> = ({ chantierId }) => {
                 </div>
             </div>
 
-            {/* Avancement — 4 formules données pour ce module : réel/prévu par poste */}
+            {/* Avancement — 4 formules calculées depuis le budget, + l'avancement
+                physique déclaré à la main (voir le bouton dans l'en-tête de la
+                fiche chantier) pour comparer "où on en est vraiment" vs budget. */}
             <div className="card">
                 <h4 className="text-sm font-black text-slate-900 uppercase tracking-wide mb-5">Avancement</h4>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-6">
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-6">
+                    <DonutStat
+                        label="Déclaré (chantier)"
+                        pct={avancementDeclare != null ? avancementDeclare / 100 : null}
+                        colorOverride={avancementDeclare != null ? '#2563eb' : undefined}
+                    />
                     <DonutStat label="Chiffre d'affaires" pct={data.pct_avancement_ca ?? null} />
                     <DonutStat label="Matériel" pct={data.pct_avancement_materiel ?? null} />
                     <DonutStat label="Main d'œuvre" pct={data.pct_avancement_mo ?? null} />
                     <DonutStat label="Débours sec" pct={data.pct_avancement_debourse_sec ?? null} />
                 </div>
+                {avancementDeclare == null && (
+                    <p className="text-[11px] text-slate-400 mt-4 italic">
+                        Avancement déclaré non renseigné — utilisez le bouton dans l'en-tête de la fiche chantier pour l'indiquer.
+                    </p>
+                )}
             </div>
 
             {depassement && (

@@ -107,7 +107,7 @@ class MissingEntriesTestCase(unittest.TestCase):
         with ohmapp.app.app_context():
             entry = ohmapp.Entry(
                 user_id=self.worker_id, chantier_id=self.chantier_id,
-                date=TUESDAY.isoformat(), heures=1.0, materiel=0, status='PENDING',
+                date=TUESDAY.isoformat(), heures=1.0, status='PENDING',
             )
             ohmapp.db.session.add(entry)
             ohmapp.db.session.commit()

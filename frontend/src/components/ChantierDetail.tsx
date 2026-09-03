@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Chantier, Entry, User } from '../types';
-import { Plus, Minus, X, ArrowLeft, Clock, User as UserIcon, Info, Pencil, Download, Camera, FolderOpen, Lock, Unlock, Loader2, AlertTriangle, Wallet, CalendarClock } from 'lucide-react';
+import { Plus, Minus, X, ArrowLeft, Clock, User as UserIcon, Info, Pencil, Download, Camera, FolderOpen, Lock, Unlock, Loader2, AlertTriangle, Wallet, CalendarClock, FileText, Eye, Gauge } from 'lucide-react';
 import { StatusBadge } from './StatusBadge';
 import { chantierPhase } from '../chantierPhase';
 import { deadlineSeverity, deadlineDaysLabel, DEADLINE_TEXT_CLASSES } from '../deadlineSeverity';
@@ -28,11 +28,13 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
     const [chantier, setChantier] = useState(initialChantier);
     const [activeTab, setActiveTab] = useState<Tab>('SUIVI');
     const [entries, setEntries] = useState<Entry[]>([]);
+    // Popup "lire la description" — juste la ligne d'entry en cours de lecture.
+    const [readingEntry, setReadingEntry] = useState<Entry | null>(null);
 
     // Suivi Modal
     const [showEntryModal, setShowEntryModal] = useState(false);
     // Combined Entry Mode
-    const [entryForm, setEntryForm] = useState({ heures: '' });
+    const [entryForm, setEntryForm] = useState({ heures: '', description: '' });
     const [entryDate, setEntryDate] = useState(new Date().toISOString().split('T')[0]);
     // Admin only: who the entry is actually for. Defaults to themselves;
     // the picker (search + dropdown of every app user) lets them log it on
@@ -116,6 +118,22 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
         }
     };
 
+    // Avancement physique déclaré à la main, par palier de 10% (0/10/…/100)
+    // — admin only, distinct des % calculés du module Finances (voir
+    // FinancesTab, comparaison "où on en est vraiment" vs "côté budget").
+    const [savingAvancement, setSavingAvancement] = useState(false);
+    const saveAvancement = async (pct: number) => {
+        setSavingAvancement(true);
+        const res = await api.put(`/api/chantiers/${chantier.id}`, { avancement_declare: pct });
+        setSavingAvancement(false);
+        if (res.ok) {
+            setChantier(await res.json());
+        } else {
+            const body = await res.json().catch(() => ({}));
+            alert(body.error || "Erreur lors de l'enregistrement");
+        }
+    };
+
     const handleToggleStatus = async () => {
         const newStatus = chantier.status === 'DONE' ? 'ACTIVE' : 'DONE';
         const res = await api.put(`/api/chantiers/${chantier.id}`, { ...chantier, status: newStatus });
@@ -132,8 +150,12 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
     const handleEntrySubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         const h = parseFloat(entryForm.heures) || 0;
+        const description = entryForm.description.trim();
 
         if (h === 0) return;
+        // Bloqué côté client (en plus du 400 serveur) — pas de saisie
+        // possible tant que la description de la tâche n'est pas remplie.
+        if (!description) return;
 
         const targetUserId = currentUser.role === 'admin' ? (parseInt(entryUserId, 10) || currentUser.id) : currentUser.id;
         const payload = {
@@ -141,14 +163,14 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
             chantier_id: chantier.id,
             date: entryDate,
             heures: h,
-            materiel: 0,
+            description,
             created_by_id: currentUser.id
         };
 
         try {
             const res = await api.post('/api/entries', payload);
             if (res.ok) {
-                setEntryForm({ heures: '' });
+                setEntryForm({ heures: '', description: '' });
                 setEntryUserId(currentUser.id.toString());
                 setShowEntryModal(false);
                 fetchDetails();
@@ -161,7 +183,7 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
             // instead of losing what was just typed; it sends automatically
             // once the connection comes back.
             queueEntry({ ...payload, chantier_nom: chantier.nom });
-            setEntryForm({ heures: '' });
+            setEntryForm({ heures: '', description: '' });
             setEntryUserId(currentUser.id.toString());
             setShowEntryModal(false);
         }
@@ -331,13 +353,59 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
                 {/* SUIVI TAB */}
                 {activeTab === 'SUIVI' && (
                     <div className="space-y-6 animate-slide-up">
-                        <div className="card bg-gradient-to-br from-surface to-slate-50 border-l-4 border-l-ohm-primary relative overflow-hidden group flex flex-col items-center justify-center text-center py-8">
-                            {/* Permanent subtle gold background */}
-                            <div className="absolute inset-0 bg-ohm-primary/5"></div>
-                            {/* Stronger on hover */}
-                            <div className="absolute inset-0 bg-ohm-mix opacity-0 group-hover:opacity-20 transition-opacity duration-500"></div>
-                            <span className="text-xs font-bold text-ohm-primary uppercase relative z-10 tracking-widest mb-2">Heures Totales</span>
-                            <div className="text-4xl font-black text-slate-900 relative z-10">{totalHeures} <span className="text-lg text-slate-500 font-normal">h</span></div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <div className="card bg-gradient-to-br from-surface to-slate-50 border-l-4 border-l-ohm-primary relative overflow-hidden group flex flex-col items-center justify-center text-center py-8">
+                                {/* Permanent subtle gold background */}
+                                <div className="absolute inset-0 bg-ohm-primary/5"></div>
+                                {/* Stronger on hover */}
+                                <div className="absolute inset-0 bg-ohm-mix opacity-0 group-hover:opacity-20 transition-opacity duration-500"></div>
+                                <span className="text-xs font-bold text-ohm-primary uppercase relative z-10 tracking-widest mb-2">Heures Totales</span>
+                                <div className="text-4xl font-black text-slate-900 relative z-10">{totalHeures} <span className="text-lg text-slate-500 font-normal">h</span></div>
+                            </div>
+
+                            {/* Avancement physique déclaré, par palier de 10% — admin only
+                                pour éditer (mêmes boutons +/- que le stepper Heures du
+                                formulaire de saisie), visible par tous. Aussi gros/visible
+                                que "Heures Totales" à côté — comparé aux % calculés dans
+                                Finances (voir FinancesTab). */}
+                            <div className="card bg-gradient-to-br from-blue-50 to-slate-50 border-l-4 border-l-blue-500 relative overflow-hidden flex flex-col items-center justify-center text-center py-8 px-6">
+                                <span className="text-xs font-bold text-blue-600 uppercase relative z-10 tracking-widest mb-2 flex items-center gap-1.5">
+                                    <Gauge size={14} /> Avancement chantier
+                                </span>
+                                {currentUser.role === 'admin' ? (
+                                    <div className="flex items-center gap-4 relative z-10">
+                                        <button
+                                            type="button"
+                                            title="Diminuer de 10%"
+                                            onClick={() => saveAvancement(Math.max(0, (chantier.avancement_declare ?? 0) - 10))}
+                                            disabled={savingAvancement || (chantier.avancement_declare ?? 0) <= 0}
+                                            className="w-12 h-12 rounded-xl bg-white hover:bg-red-500/20 text-slate-900 hover:text-red-400 flex items-center justify-center transition-colors shadow-lg disabled:opacity-30"
+                                        >
+                                            <Minus size={20} strokeWidth={3} />
+                                        </button>
+                                        <div className="text-4xl font-black text-slate-900 w-24">
+                                            {chantier.avancement_declare != null
+                                                ? <>{chantier.avancement_declare}<span className="text-lg text-slate-500 font-normal"> %</span></>
+                                                : <span className="text-base text-slate-400 font-normal italic">Non déclaré</span>}
+                                        </div>
+                                        <button
+                                            type="button"
+                                            title="Augmenter de 10%"
+                                            onClick={() => saveAvancement(Math.min(100, (chantier.avancement_declare ?? 0) + 10))}
+                                            disabled={savingAvancement || (chantier.avancement_declare ?? 0) >= 100}
+                                            className="w-12 h-12 rounded-xl bg-white hover:bg-blue-500 text-slate-900 hover:text-white flex items-center justify-center transition-colors shadow-lg disabled:opacity-30"
+                                        >
+                                            <Plus size={20} strokeWidth={3} />
+                                        </button>
+                                    </div>
+                                ) : (
+                                    <div className="text-4xl font-black text-slate-900 relative z-10">
+                                        {chantier.avancement_declare != null
+                                            ? <>{chantier.avancement_declare}<span className="text-lg text-slate-500 font-normal"> %</span></>
+                                            : <span className="text-lg text-slate-400 font-normal italic">Non déclaré</span>}
+                                    </div>
+                                )}
+                            </div>
                         </div>
 
                         {/* Static Add Button (Moved from FAB) */}
@@ -355,6 +423,7 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
                                         <th className="p-4">Date</th>
                                         <th className="p-4">Qui</th>
                                         <th className="p-4 text-right">Heures</th>
+                                        <th className="p-4 text-center">Tâche</th>
                                         <th className="p-4 text-right">Statut</th>
                                     </tr>
                                 </thead>
@@ -367,6 +436,19 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
                                             </td>
                                             <td className="p-4 text-right font-mono font-bold text-slate-900">
                                                 {e.heures > 0 ? `${e.heures}h` : '-'}
+                                            </td>
+                                            <td className="p-4 text-center">
+                                                {e.description ? (
+                                                    <button
+                                                        onClick={() => setReadingEntry(e)}
+                                                        className="p-1.5 rounded-lg text-slate-400 hover:text-ohm-primary hover:bg-black/5 transition-colors"
+                                                        title="Lire la description de la tâche"
+                                                    >
+                                                        <Eye size={16} />
+                                                    </button>
+                                                ) : (
+                                                    <span className="text-slate-300" title="Aucune description (saisie antérieure à cette fonctionnalité)">—</span>
+                                                )}
                                             </td>
                                             <td className="p-4 text-right">
                                                 <StatusBadge status={e.status} type="entry" />
@@ -422,7 +504,7 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
 
                 {/* FINANCES TAB — admin only, mirrors the backend's own admin check */}
                 {activeTab === 'FINANCES' && currentUser.role === 'admin' && (
-                    <FinancesTab chantierId={chantier.id} />
+                    <FinancesTab chantierId={chantier.id} avancementDeclare={chantier.avancement_declare ?? null} />
                 )}
 
             </div>
@@ -434,7 +516,7 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
                         <div className="p-4 sm:p-8 border-b border-black/5 flex justify-between items-center bg-slate-50 shrink-0">
                             <div>
                                 <h3 className="text-xl sm:text-2xl font-black text-slate-900 uppercase tracking-tight">Nouvelle Saisie</h3>
-                                <div className="text-slate-500 text-sm mt-1">Ajoutez des heures ou du matériel pour ce chantier.</div>
+                                <div className="text-slate-500 text-sm mt-1">Ajoutez des heures pour ce chantier.</div>
                             </div>
                             <button onClick={() => setShowEntryModal(false)} className="p-2 rounded-full hover:bg-white/10 text-slate-500 hover:text-slate-900 transition-colors shrink-0">
                                 <X size={24} />
@@ -506,10 +588,25 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
                                 </div>
                             </div>
 
+                            <div>
+                                <label className="flex items-center gap-2 text-sm font-bold text-slate-500 uppercase mb-2">
+                                    <FileText size={18} className="text-ohm-primary" />
+                                    Description de la tâche
+                                </label>
+                                <textarea
+                                    required
+                                    className="input-field w-full min-h-[90px]"
+                                    placeholder="Ce qui a été fait sur le chantier (obligatoire)…"
+                                    value={entryForm.description}
+                                    onChange={e => setEntryForm({ ...entryForm, description: e.target.value })}
+                                />
+                            </div>
+
                             <div className="pt-4">
                                 <button
                                     type="submit"
-                                    className="w-full py-5 bg-ohm-primary text-ohm-bg font-black text-lg rounded-2xl hover:bg-yellow-300 hover:scale-[1.01] active:scale-[0.99] transition-all shadow-xl shadow-primary/20 uppercase tracking-widest"
+                                    disabled={!entryForm.description.trim() || (parseFloat(entryForm.heures) || 0) === 0}
+                                    className="w-full py-5 bg-ohm-primary text-ohm-bg font-black text-lg rounded-2xl hover:bg-yellow-300 hover:scale-[1.01] active:scale-[0.99] transition-all shadow-xl shadow-primary/20 uppercase tracking-widest disabled:opacity-40 disabled:hover:scale-100 disabled:cursor-not-allowed"
                                 >
                                     Valider la Saisie
                                 </button>
@@ -614,6 +711,24 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
                     isAdmin={currentUser.role === 'admin'}
                     onClose={() => setShowExplorer(false)}
                 />
+            )}
+
+            {/* Lire la description d'une saisie — juste un aperçu, rien à modifier ici. */}
+            {readingEntry && (
+                <div className="fixed inset-0 bg-white/80 backdrop-blur-sm flex items-center justify-center z-[100] p-4 safe-top safe-bottom">
+                    <div className="card w-full max-w-md">
+                        <div className="flex justify-between items-start mb-4">
+                            <div>
+                                <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2"><FileText size={18} className="text-ohm-primary" /> Description de la tâche</h3>
+                                <p className="text-xs text-slate-400 mt-1">{readingEntry.user_name} · {readingEntry.date}</p>
+                            </div>
+                            <button onClick={() => setReadingEntry(null)}><X className="text-slate-500" /></button>
+                        </div>
+                        <div className="text-sm text-slate-700 whitespace-pre-wrap bg-slate-50 rounded-lg p-4">
+                            {readingEntry.description}
+                        </div>
+                    </div>
+                </div>
             )}
         </div>
     );
