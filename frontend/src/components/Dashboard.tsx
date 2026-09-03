@@ -3,6 +3,7 @@ import { Chantier, User, ChantierStatus } from '../types';
 import { Folder, Plus, Download, X, Search } from 'lucide-react';
 import { ChantierCard } from './ChantierCard';
 import { InlineSearchSelect } from './ui/InlineSearchSelect';
+import { AwesomeDatePicker } from './ui/AwesomeDatePicker';
 import { chantierPhase, ChantierPhase } from '../chantierPhase';
 import { api } from '../api';
 import { useEscapeKey } from '../hooks/useEscapeKey';
@@ -56,7 +57,8 @@ export const Dashboard: React.FC<Props> = ({ currentUser, onSelectChantier }) =>
         status: 'FUTURE' as ChantierStatus,
         address_work: '',
         address_billing: '',
-        remarque: ''
+        remarque: '',
+        deadline: ''
     });
     const [users, setUsers] = useState<User[]>([]);
 
@@ -124,6 +126,7 @@ export const Dashboard: React.FC<Props> = ({ currentUser, onSelectChantier }) =>
         const payload = {
             ...newChantier,
             referent_id: newChantier.referent_id ? parseInt(newChantier.referent_id, 10) : null,
+            deadline: newChantier.deadline || null,
             status: 'FUTURE' as ChantierStatus
         };
 
@@ -137,7 +140,8 @@ export const Dashboard: React.FC<Props> = ({ currentUser, onSelectChantier }) =>
                 status: 'FUTURE',
                 address_work: '',
                 address_billing: '',
-                remarque: ''
+                remarque: '',
+                deadline: ''
             });
             setShowCreate(false);
             fetchChantiers();
@@ -356,6 +360,14 @@ export const Dashboard: React.FC<Props> = ({ currentUser, onSelectChantier }) =>
                                     onChange={e => setNewChantier({ ...newChantier, annee: parseInt(e.target.value) })}
                                     required
                                 />
+                            </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <div>
+                                {/* Optionnelle — pilote le code couleur de la carte (voir ChantierCard.tsx). */}
+                                <label className="text-xs font-bold text-primary/80 uppercase tracking-widest mb-2 block">Deadline (optionnel)</label>
+                                <AwesomeDatePicker value={newChantier.deadline} onChange={d => setNewChantier({ ...newChantier, deadline: d })} placeholder="Aucune deadline" />
                             </div>
                         </div>
 

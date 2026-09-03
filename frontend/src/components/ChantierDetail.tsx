@@ -566,6 +566,12 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
                                 </div>
                             </div>
 
+                            <div>
+                                {/* Optionnelle — pilote le code couleur de la carte (voir ChantierCard.tsx). */}
+                                <label className="text-xs font-bold text-slate-400 uppercase mb-2 block">Deadline (optionnel)</label>
+                                <AwesomeDatePicker value={editForm.deadline || ''} onChange={d => setEditForm({ ...editForm, deadline: d || null })} placeholder="Aucune deadline" />
+                            </div>
+
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                 <div>
                                     <label className="text-xs font-bold text-slate-400 uppercase">Adresse Travaux</label>
