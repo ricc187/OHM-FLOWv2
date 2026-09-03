@@ -427,6 +427,12 @@ class Chantier(db.Model):
     # "Pot à chantier" affiche "Date inconnue" dans ce cas.
     created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
 
+    # Date cible pour terminer le chantier — même convention string YYYY-MM-DD
+    # que date_start/date_end avaient (voir commentaire plus haut). Optionnelle,
+    # pas de valeur par défaut. Pilote le code couleur de ChantierCard côté
+    # frontend (jours restants avant deadline).
+    deadline = db.Column(db.String(20), nullable=True)
+
     # Relationships
     members = db.relationship('User', secondary=chantier_members, lazy='subquery',
         backref=db.backref('chantiers', lazy=True))
@@ -450,6 +456,7 @@ class Chantier(db.Model):
             'referent_id': self.referent_id,
             'referent_name': self.referent.username if self.referent else None,
             'created_at': self.created_at.isoformat() if self.created_at else None,
+            'deadline': self.deadline,
             'hours_total': round(self._get_hours_total(), 2),
             'members': [u.id for u in self.members],
             'has_assignments': self._get_has_assignments(),
@@ -1091,6 +1098,7 @@ def init_db():
                     'client_repere': "VARCHAR(100)",
                     'referent_id': "INTEGER REFERENCES users(id)",
                     'created_at': "DATETIME",
+                    'deadline': "VARCHAR(20)",
                 }
                 for col_name, col_type in new_cols.items():
                     if col_name not in cols:
@@ -1865,6 +1873,7 @@ def manage_chantiers(current_user):
             address_work=data.get('address_work'),
             address_billing=data.get('address_billing'),
             remarque=data.get('remarque'),
+            deadline=data.get('deadline'),
             status=data.get('status', 'FUTURE')
         )
 
@@ -1920,6 +1929,7 @@ def chantier_detail(current_user, chantier_id):
             else:
                 chantier.referent_id = None
         chantier.remarque = data.get('remarque', chantier.remarque)
+        chantier.deadline = data.get('deadline', chantier.deadline)
         new_status = data.get('status', chantier.status)
         chantier.status = new_status
 

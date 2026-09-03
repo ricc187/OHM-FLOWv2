@@ -83,6 +83,23 @@ class ChantierNomenclatureTestCase(unittest.TestCase):
         self.assertEqual(body['referent_name'], 'Admin')
         self.assertFalse(body['has_assignments'])
 
+    def test_create_and_edit_deadline(self):
+        created = self.client.post('/api/chantiers', json={
+            'annee': 2026, 'commune': 'Sion', 'client_repere': 'DeadlineTest',
+            'referent_id': self.admin_id, 'deadline': '2026-12-24'
+        }).get_json()
+        self.assertEqual(created['deadline'], '2026-12-24')
+
+        res = self.client.put(f"/api/chantiers/{created['id']}", json={'deadline': '2027-01-15'})
+        self.assertEqual(res.status_code, 200, res.get_json())
+        self.assertEqual(res.get_json()['deadline'], '2027-01-15')
+
+    def test_create_without_deadline_is_none(self):
+        created = self.client.post('/api/chantiers', json={
+            'annee': 2026, 'commune': 'Sion', 'client_repere': 'NoDeadline', 'referent_id': self.admin_id
+        }).get_json()
+        self.assertIsNone(created['deadline'])
+
     def test_create_unknown_referent_rejected(self):
         res = self.client.post('/api/chantiers', json={
             'annee': 2026, 'commune': 'Sion', 'client_repere': 'E', 'referent_id': 999999
