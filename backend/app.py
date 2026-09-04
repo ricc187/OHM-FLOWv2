@@ -3803,7 +3803,21 @@ def _upsert_ca_ligne_from_offer(link, offer):
     libellé). Le matériel (`ChantierFinancier.charge_materiel_prevue`)
     n'est mis à jour QUE si cette offre le fournit explicitement — jamais
     écrasé à 0/None quand ce n'est pas le cas, un chantier pouvant avoir
-    plusieurs offres dont une seule porte cette info."""
+    plusieurs offres dont une seule porte cette info.
+
+    Plusieurs offres du même chantier fournissant chacune un montant
+    matériel : ACCUMULÉ (somme), pas "dernière valeur écrase" — décision
+    explicite (une offre = un lot de travaux avec son propre matériel, le
+    budget matériel total du chantier est la somme des lots).
+
+    Limite connue, non traitée à cette étape (mock uniquement, pas de vrai
+    appel Volta) : cette accumulation est un `+=` simple, donc re-synchroniser
+    une entrée déjà 'synced' dont l'offre fournit un matériel compterait sa
+    contribution une deuxième fois — CaLignePrevue n'a pas de colonne dédiée
+    pour retenir "combien cette offre précise a déjà ajouté" et permettre de
+    la soustraire avant de rajouter la nouvelle valeur. Sans incidence à
+    cette étape (une entrée 'synced' n'est jamais retraitée par la file), à
+    revoir si un futur re-sync manuel d'une entrée déjà synced est ajouté."""
     if not isinstance(offer, dict) or 'montant' not in offer:
         raise VoltaSyncError(f"Réponse offre Volta invalide pour {link.numero_offre!r}: {offer!r}")
     montant, err = _parse_amount(offer, 'montant', required=True)
@@ -3825,7 +3839,7 @@ def _upsert_ca_ligne_from_offer(link, offer):
         if not financier:
             financier = ChantierFinancier(chantier_id=link.chantier_id)
             db.session.add(financier)
-        financier.charge_materiel_prevue = materiel
+        financier.charge_materiel_prevue = (financier.charge_materiel_prevue or 0.0) + materiel
 
 def _volta_calls_last_hour():
     one_hour_ago = datetime.datetime.utcnow() - datetime.timedelta(hours=1)

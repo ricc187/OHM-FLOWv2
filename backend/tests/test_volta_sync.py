@@ -271,6 +271,26 @@ class VoltaSyncTestCase(unittest.TestCase):
             financier = ohmapp.ChantierFinancier.query.filter_by(chantier_id=chantier_id).first()
             self.assertEqual(financier.charge_materiel_prevue, 999.0)  # inchangé
 
+    def test_multiple_offers_same_chantier_sum_materiel(self):
+        # Décision explicite : plusieurs offres du même chantier fournissant
+        # chacune un montant matériel -> la charge matériel prévue est leur
+        # SOMME, pas la dernière valeur traitée qui écraserait les autres.
+        chantier_id = self._create_chantier('Baita materiel cumule')
+        self._create_link(chantier_id, numero_projet='024042.001', numero_facture='F1', numero_offre='7747')
+        self._create_link(chantier_id, numero_projet='024042.001', numero_facture='F2', numero_offre='6638')
+        offers_fetch = _ok_offers([
+            {'numero_offre': '7747', 'montant': 100.0, 'heures': 1.0, 'materiel': 100.0},
+            {'numero_offre': '6638', 'montant': 200.0, 'heures': 2.0, 'materiel': 50.0},
+        ])
+
+        with ohmapp.app.app_context():
+            result = ohmapp.process_volta_sync_queue(fetch_invoice_amount=_ok_invoice(), fetch_project_offers_or_contracts=offers_fetch)
+        self.assertEqual(result, {'processed': 2, 'stopped_reason': None})
+
+        with ohmapp.app.app_context():
+            financier = ohmapp.ChantierFinancier.query.filter_by(chantier_id=chantier_id).first()
+            self.assertEqual(financier.charge_materiel_prevue, 150.0)  # 100 + 50, pas 50 (dernière valeur)
+
     def test_offer_not_found_in_project_marks_erreur(self):
         chantier_id = self._create_chantier('Baita offre absente')
         link_id = self._create_link(chantier_id, numero_offre='9999')
