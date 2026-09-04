@@ -192,6 +192,32 @@ export interface FinancierPayload extends Partial<FinancierCalculs> {
     achats: AchatMateriel[];
 }
 
+// --- Module prévision annuelle ---
+// Totalement indépendant de l'Agenda / chantier_assignments / financier —
+// voir backend/app.py (ChantierPrevision). Le seul lien avec un chantier réel
+// est chantier_id, en lecture seule (jamais réécrit depuis le frontend).
+
+export type PrevisionStatut = 'prevu' | 'confirme';
+
+export interface ChantierPrevision {
+    id: number;
+    nom: string;
+    referent_id: number | null;
+    referent_username: string | null;
+    montant_estime: number | null;
+    date_debut_theorique: string | null; // YYYY-MM-DD
+    date_fin_theorique: string | null; // YYYY-MM-DD
+    statut: PrevisionStatut;
+    chantier_id: number | null;
+    created_at: string | null;
+}
+
+export interface PrevisionImportResult {
+    created_count: number;
+    already_imported_count: number;
+    created: ChantierPrevision[];
+}
+
 // CONGE/MALADIE/ABSENCE/ARMEE/CONGE_PAT_MAT/DEMENAGEMENT mirror the backend
 // Leave.type enum (renamed from VACATION/SICKNESS/OTHER — see app.py's
 // leaves type migration). HOLIDAY is frontend-only (synthetic calendar entries,

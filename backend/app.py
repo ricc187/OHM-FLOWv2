@@ -938,6 +938,51 @@ class AchatMateriel(db.Model):
             'created_at': self.created_at.isoformat() if self.created_at else None,
         }
 
+class ChantierPrevision(db.Model):
+    """Module de prévision annuelle — TOTALEMENT INDÉPENDANT de l'Agenda, des
+    chantier_assignments et du module financier : sert uniquement à visualiser/
+    planifier l'activité de l'année sur un calendrier annuel séparé. Le seul
+    lien autorisé avec les autres tables est en LECTURE SEULE, pour pré-remplir
+    un chantier déjà réel (voir /api/prevision/import) — jamais en écriture
+    vers `chantiers` ou une autre table. Ce module doit continuer de
+    fonctionner même si l'Agenda ou le financier changent de forme.
+
+    statut='prevu'    : chantier "qui va se faire" mais pas encore créé dans
+                         l'app — chantier_id reste NULL.
+    statut='confirme' : chantier réel, importé depuis `chantiers` (chantier_id
+                         renseigné). Ses dates théoriques sont pré-remplies à
+                         l'import depuis ce chantier réel, puis vivent leur vie
+                         propre ici (modifiables indépendamment ensuite)."""
+    __tablename__ = 'chantiers_prevision'
+    id = db.Column(db.Integer, primary_key=True)
+    nom = db.Column(db.String(150), nullable=False)
+    referent_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    montant_estime = db.Column(db.Float, nullable=True)
+    date_debut_theorique = db.Column(db.String(20), nullable=True)
+    date_fin_theorique = db.Column(db.String(20), nullable=True)
+    statut = db.Column(db.String(20), nullable=False, default='prevu')  # 'prevu' or 'confirme'
+    # Optional link to a real chantier — read-only reference, set only by the
+    # /api/prevision/import endpoint or an explicit manual link via PUT/POST.
+    chantier_id = db.Column(db.Integer, db.ForeignKey('chantiers.id'), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+
+    referent = db.relationship('User', foreign_keys=[referent_id])
+    chantier = db.relationship('Chantier', foreign_keys=[chantier_id])
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'nom': self.nom,
+            'referent_id': self.referent_id,
+            'referent_username': self.referent.username if self.referent else None,
+            'montant_estime': self.montant_estime,
+            'date_debut_theorique': self.date_debut_theorique,
+            'date_fin_theorique': self.date_fin_theorique,
+            'statut': self.statut,
+            'chantier_id': self.chantier_id,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
+
 def sanitize_folder_name(name):
     """Make a chantier name safe to use as a filesystem folder name."""
     name = (name or '').strip()
@@ -3588,6 +3633,199 @@ def achat_detail(current_user, chantier_id, achat_id):
         achat.date = date
     db.session.commit()
     return jsonify(achat.to_dict())
+
+PREVISION_STATUTS = ('prevu', 'confirme')
+
+def _prevision_validate_body(data, existing=None):
+    """Shared validation for POST/PUT on /api/prevision. `existing` is the
+    ChantierPrevision being updated (None on create) — used only to fall back
+    to its current values for fields not present in a partial PUT payload.
+    Returns (fields_dict, error_response_or_None)."""
+    fields = {}
+
+    if 'nom' in data or existing is None:
+        nom = (data.get('nom') or '').strip()
+        if not nom:
+            return None, (jsonify({'error': 'nom is required'}), 400)
+        fields['nom'] = nom
+
+    if 'statut' in data or existing is None:
+        statut = data.get('statut', 'prevu')
+        if statut not in PREVISION_STATUTS:
+            return None, (jsonify({'error': f"statut must be one of {PREVISION_STATUTS}"}), 400)
+        fields['statut'] = statut
+
+    if 'referent_id' in data:
+        referent_id = data.get('referent_id')
+        if referent_id is not None:
+            if not db.session.get(User, referent_id):
+                return None, (jsonify({'error': 'referent_id does not reference an existing user'}), 400)
+        fields['referent_id'] = referent_id
+
+    if 'chantier_id' in data:
+        chantier_id = data.get('chantier_id')
+        if chantier_id is not None:
+            if not db.session.get(Chantier, chantier_id):
+                return None, (jsonify({'error': 'chantier_id does not reference an existing chantier'}), 400)
+        fields['chantier_id'] = chantier_id
+
+    if 'montant_estime' in data:
+        montant_estime, err = _parse_amount(data, 'montant_estime', required=False, default=None)
+        if err: return None, err
+        fields['montant_estime'] = montant_estime
+
+    if 'date_debut_theorique' in data:
+        date_debut, err = _parse_iso_date(data, 'date_debut_theorique', required=False)
+        if err: return None, err
+        fields['date_debut_theorique'] = date_debut
+
+    if 'date_fin_theorique' in data:
+        date_fin, err = _parse_iso_date(data, 'date_fin_theorique', required=False)
+        if err: return None, err
+        fields['date_fin_theorique'] = date_fin
+
+    debut = fields.get('date_debut_theorique', existing.date_debut_theorique if existing else None)
+    fin = fields.get('date_fin_theorique', existing.date_fin_theorique if existing else None)
+    if debut and fin and debut > fin:
+        return None, (jsonify({'error': 'date_debut_theorique must be before or equal to date_fin_theorique'}), 400)
+
+    return fields, None
+
+@app.route('/api/prevision', methods=['GET', 'POST'])
+@token_required
+def manage_prevision(current_user):
+    if current_user.role != 'admin':
+        return jsonify({'error': 'Admin access required'}), 403
+
+    if request.method == 'GET':
+        query = ChantierPrevision.query
+        statut = request.args.get('statut')
+        if statut:
+            if statut not in PREVISION_STATUTS:
+                return jsonify({'error': f"statut must be one of {PREVISION_STATUTS}"}), 400
+            query = query.filter(ChantierPrevision.statut == statut)
+        annee = request.args.get('annee')
+        if annee:
+            # Une prévision "concerne" l'année si sa plage théorique la touche —
+            # simple préfixe sur les dates ISO stockées en texte (YYYY-MM-DD).
+            query = query.filter(
+                db.or_(
+                    ChantierPrevision.date_debut_theorique.like(f'{annee}%'),
+                    ChantierPrevision.date_fin_theorique.like(f'{annee}%'),
+                )
+            )
+        items = query.order_by(ChantierPrevision.date_debut_theorique.is_(None), ChantierPrevision.date_debut_theorique).all()
+        return jsonify([p.to_dict() for p in items])
+
+    # POST — always creates a fresh prévision, statut defaults to 'prevu'
+    # (an explicit statut='confirme' + chantier_id can still be posted
+    # directly, e.g. a manual link, but /api/prevision/import is the normal
+    # way real chantiers get in here).
+    data = request.json or {}
+    fields, err = _prevision_validate_body(data, existing=None)
+    if err: return err
+
+    prevision = ChantierPrevision(
+        nom=fields['nom'],
+        statut=fields.get('statut', 'prevu'),
+        referent_id=fields.get('referent_id'),
+        chantier_id=fields.get('chantier_id'),
+        montant_estime=fields.get('montant_estime'),
+        date_debut_theorique=fields.get('date_debut_theorique'),
+        date_fin_theorique=fields.get('date_fin_theorique'),
+    )
+    db.session.add(prevision)
+    db.session.commit()
+    return jsonify(prevision.to_dict()), 201
+
+@app.route('/api/prevision/<int:prevision_id>', methods=['GET', 'PUT', 'DELETE'])
+@token_required
+def prevision_detail(current_user, prevision_id):
+    if current_user.role != 'admin':
+        return jsonify({'error': 'Admin access required'}), 403
+    prevision = db.session.get(ChantierPrevision, prevision_id)
+    if not prevision:
+        return jsonify({'error': 'Prevision not found'}), 404
+
+    if request.method == 'GET':
+        return jsonify(prevision.to_dict())
+
+    if request.method == 'DELETE':
+        db.session.delete(prevision)
+        db.session.commit()
+        return jsonify({'message': 'Prevision deleted'})
+
+    # PUT — partial update, only fields present in the payload are touched.
+    data = request.json or {}
+    fields, err = _prevision_validate_body(data, existing=prevision)
+    if err: return err
+    for key, value in fields.items():
+        setattr(prevision, key, value)
+    db.session.commit()
+    return jsonify(prevision.to_dict())
+
+@app.route('/api/prevision/import', methods=['POST'])
+@token_required
+def import_prevision(current_user):
+    """Read-only import of real chantiers into the prévision calendar, as
+    statut='confirme'. NEVER writes to `chantiers`, `chantier_assignments` or
+    any other table outside chantiers_prevision — only reads from them here.
+
+    Theoretical dates are MIN(date_debut)/MAX(date_fin) over that chantier's
+    ChantierAssignment rows with statut='confirme' (a 'proposition' — a
+    candidate date not yet picked by the client, see ChantierAssignment's
+    docstring — isn't real yet, so it's excluded). No confirmed assignment ->
+    dates stay empty, same as before.
+
+    (Chantier.date_start/date_end, this import's original source, were
+    dropped from the product — the columns are still in the DB per this
+    repo's "never drop a column" convention, but the Chantier model no
+    longer maps them, and ChantierAssignment/the Agenda module is what
+    replaced the concept of a chantier's period. Only the source of the
+    dates changed here — the read-only contract and the idempotency below
+    did not.)
+
+    Idempotent: a chantier already linked to a chantiers_prevision row
+    (chantier_id set) is left untouched — re-running the import only picks up
+    chantiers that aren't in the prévision calendar yet, so it never clobbers
+    dates a user has since edited by hand."""
+    if current_user.role != 'admin':
+        return jsonify({'error': 'Admin access required'}), 403
+    already_imported_ids = {
+        row.chantier_id for row in ChantierPrevision.query.filter(ChantierPrevision.chantier_id.isnot(None)).all()
+    }
+    to_import = Chantier.query.filter(~Chantier.id.in_(already_imported_ids)).all() if already_imported_ids else Chantier.query.all()
+
+    # One grouped query for every chantier's confirmed-assignment date span,
+    # instead of a per-chantier query in the loop below.
+    assignment_dates = {
+        chantier_id: (min_debut, max_fin)
+        for chantier_id, min_debut, max_fin in db.session.query(
+            ChantierAssignment.chantier_id,
+            func.min(ChantierAssignment.date_debut),
+            func.max(ChantierAssignment.date_fin),
+        ).filter(ChantierAssignment.statut == 'confirme').group_by(ChantierAssignment.chantier_id).all()
+    }
+
+    created = []
+    for chantier in to_import:
+        debut, fin = assignment_dates.get(chantier.id, (None, None))
+        prevision = ChantierPrevision(
+            nom=chantier.nom,
+            statut='confirme',
+            chantier_id=chantier.id,
+            date_debut_theorique=debut,
+            date_fin_theorique=fin,
+        )
+        db.session.add(prevision)
+        created.append(prevision)
+    db.session.commit()
+
+    return jsonify({
+        'created_count': len(created),
+        'already_imported_count': len(already_imported_ids),
+        'created': [p.to_dict() for p in created],
+    }), 200
 
 def csv_safe(value):
     """Neutralize CSV/formula injection: Excel/Sheets execute a cell starting

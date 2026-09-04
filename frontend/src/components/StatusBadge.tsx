@@ -1,7 +1,7 @@
 
 interface StatusBadgeProps {
     status: string;
-    type: 'chantier' | 'entry' | 'leave';
+    type: 'chantier' | 'entry' | 'leave' | 'prevision';
 }
 
 // Callers pass a ChantierPhase key ('NON_PLANIFIE' | 'EN_COURS' | 'TERMINE',
@@ -33,6 +33,11 @@ export const StatusBadge = ({ status, type }: StatusBadgeProps) => {
         if (normalizedStatus === 'PENDING') colorClass = 'bg-yellow-500/20 text-blue-600';
         if (normalizedStatus === 'APPROVED') colorClass = 'bg-green-500/20 text-green-400';
         if (normalizedStatus === 'REJECTED') colorClass = 'bg-red-500/20 text-red-400';
+    }
+
+    if (type === 'prevision') {
+        if (normalizedStatus === 'PREVU') colorClass = 'bg-amber-500/20 text-amber-600 border border-amber-500/30';
+        if (normalizedStatus === 'CONFIRME') colorClass = 'bg-emerald-500/20 text-emerald-600 border border-emerald-500/30';
     }
 
     return (

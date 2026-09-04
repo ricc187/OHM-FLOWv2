@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { OhmIcon } from './Icons';
-import { LayoutDashboard, CalendarDays, CalendarCheck, Users, ClipboardCheck, LogOut, BarChart3, Menu, X, ChevronRight, CloudOff, Megaphone, Inbox, AlertTriangle, CalendarClock } from 'lucide-react';
+import { LayoutDashboard, CalendarDays, CalendarCheck, Users, ClipboardCheck, LogOut, BarChart3, Menu, X, ChevronRight, CloudOff, Megaphone, Inbox, AlertTriangle, CalendarClock, CalendarRange } from 'lucide-react';
 import { MODAL_STATE_EVENT } from '../modalState';
 import { api } from '../api';
 import { getQueuedEntries, onQueueChange } from '../offlineQueue';
@@ -11,7 +11,7 @@ interface User {
     role: string;
 }
 
-type View = 'dashboard' | 'admin' | 'admin-entries' | 'missing-entries' | 'admin-leaves' | 'planning' | 'agenda' | 'mes-conges' | 'pot-a-chantier' | 'stats' | 'notices';
+type View = 'dashboard' | 'admin' | 'admin-entries' | 'missing-entries' | 'admin-leaves' | 'planning' | 'agenda' | 'mes-conges' | 'pot-a-chantier' | 'stats' | 'notices' | 'prevision';
 
 interface LayoutProps {
     children: React.ReactNode;
@@ -39,6 +39,11 @@ const ADMIN_NAV_ITEMS = [
     { path: 'missing-entries', view: 'missing-entries' as View, icon: AlertTriangle, label: 'Heures non entrées' },
     { path: 'admin-leaves', view: 'admin-leaves' as View, icon: CalendarClock, label: 'Validation Congés' },
     { path: 'notices', view: 'notices' as View, icon: Megaphone, label: 'Annonces' },
+    // Module de prévision annuelle — totalement indépendant de l'Agenda/des
+    // chantier_assignments (voir backend/app.py ChantierPrevision) : admin-only
+    // comme le reste de cette liste, pas de lien de données avec les items
+    // au-dessus, juste la même position dans la nav.
+    { path: 'prevision', view: 'prevision' as View, icon: CalendarRange, label: 'Prévision annuelle' },
 ];
 
 export const Layout: React.FC<LayoutProps> = ({ children, user, activeView, onLogout, onNavigate }) => {
