@@ -1,34 +1,13 @@
 import { Chantier } from '../types';
 import { StatusBadge } from './StatusBadge';
 import { chantierPhase } from '../chantierPhase';
-import { deadlineSeverity, deadlineDaysLabel, DeadlineSeverity, DEADLINE_TEXT_CLASSES } from '../deadlineSeverity';
+import { deadlineSeverity, deadlineDaysLabel, DeadlineSeverity, DEADLINE_TEXT_CLASSES, CARD_SEVERITY_CLASSES, BADGE_SEVERITY_CLASSES } from '../deadlineSeverity';
 import { Clock, User as UserIcon, CalendarClock, AlertTriangle, AlertOctagon } from 'lucide-react';
 
 interface ChantierCardProps {
     chantier: Chantier;
     onClick: () => void;
 }
-
-// Classes appliquées sur la carte selon la sévérité deadline — regroupées
-// ici (pas en dur dans le JSX) pour ajuster le rendu sans relire tout le
-// composant. Fonds pleins (pas de /NN translucide) et liserés épais dès
-// "warning" pour que chaque palier se voie clairement d'un coup d'œil sur
-// la grille, pas juste au survol rapproché. "overdue" pousse encore plus
-// loin (ring plus épais, rouge plus sombre) + le badge DÉPASSÉE en plus.
-const CARD_SEVERITY_CLASSES: Record<DeadlineSeverity, string> = {
-    none: '',
-    warning: 'ring-2 ring-inset ring-amber-400 border-l-[6px] border-l-amber-500 bg-amber-100',
-    alert: 'ring-2 ring-inset ring-orange-500 border-l-[6px] border-l-orange-600 bg-orange-100',
-    urgent: 'ring-2 ring-inset ring-red-500 border-l-[6px] border-l-red-600 bg-red-100',
-    overdue: 'ring-[3px] ring-inset ring-red-700 border-l-[8px] border-l-red-800 bg-red-200',
-};
-
-const BADGE_SEVERITY_CLASSES: Record<Exclude<DeadlineSeverity, 'none'>, string> = {
-    warning: 'bg-amber-400 text-black',
-    alert: 'bg-orange-500 text-white',
-    urgent: 'bg-red-500 text-white',
-    overdue: 'bg-red-700 text-white',
-};
 
 const SeverityIcon = ({ severity, size, className }: { severity: DeadlineSeverity; size: number; className?: string }) => {
     const Icon = severity === 'overdue' ? AlertOctagon : (severity === 'urgent' || severity === 'alert') ? AlertTriangle : CalendarClock;

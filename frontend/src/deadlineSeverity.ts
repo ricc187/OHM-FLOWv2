@@ -44,6 +44,28 @@ export const DEADLINE_TEXT_CLASSES: Record<DeadlineSeverity, string> = {
     overdue: 'text-red-800',
 };
 
+// Classes appliquées sur toute une carte selon la sévérité — partagées par
+// ChantierCard (sévérité = deadline) et PotAChantier (sévérité = jours sans
+// planification) : même échelle de couleur, deux métriques différentes.
+// Fonds pleins (pas de /NN translucide) et liserés épais dès "warning" pour
+// que chaque palier se voie clairement d'un coup d'œil sur la grille, pas
+// juste au survol rapproché. "overdue" pousse encore plus loin (ring plus
+// épais, rouge plus sombre).
+export const CARD_SEVERITY_CLASSES: Record<DeadlineSeverity, string> = {
+    none: '',
+    warning: 'ring-2 ring-inset ring-amber-400 border-l-[6px] border-l-amber-500 bg-amber-100',
+    alert: 'ring-2 ring-inset ring-orange-500 border-l-[6px] border-l-orange-600 bg-orange-100',
+    urgent: 'ring-2 ring-inset ring-red-500 border-l-[6px] border-l-red-600 bg-red-100',
+    overdue: 'ring-[3px] ring-inset ring-red-700 border-l-[8px] border-l-red-800 bg-red-200',
+};
+
+export const BADGE_SEVERITY_CLASSES: Record<Exclude<DeadlineSeverity, 'none'>, string> = {
+    warning: 'bg-amber-400 text-black',
+    alert: 'bg-orange-500 text-white',
+    urgent: 'bg-red-500 text-white',
+    overdue: 'bg-red-700 text-white',
+};
+
 export const deadlineDaysLabel = (deadline: string): string => {
     const days = daysUntilDeadline(deadline);
     if (days < 0) return `Dépassée depuis ${Math.abs(days)} j`;
