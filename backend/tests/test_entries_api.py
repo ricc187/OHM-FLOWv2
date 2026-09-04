@@ -55,10 +55,34 @@ class EntriesApiTestCase(unittest.TestCase):
             ohmapp.db.session.commit()
             self.chantier_id = chantier.id
 
+    def test_create_requires_description(self):
+        res = self.client.post('/api/entries', json={
+            'user_id': self.worker_a_id, 'chantier_id': self.chantier_id,
+            'date': '2026-01-05', 'heures': 8
+        })
+        self.assertEqual(res.status_code, 400)
+        res = self.client.post('/api/entries', json={
+            'user_id': self.worker_a_id, 'chantier_id': self.chantier_id,
+            'date': '2026-01-05', 'heures': 8, 'description': '   '
+        })
+        self.assertEqual(res.status_code, 400)
+
+    def test_edit_cannot_clear_description(self):
+        create = self.client.post('/api/entries', json={
+            'user_id': self.worker_a_id, 'chantier_id': self.chantier_id,
+            'date': '2026-01-05', 'heures': 4, 'description': 'Pose de tuyaux'
+        })
+        entry_id = create.get_json()['id']
+        res = self.client.put(f'/api/entries/{entry_id}', json={'heures': 4, 'description': ''})
+        self.assertEqual(res.status_code, 400)
+        res = self.client.put(f'/api/entries/{entry_id}', json={'heures': 4, 'description': 'Pose de tuyaux + raccordement'})
+        self.assertEqual(res.status_code, 200, res.get_json())
+        self.assertEqual(res.get_json()['description'], 'Pose de tuyaux + raccordement')
+
     def test_admin_creates_entry_on_behalf_of_worker(self):
         res = self.client.post('/api/entries', json={
             'user_id': self.worker_a_id, 'chantier_id': self.chantier_id,
-            'date': '2026-01-05', 'heures': 8, 'materiel': 0
+            'date': '2026-01-05', 'heures': 8, 'description': 'Travaux divers'
         })
         self.assertEqual(res.status_code, 201, res.get_json())
         body = res.get_json()
@@ -75,7 +99,7 @@ class EntriesApiTestCase(unittest.TestCase):
     def test_admin_edits_heures_and_reassigns_user(self):
         create = self.client.post('/api/entries', json={
             'user_id': self.worker_a_id, 'chantier_id': self.chantier_id,
-            'date': '2026-01-05', 'heures': 5, 'materiel': 0
+            'date': '2026-01-05', 'heures': 5, 'description': 'Travaux divers'
         })
         entry_id = create.get_json()['id']
 
@@ -97,7 +121,7 @@ class EntriesApiTestCase(unittest.TestCase):
     def test_edit_rejects_unknown_user(self):
         create = self.client.post('/api/entries', json={
             'user_id': self.worker_a_id, 'chantier_id': self.chantier_id,
-            'date': '2026-01-05', 'heures': 5, 'materiel': 0
+            'date': '2026-01-05', 'heures': 5, 'description': 'Travaux divers'
         })
         entry_id = create.get_json()['id']
         res = self.client.put(f'/api/entries/{entry_id}', json={'heures': 5, 'user_id': 999999})
@@ -106,7 +130,7 @@ class EntriesApiTestCase(unittest.TestCase):
     def test_validate_and_delete_are_logged(self):
         create = self.client.post('/api/entries', json={
             'user_id': self.worker_a_id, 'chantier_id': self.chantier_id,
-            'date': '2026-01-05', 'heures': 3, 'materiel': 0
+            'date': '2026-01-05', 'heures': 3, 'description': 'Travaux divers'
         })
         entry_id = create.get_json()['id']
 

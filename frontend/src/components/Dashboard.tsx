@@ -2,11 +2,21 @@ import React, { useEffect, useState } from 'react';
 import { Chantier, User, ChantierStatus } from '../types';
 import { Folder, Plus, Download, X, Search } from 'lucide-react';
 import { ChantierCard } from './ChantierCard';
+import { InlineSearchSelect } from './ui/InlineSearchSelect';
 import { AwesomeDatePicker } from './ui/AwesomeDatePicker';
-import { AwesomeSelect } from './ui/AwesomeSelect';
+import { chantierPhase, ChantierPhase } from '../chantierPhase';
 import { api } from '../api';
 import { useEscapeKey } from '../hooks/useEscapeKey';
 import { useAutoRefresh } from '../hooks/useAutoRefresh';
+
+type DashboardFilter = ChantierPhase | 'ALL';
+const VALID_FILTERS: DashboardFilter[] = ['NON_PLANIFIE', 'EN_COURS', 'TERMINE', 'ALL'];
+const FILTER_LABELS: Record<DashboardFilter, string> = {
+    NON_PLANIFIE: 'NON PLANIFIÉ',
+    EN_COURS: 'EN COURS',
+    TERMINE: 'TERMINÉ',
+    ALL: 'TOUS',
+};
 
 interface Props {
     currentUser: User;
@@ -16,8 +26,12 @@ interface Props {
 export const Dashboard: React.FC<Props> = ({ currentUser, onSelectChantier }) => {
     const [chantiers, setChantiers] = useState<Chantier[]>([]);
     const [filteredChantiers, setFilteredChantiers] = useState<Chantier[]>([]);
-    const [filterStatus, setFilterStatus] = useState<ChantierStatus | 'ALL'>(() => {
-        return (localStorage.getItem('ohm_dashboard_filter') as ChantierStatus | 'ALL') || 'ACTIVE';
+    const [filterStatus, setFilterStatus] = useState<DashboardFilter>(() => {
+        const stored = localStorage.getItem('ohm_dashboard_filter') as DashboardFilter | null;
+        // Ancienne valeur ('ACTIVE'/'FUTURE'/'DONE', avant le passage au
+        // statut dérivé de has_assignments) plus valide : retombe sur le
+        // défaut plutôt que sur une grille vide.
+        return stored && VALID_FILTERS.includes(stored) ? stored : 'EN_COURS';
     });
 
     useEffect(() => {
@@ -38,34 +52,57 @@ export const Dashboard: React.FC<Props> = ({ currentUser, onSelectChantier }) =>
     const [newChantier, setNewChantier] = useState({
         commune: '',
         client_repere: '',
+        referent_id: '',
         annee: new Date().getFullYear(),
         status: 'FUTURE' as ChantierStatus,
         address_work: '',
         address_billing: '',
-        date_start: '',
-        date_end: '',
-        remarque: ''
+        remarque: '',
+        deadline: ''
     });
+    const [users, setUsers] = useState<User[]>([]);
 
     useEffect(() => {
         fetchChantiers();
+        api.get('/api/users').then(res => res.ok && res.json()).then((data: User[] | false) => data && setUsers(data));
     }, []);
+
+    // Tri appliqué sur la vue courante (peu importe l'onglet EN COURS/NON
+    // PLANIFIÉ/etc.) — "Nom" = alphabétique sur le libellé affiché sur la
+    // carte (client_repere si présent, sinon nom) ; "Deadline" = la plus
+    // proche en premier, chantiers sans deadline toujours en dernier quel
+    // que soit le sens (une absence de deadline n'est jamais "urgente").
+    const [sortBy, setSortBy] = useState<'nom' | 'deadline'>('nom');
+    const sortChantiers = (list: Chantier[]) => {
+        const sorted = [...list];
+        if (sortBy === 'nom') {
+            sorted.sort((a, b) => (a.client_repere || a.nom).localeCompare(b.client_repere || b.nom, 'fr'));
+        } else {
+            sorted.sort((a, b) => {
+                if (!a.deadline && !b.deadline) return 0;
+                if (!a.deadline) return 1;
+                if (!b.deadline) return -1;
+                return a.deadline.localeCompare(b.deadline);
+            });
+        }
+        return sorted;
+    };
 
     useEffect(() => {
         const statusFiltered = filterStatus === 'ALL'
             ? chantiers
-            : chantiers.filter(c => c.status === filterStatus);
-        
+            : chantiers.filter(c => chantierPhase(c) === filterStatus);
+
         if (selectedChantierId && !statusFiltered.some(c => c.id.toString() === selectedChantierId)) {
             setSelectedChantierId('');
-            setFilteredChantiers(statusFiltered);
+            setFilteredChantiers(sortChantiers(statusFiltered));
             return;
         }
 
-        setFilteredChantiers(
+        setFilteredChantiers(sortChantiers(
             selectedChantierId ? statusFiltered.filter(c => c.id.toString() === selectedChantierId) : statusFiltered
-        );
-    }, [filterStatus, chantiers, selectedChantierId]);
+        ));
+    }, [filterStatus, chantiers, selectedChantierId, sortBy]);
 
     const fetchChantiers = async () => {
         const res = await api.get(`/api/chantiers?status=ALL`);
@@ -104,22 +141,14 @@ export const Dashboard: React.FC<Props> = ({ currentUser, onSelectChantier }) =>
     const handleCreateChantier = async (e: React.FormEvent) => {
         e.preventDefault();
 
-        const today = new Date().toISOString().split('T')[0];
-        let calculatedStatus: ChantierStatus = 'FUTURE';
-
-        if (newChantier.date_start) {
-            if (!newChantier.date_end && today >= newChantier.date_start) {
-                calculatedStatus = 'ACTIVE';
-            } else if (today >= newChantier.date_start) {
-                // If the start date is today or in the past, it's active.
-                // We no longer automatically set it to 'DONE' even if date_end has passed.
-                calculatedStatus = 'ACTIVE';
-            }
-        }
-
+        // Plus de période chantier : un nouveau chantier démarre toujours
+        // 'FUTURE' (valeur par défaut), le statut reste ensuite 100% manuel
+        // (ajusté depuis la fiche chantier).
         const payload = {
             ...newChantier,
-            status: calculatedStatus
+            referent_id: newChantier.referent_id ? parseInt(newChantier.referent_id, 10) : null,
+            deadline: newChantier.deadline || null,
+            status: 'FUTURE' as ChantierStatus
         };
 
         const res = await api.post('/api/chantiers', payload);
@@ -127,13 +156,13 @@ export const Dashboard: React.FC<Props> = ({ currentUser, onSelectChantier }) =>
             setNewChantier({
                 commune: '',
                 client_repere: '',
+                referent_id: '',
                 annee: new Date().getFullYear(),
                 status: 'FUTURE',
                 address_work: '',
                 address_billing: '',
-                date_start: '',
-                date_end: '',
-                remarque: ''
+                remarque: '',
+                deadline: ''
             });
             setShowCreate(false);
             fetchChantiers();
@@ -228,12 +257,12 @@ export const Dashboard: React.FC<Props> = ({ currentUser, onSelectChantier }) =>
                 horizontal row from sm up */}
             <div className="grid grid-cols-2 sm:flex gap-2 sm:gap-0 p-2 bg-white/40 backdrop-blur-2xl border border-black/5 rounded-2xl w-full md:w-auto self-start shadow-glass relative">
                 {(currentUser.role === 'admin'
-                    ? ['ACTIVE', 'FUTURE', 'DONE', 'ALL']
-                    : ['ACTIVE', 'ALL']
+                    ? (['EN_COURS', 'NON_PLANIFIE', 'TERMINE', 'ALL'] as DashboardFilter[])
+                    : (['EN_COURS', 'ALL'] as DashboardFilter[])
                 ).map(status => (
                     <button
                         key={status}
-                        onClick={() => setFilterStatus(status as any)}
+                        onClick={() => setFilterStatus(status)}
                         className={`w-full sm:w-auto px-4 sm:px-8 py-3.5 sm:py-3 rounded-xl text-sm font-black tracking-wider transition-all duration-300 relative overflow-hidden ${filterStatus === status
                             ? 'text-black shadow-md'
                             : 'text-text-muted hover:text-slate-900 hover:bg-black/5'
@@ -243,27 +272,45 @@ export const Dashboard: React.FC<Props> = ({ currentUser, onSelectChantier }) =>
                             <div className="absolute inset-0 bg-gradient-to-r from-primary via-primary-glow to-primary animate-[shine_3s_infinite] z-0"></div>
                         )}
                         <span className="relative z-10">
-                            {status === 'ALL' ? 'TOUS' : status === 'FUTURE' ? 'À VENIR' : status === 'ACTIVE' ? 'EN COURS' : 'TERMINÉS'}
+                            {FILTER_LABELS[status]}
                         </span>
                     </button>
                 ))}
             </div>
 
-            {/* Search Dropdown */}
-            <div className="relative z-20">
-                <AwesomeSelect
-                    value={selectedChantierId || undefined}
-                    onChange={(v: string) => setSelectedChantierId(v)}
-                    placeholder={`Rechercher un chantier${filterStatus !== 'ALL' ? ` « ${filterStatus === 'ACTIVE' ? 'En cours' : filterStatus === 'FUTURE' ? 'À venir' : 'Terminés'} »` : ''}…`}
-                    icon={<Search size={18} />}
-                    options={[
-                        { value: '', label: 'Afficher tous...' },
-                        ...(filterStatus === 'ALL' ? chantiers : chantiers.filter(c => c.status === filterStatus)).map(c => ({
+            <div className="flex flex-col sm:flex-row gap-3">
+                {/* Search Dropdown */}
+                <div className="relative z-20 flex-1">
+                    <InlineSearchSelect
+                        value={selectedChantierId || undefined}
+                        onChange={(v: string) => setSelectedChantierId(v)}
+                        placeholder={`Rechercher un chantier${filterStatus !== 'ALL' ? ` « ${FILTER_LABELS[filterStatus]} »` : ''}…`}
+                        icon={<Search size={18} />}
+                        options={(filterStatus === 'ALL' ? chantiers : chantiers.filter(c => chantierPhase(c) === filterStatus)).map(c => ({
+                            // nom = "{numero}-{commune}-{client_repere}" (voir Dashboard
+                            // formulaire création) — chercher dans ce texte complet couvre
+                            // déjà numéro, ville et client en une seule recherche substring.
                             value: c.id.toString(),
                             label: c.nom
-                        }))
-                    ]}
-                />
+                        }))}
+                    />
+                </div>
+
+                {/* Tri — s'applique à la vue courante, quel que soit l'onglet actif. */}
+                <div className="flex items-center gap-2 shrink-0 px-1">
+                    <span className="text-xs font-bold text-text-muted uppercase tracking-wide">Trier :</span>
+                    <div className="flex p-1 bg-white/40 backdrop-blur-2xl border border-black/5 rounded-xl shadow-glass">
+                        {(['nom', 'deadline'] as const).map(s => (
+                            <button
+                                key={s}
+                                onClick={() => setSortBy(s)}
+                                className={`px-3 py-1.5 rounded-lg text-xs font-bold uppercase tracking-wide transition-all ${sortBy === s ? 'bg-primary text-black shadow-sm' : 'text-text-muted hover:text-slate-900'}`}
+                            >
+                                {s === 'nom' ? 'Nom' : 'Deadline'}
+                            </button>
+                        ))}
+                    </div>
+                </div>
             </div>
 
             {/* Large Static Create Button */}
@@ -328,11 +375,18 @@ export const Dashboard: React.FC<Props> = ({ currentUser, onSelectChantier }) =>
 
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                             <div>
-                                <label className="text-xs font-bold text-primary/80 uppercase tracking-widest mb-2 block">Période (Début - Fin)</label>
-                                <div className="flex flex-col gap-3">
-                                    <AwesomeDatePicker value={newChantier.date_start} onChange={d => setNewChantier({ ...newChantier, date_start: d })} placeholder="Date de début" />
-                                    <AwesomeDatePicker value={newChantier.date_end} onChange={d => setNewChantier({ ...newChantier, date_end: d })} minDate={newChantier.date_start} placeholder="Date de fin" />
-                                </div>
+                                <label className="text-xs font-bold text-primary/80 uppercase tracking-widest mb-2 block">Référent</label>
+                                <select
+                                    className="input-field"
+                                    value={newChantier.referent_id}
+                                    onChange={e => setNewChantier({ ...newChantier, referent_id: e.target.value })}
+                                    required
+                                >
+                                    <option value="" disabled>Choisir un collaborateur…</option>
+                                    {users.map(u => (
+                                        <option key={u.id} value={u.id}>{u.username}</option>
+                                    ))}
+                                </select>
                             </div>
                             <div>
                                 <label className="text-xs font-bold text-primary/80 uppercase tracking-widest mb-2 block">Année</label>
@@ -345,6 +399,14 @@ export const Dashboard: React.FC<Props> = ({ currentUser, onSelectChantier }) =>
                                     onChange={e => setNewChantier({ ...newChantier, annee: parseInt(e.target.value) })}
                                     required
                                 />
+                            </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <div>
+                                {/* Optionnelle — pilote le code couleur de la carte (voir ChantierCard.tsx). */}
+                                <label className="text-xs font-bold text-primary/80 uppercase tracking-widest mb-2 block">Deadline (optionnel)</label>
+                                <AwesomeDatePicker value={newChantier.deadline} onChange={d => setNewChantier({ ...newChantier, deadline: d })} placeholder="Aucune deadline" />
                             </div>
                         </div>
 

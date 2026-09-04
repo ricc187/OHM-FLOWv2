@@ -147,7 +147,10 @@ def token_required(f):
 # --- Auth: password login + role-gated 2FA -----------------------------
 # Only roles listed here are required to set up/use TOTP 2FA at login.
 # 'user' and 'depanneur' log in with password only.
-MFA_REQUIRED_ROLES = ('admin',)
+# TODO: remettre ('admin',) une fois la 2FA reconfiguree cote client
+# (desactivee temporairement le 2026-08-30 — admin verrouille par un
+# enrolement TOTP jamais transmis au client).
+MFA_REQUIRED_ROLES = ()
 
 # Account lockout after repeated bad password/2FA-code attempts (mirrors a
 # sliding-window count over LoginAttempt, not a live counter — see
@@ -182,13 +185,19 @@ def _recent_failed_attempts(username):
 
 
 def is_account_locked(user):
+    if os.environ.get('DISABLE_LOGIN_LOCKOUT') == 'true':
+        return False
     return bool(user.locked_until and user.locked_until > datetime.datetime.utcnow())
 
 
 def _maybe_lock_account(user):
     """Called after a bad password or bad 2FA/backup code for a known user —
     escalates the lockout if the sliding-window failure count just crossed
-    the threshold."""
+    the threshold. Set DISABLE_LOGIN_LOCKOUT=true (env var, not committed to
+    .env) to skip this entirely — local dev convenience only, never set on
+    a real deployment: this is the brute-force protection."""
+    if os.environ.get('DISABLE_LOGIN_LOCKOUT') == 'true':
+        return
     if _recent_failed_attempts(user.username) >= LOCKOUT_MAX_ATTEMPTS:
         stage = min(user.lockout_stage, len(LOCKOUT_DURATIONS_MIN) - 1)
         user.locked_until = datetime.datetime.utcnow() + datetime.timedelta(minutes=LOCKOUT_DURATIONS_MIN[stage])
@@ -383,8 +392,9 @@ class Chantier(db.Model):
     # New fields
     address_work = db.Column(db.String(200), nullable=True)
     address_billing = db.Column(db.String(200), nullable=True)
-    date_start = db.Column(db.String(20), nullable=True)
-    date_end = db.Column(db.String(20), nullable=True)
+    # date_start/date_end existent encore en base (convention du repo : une
+    # colonne n'est jamais supprimée par migration) mais ne sont plus lus ni
+    # écrits par l'app — la période chantier n'existe plus côté produit.
     remarque = db.Column(db.Text, nullable=True)
     status = db.Column(db.String(20), default='FUTURE') # FUTURE, ACTIVE, DONE
 
@@ -407,9 +417,33 @@ class Chantier(db.Model):
     commune = db.Column(db.String(100), nullable=True)
     client_repere = db.Column(db.String(100), nullable=True)
 
+    # Collaborateur qui a apporté le chantier. Nullable en base (les
+    # chantiers créés avant cette fonctionnalité n'en ont pas) même si le
+    # formulaire de création le rend obligatoire côté produit — même
+    # convention que numero/commune/client_repere ci-dessus.
+    referent_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+
+    # NULL sur les chantiers créés avant l'ajout de cette colonne (legacy) —
+    # "Pot à chantier" affiche "Date inconnue" dans ce cas.
+    created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+
+    # Date cible pour terminer le chantier — même convention string YYYY-MM-DD
+    # que date_start/date_end avaient (voir commentaire plus haut). Optionnelle,
+    # pas de valeur par défaut. Pilote le code couleur de ChantierCard côté
+    # frontend (jours restants avant deadline).
+    deadline = db.Column(db.String(20), nullable=True)
+
+    # Avancement PHYSIQUE du chantier (0-100), déclaré à la main par un admin
+    # — distinct des pourcentages d'avancement CA/matériel/MO/débours sec
+    # (compute_financier, ChantierFinancier) qui sont calculés depuis le
+    # budget. Affiché à côté de ces derniers dans l'onglet Finances pour
+    # comparer "où on en est vraiment" vs "où on en est côté budget".
+    avancement_declare = db.Column(db.Float, nullable=True)
+
     # Relationships
     members = db.relationship('User', secondary=chantier_members, lazy='subquery',
         backref=db.backref('chantiers', lazy=True))
+    referent = db.relationship('User', foreign_keys=[referent_id])
 
     def to_dict(self):
         return {
@@ -420,17 +454,27 @@ class Chantier(db.Model):
             'pdf_path': self.pdf_path,
             'address_work': self.address_work,
             'address_billing': self.address_billing,
-            'date_start': self.date_start,
-            'date_end': self.date_end,
             'remarque': self.remarque,
             'status': self.status,
             'archived': bool(self.archived),
             'numero': self.numero,
             'commune': self.commune,
             'client_repere': self.client_repere,
+            'referent_id': self.referent_id,
+            'referent_name': self.referent.username if self.referent else None,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'deadline': self.deadline,
+            'avancement_declare': self.avancement_declare,
             'hours_total': round(self._get_hours_total(), 2),
-            'members': [u.id for u in self.members]
+            'members': [u.id for u in self.members],
+            'has_assignments': self._get_has_assignments(),
         }
+
+    def _get_has_assignments(self):
+        precomputed = getattr(self, '_has_assignments_precomputed', None)
+        if precomputed is not None:
+            return precomputed
+        return db.session.query(ChantierAssignment.id).filter_by(chantier_id=self.id).first() is not None
 
     def _get_hours_total(self):
         """Sum of all heures ever logged on this chantier, regardless of
@@ -532,8 +576,15 @@ class Entry(db.Model):
     chantier_id = db.Column(db.Integer, db.ForeignKey('chantiers.id'), nullable=False)
     date = db.Column(db.String(20), nullable=False)
     heures = db.Column(db.Float, nullable=False, default=0.0)
+    # NOT NULL hérité du schéma d'origine — SQLite ne permet pas de relâcher
+    # une contrainte NOT NULL sans reconstruire toute la table, donc la
+    # colonne reste mappée avec un défaut automatique pour que les INSERT
+    # continuent de fonctionner. Plus jamais lue/écrite/exposée ailleurs
+    # (to_dict, POST/PUT /api/entries) : le suivi matériel se fait au niveau
+    # du chantier (module financier : AchatMateriel/charge_materiel_prevue),
+    # pas par saisie d'heure.
     materiel = db.Column(db.Float, nullable=False, default=0.0)
-    
+
     # New fields
     status = db.Column(db.String(20), default='PENDING') # PENDING, VALIDATED
     created_by_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
@@ -544,6 +595,12 @@ class Entry(db.Model):
     # done instead of creating a duplicate entry. Nullable/non-unique at the
     # DB level (old entries never set it); add_entry does the existence check.
     client_ref = db.Column(db.String(64), nullable=True, index=True)
+    # Ce que l'employé a fait sur le chantier ce jour-là. Nullable en base
+    # (les entries créées avant cette fonctionnalité n'en ont pas) mais
+    # obligatoire pour toute NOUVELLE saisie — voir la validation dans
+    # POST /api/entries (le formulaire de saisie appelle littéralement son
+    # bouton "Valider la Saisie", d'où la contrainte à la création).
+    description = db.Column(db.Text, nullable=True)
 
     user = db.relationship('User', foreign_keys=[user_id], backref='entries')
     created_by = db.relationship('User', foreign_keys=[created_by_id])
@@ -558,24 +615,43 @@ class Entry(db.Model):
             'chantier_nom': self.chantier.nom if self.chantier else 'Chantier Inconnu',
             'date': self.date,
             'heures': self.heures,
-            'materiel': self.materiel,
             'status': self.status,
             'created_by_id': self.created_by_id,
-            'admin_note': self.admin_note
+            'admin_note': self.admin_note,
+            'description': self.description,
         }
 
 class Leave(db.Model):
     __tablename__ = 'leaves'
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
-    type = db.Column(db.String(20), nullable=False) # VACATION, SICKNESS
+    # CONGE, MALADIE, ABSENCE, ARMEE, CONGE_PAT_MAT, DEMENAGEMENT.
+    # Legacy values VACATION/SICKNESS/OTHER are renamed to CONGE/MALADIE/ABSENCE
+    # by a one-time data migration in init_db() — see leaves type rename below.
+    type = db.Column(db.String(20), nullable=False)
     date_start = db.Column(db.String(20), nullable=False)
     date_end = db.Column(db.String(20), nullable=False)
     status = db.Column(db.String(20), default='PENDING') # PENDING, APPROVED, REJECTED
-    days_count = db.Column(db.Float, default=0.0) 
+    days_count = db.Column(db.Float, default=0.0)
     admin_note = db.Column(db.Text, nullable=True)
 
-    user = db.relationship('User', backref='leaves')
+    # --- Agenda grid additions (calendrier unifié chantier + absences) ---
+    # HH:MM strings, same string-based convention as date_start/date_end —
+    # nullable/unset whenever toute_la_journee is true.
+    heure_debut = db.Column(db.String(5), nullable=True)
+    heure_fin = db.Column(db.String(5), nullable=True)
+    toute_la_journee = db.Column(db.Boolean, default=True)
+    description = db.Column(db.Text, nullable=True)
+    # Who filed the request — distinct from user_id (an admin can file a
+    # leave on behalf of someone else). Backfilled to user_id for rows that
+    # predate this column (see migration).
+    created_by_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    updated_by_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    updated_at = db.Column(db.DateTime, nullable=True)
+
+    user = db.relationship('User', foreign_keys=[user_id], backref='leaves')
+    created_by = db.relationship('User', foreign_keys=[created_by_id])
+    updated_by = db.relationship('User', foreign_keys=[updated_by_id])
 
     def to_dict(self):
         return {
@@ -587,8 +663,106 @@ class Leave(db.Model):
             'date_end': self.date_end,
             'status': self.status,
             'days_count': self.days_count,
-            'admin_note': self.admin_note
+            'admin_note': self.admin_note,
+            'heure_debut': self.heure_debut,
+            'heure_fin': self.heure_fin,
+            'toute_la_journee': bool(self.toute_la_journee),
+            'description': self.description,
+            'created_by_id': self.created_by_id,
+            'created_by_name': self.created_by.username if self.created_by else None,
+            'updated_by_id': self.updated_by_id,
+            'updated_by_name': self.updated_by.username if self.updated_by else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
         }
+
+
+class ChantierAssignment(db.Model):
+    """Affectation planifiée d'un employé sur un chantier, pour la grille
+    Agenda — distincte de Entry (heures réellement travaillées/loggées,
+    écran Saisie). Pas de workflow de validation à la Leave (PENDING/
+    APPROVED) — sauf pour le cas "chantier à planifier" : plusieurs dates
+    candidates bloquées provisoirement (statut='proposition', même
+    proposal_group_id) le temps que le client confirme laquelle lui
+    convient ; /valider (voir plus bas) fixe la bonne et supprime les
+    autres du groupe. Une affectation normale reste statut='confirme',
+    proposal_group_id=None — comportement inchangé."""
+    __tablename__ = 'chantier_assignments'
+    id = db.Column(db.Integer, primary_key=True)
+    chantier_id = db.Column(db.Integer, db.ForeignKey('chantiers.id'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    date_debut = db.Column(db.String(20), nullable=False)
+    heure_debut = db.Column(db.String(5), nullable=True)
+    date_fin = db.Column(db.String(20), nullable=False)
+    heure_fin = db.Column(db.String(5), nullable=True)
+    toute_la_journee = db.Column(db.Boolean, default=True)
+    description = db.Column(db.Text, nullable=True)
+    statut = db.Column(db.String(20), nullable=False, default='confirme')  # 'confirme' | 'proposition'
+    proposal_group_id = db.Column(db.String(36), nullable=True, index=True)
+    created_by_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+    updated_by_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    updated_at = db.Column(db.DateTime, nullable=True)
+
+    chantier = db.relationship('Chantier', backref='assignments')
+    user = db.relationship('User', foreign_keys=[user_id], backref='chantier_assignments')
+    created_by = db.relationship('User', foreign_keys=[created_by_id])
+    updated_by = db.relationship('User', foreign_keys=[updated_by_id])
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'chantier_id': self.chantier_id,
+            'chantier_nom': self.chantier.nom if self.chantier else 'Chantier Inconnu',
+            'user_id': self.user_id,
+            'user_name': self.user.username,
+            'date_debut': self.date_debut,
+            'heure_debut': self.heure_debut,
+            'date_fin': self.date_fin,
+            'heure_fin': self.heure_fin,
+            'toute_la_journee': bool(self.toute_la_journee),
+            'description': self.description,
+            'statut': self.statut,
+            'proposal_group_id': self.proposal_group_id,
+            'created_by_id': self.created_by_id,
+            'created_by_name': self.created_by.username if self.created_by else None,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_by_id': self.updated_by_id,
+            'updated_by_name': self.updated_by.username if self.updated_by else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+class MissingEntryAcknowledgement(db.Model):
+    """Un admin a traité une anomalie "heures non entrées" (employé avec une
+    chantier_assignment confirmée le jour J, sans Entry ce jour-là ni Leave
+    APPROVED le couvrant) — voir GET/POST /api/admin/missing-entries. Une
+    ligne ici = cette anomalie précise (user_id, date) ne réapparaît plus
+    dans la liste, quelle que soit la raison donnée (elle reste facultative,
+    juste pour la traçabilité)."""
+    __tablename__ = 'missing_entry_acknowledgements'
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    date = db.Column(db.String(20), nullable=False)
+    acknowledged_by_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    acknowledged_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+    reason = db.Column(db.Text, nullable=True)
+
+    __table_args__ = (db.UniqueConstraint('user_id', 'date', name='uq_missing_entry_ack_user_date'),)
+
+    user = db.relationship('User', foreign_keys=[user_id])
+    acknowledged_by = db.relationship('User', foreign_keys=[acknowledged_by_id])
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'user_id': self.user_id,
+            'user_name': self.user.username if self.user else None,
+            'date': self.date,
+            'acknowledged_by_id': self.acknowledged_by_id,
+            'acknowledged_by_name': self.acknowledged_by.username if self.acknowledged_by else None,
+            'acknowledged_at': self.acknowledged_at.isoformat() if self.acknowledged_at else None,
+            'reason': self.reason,
+        }
+
 
 class Alert(db.Model):
     __tablename__ = 'alerts'
@@ -650,7 +824,7 @@ class Document(db.Model):
 
 # --- Module financier ---
 # Amounts use Float (not Numeric) to match every other money field already in
-# this file (Entry.materiel, etc.) — SQLite has no native DECIMAL type, it
+# this file (Entry.heures, etc.) — SQLite has no native DECIMAL type, it
 # would just store as a float anyway.
 ACHAT_TYPES = ('facture', 'estimation_petites_fournitures')
 
@@ -943,6 +1117,10 @@ def init_db():
                     'numero': "VARCHAR(10)",
                     'commune': "VARCHAR(100)",
                     'client_repere': "VARCHAR(100)",
+                    'referent_id': "INTEGER REFERENCES users(id)",
+                    'created_at': "DATETIME",
+                    'deadline': "VARCHAR(20)",
+                    'avancement_declare': "FLOAT",
                 }
                 for col_name, col_type in new_cols.items():
                     if col_name not in cols:
@@ -969,6 +1147,10 @@ def init_db():
                     logger.info("Migrating entries: adding client_ref")
                     conn.execute(text("ALTER TABLE entries ADD COLUMN client_ref VARCHAR(64)"))
                     conn.commit()
+                if 'description' not in cols:
+                    logger.info("Migrating entries: adding description")
+                    conn.execute(text("ALTER TABLE entries ADD COLUMN description TEXT"))
+                    conn.commit()
 
             # 4. Leaves Table
             if 'leaves' in existing_tables:
@@ -976,6 +1158,50 @@ def init_db():
                 if 'admin_note' not in cols:
                     logger.info("Migrating leaves: adding admin_note")
                     conn.execute(text("ALTER TABLE leaves ADD COLUMN admin_note TEXT"))
+                    conn.commit()
+
+                # Agenda grid additions — see Leave model comment.
+                leave_new_cols = {
+                    'heure_debut': 'VARCHAR(5)',
+                    'heure_fin': 'VARCHAR(5)',
+                    'toute_la_journee': 'BOOLEAN DEFAULT 1',
+                    'description': 'TEXT',
+                    'updated_by_id': 'INTEGER REFERENCES users(id)',
+                    'updated_at': 'DATETIME',
+                }
+                for col_name, col_type in leave_new_cols.items():
+                    if col_name not in cols:
+                        logger.info(f"Migrating leaves: adding {col_name}")
+                        conn.execute(text(f"ALTER TABLE leaves ADD COLUMN {col_name} {col_type}"))
+                        conn.commit()
+                # created_by_id backfilled to user_id — old leaves never recorded
+                # a separate creator, the owner is the closest fact we have.
+                if 'created_by_id' not in cols:
+                    logger.info("Migrating leaves: adding created_by_id")
+                    conn.execute(text("ALTER TABLE leaves ADD COLUMN created_by_id INTEGER REFERENCES users(id)"))
+                    conn.commit()
+                    conn.execute(text("UPDATE leaves SET created_by_id = user_id"))
+                    conn.commit()
+
+                # One-time (idempotent) rename of the old English type codes to
+                # the new French ones — cheap no-op once every row is migrated,
+                # kept unconditional (same convention as the `pin` wipe above)
+                # rather than gated, since there's no cost to re-checking.
+                legacy_type_map = {'VACATION': 'CONGE', 'SICKNESS': 'MALADIE', 'OTHER': 'ABSENCE'}
+                for old_val, new_val in legacy_type_map.items():
+                    conn.execute(text("UPDATE leaves SET type = :new WHERE type = :old"), {"new": new_val, "old": old_val})
+                conn.commit()
+
+            # 4b. Chantier Assignments Table — "chantier à planifier" additions.
+            if 'chantier_assignments' in existing_tables:
+                cols = [c['name'] for c in inspector.get_columns('chantier_assignments')]
+                if 'statut' not in cols:
+                    logger.info("Migrating chantier_assignments: adding statut")
+                    conn.execute(text("ALTER TABLE chantier_assignments ADD COLUMN statut VARCHAR(20) DEFAULT 'confirme'"))
+                    conn.commit()
+                if 'proposal_group_id' not in cols:
+                    logger.info("Migrating chantier_assignments: adding proposal_group_id")
+                    conn.execute(text("ALTER TABLE chantier_assignments ADD COLUMN proposal_group_id VARCHAR(36)"))
                     conn.commit()
 
             # 5. Acomptes Table — heures facturées en face de ce versement
@@ -1599,15 +1825,16 @@ def get_valais_holidays(year):
 def manage_chantiers(current_user):
     if request.method == 'GET':
         status = request.args.get('status') # 'FUTURE', 'ACTIVE', 'DONE' or 'ALL'
+        has_assignments_param = request.args.get('has_assignments') # 'true' | 'false'
 
         query = Chantier.query
-        
+
         # Status Filter
         if status and status != 'ALL':
             query = query.filter(Chantier.status == status)
-        
+
         # Everyone sees all chantiers now (Requirement change)
-        
+
         chantiers = query.all()
 
         # Batch hours_total for the whole list in one grouped query instead
@@ -1617,8 +1844,25 @@ def manage_chantiers(current_user):
             db.session.query(Entry.chantier_id, func.sum(Entry.heures))
             .group_by(Entry.chantier_id).all()
         )
+        # Chantiers ayant au moins une chantier_assignment (peu importe le
+        # statut proposition/confirme) — même requête groupée que hours_by_chantier
+        # ci-dessus pour éviter le N+1 sur has_assignments dans to_dict().
+        chantier_ids_with_assignments = {
+            row[0] for row in
+            db.session.query(ChantierAssignment.chantier_id).distinct().all()
+        }
+
+        # "Pot à chantier" (voir PotAChantier.tsx) : filtre côté serveur plutôt
+        # que de renvoyer tous les chantiers pour n'en garder qu'une partie
+        # côté client — reste bon marché même si la liste grandit, puisque
+        # chantier_ids_with_assignments est déjà calculé ci-dessus.
+        if has_assignments_param in ('true', 'false'):
+            want = has_assignments_param == 'true'
+            chantiers = [c for c in chantiers if (c.id in chantier_ids_with_assignments) == want]
+
         for c in chantiers:
             c._hours_total_precomputed = hours_by_chantier.get(c.id, 0.0)
+            c._has_assignments_precomputed = c.id in chantier_ids_with_assignments
 
         return jsonify([c.to_dict() for c in chantiers])
 
@@ -1633,6 +1877,13 @@ def manage_chantiers(current_user):
         if not commune or not client_repere:
             return jsonify({'error': 'Commune et client/repère sont requis'}), 400
 
+        referent_id = data.get('referent_id')
+        if not referent_id:
+            return jsonify({'error': 'Référent requis'}), 400
+        referent = db.session.get(User, referent_id)
+        if not referent:
+            return jsonify({'error': 'Référent introuvable'}), 404
+
         annee = data.get('annee', datetime.datetime.now().year)
         numero = _next_chantier_numero(annee)
         nom = f"{numero}-{commune}-{client_repere}"
@@ -1642,13 +1893,13 @@ def manage_chantiers(current_user):
             numero=numero,
             commune=commune,
             client_repere=client_repere,
+            referent_id=referent.id,
             annee=annee,
             pdf_path=data.get('pdf_path', ''),
             address_work=data.get('address_work'),
             address_billing=data.get('address_billing'),
-            date_start=data.get('date_start'),
-            date_end=data.get('date_end'),
             remarque=data.get('remarque'),
+            deadline=data.get('deadline'),
             status=data.get('status', 'FUTURE')
         )
 
@@ -1673,14 +1924,50 @@ def chantier_detail(current_user, chantier_id):
             return jsonify({'error': 'Admin access required'}), 403
         data = request.json
         previous_status = chantier.status
-        chantier.nom = data.get('nom', chantier.nom)
+
+        # numero is permanent, generated once at creation (_next_chantier_numero)
+        # — never accepted from the client, here or anywhere. For a chantier
+        # created through the enforced nomenclature (numero set), nom is
+        # always DERIVED from numero+commune+client_repere: commune/
+        # client_repere are the only editable pieces, nom gets recomputed so
+        # the numero prefix embedded in it can never be edited out from under
+        # it (a raw `nom` text field let that slip through before — bug).
+        # A legacy chantier (numero never set, predates the nomenclature)
+        # keeps its free-form nom, unchanged behavior.
+        if chantier.numero:
+            chantier.commune = data.get('commune', chantier.commune)
+            chantier.client_repere = data.get('client_repere', chantier.client_repere)
+            chantier.nom = f"{chantier.numero}-{chantier.commune}-{chantier.client_repere}"
+        else:
+            chantier.nom = data.get('nom', chantier.nom)
+
         chantier.annee = data.get('annee', chantier.annee)
         chantier.pdf_path = data.get('pdf_path', chantier.pdf_path)
         chantier.address_work = data.get('address_work', chantier.address_work)
         chantier.address_billing = data.get('address_billing', chantier.address_billing)
-        chantier.date_start = data.get('date_start', chantier.date_start)
-        chantier.date_end = data.get('date_end', chantier.date_end)
+        if 'referent_id' in data:
+            new_referent_id = data.get('referent_id')
+            if new_referent_id:
+                referent = db.session.get(User, new_referent_id)
+                if not referent:
+                    return jsonify({'error': 'Référent introuvable'}), 404
+                chantier.referent_id = referent.id
+            else:
+                chantier.referent_id = None
         chantier.remarque = data.get('remarque', chantier.remarque)
+        chantier.deadline = data.get('deadline', chantier.deadline)
+        if 'avancement_declare' in data:
+            raw = data.get('avancement_declare')
+            if raw is None or raw == '':
+                chantier.avancement_declare = None
+            else:
+                try:
+                    pct = float(raw)
+                except (TypeError, ValueError):
+                    return jsonify({'error': 'avancement_declare must be a number'}), 400
+                if pct < 0 or pct > 100:
+                    return jsonify({'error': 'avancement_declare must be between 0 and 100'}), 400
+                chantier.avancement_declare = pct
         new_status = data.get('status', chantier.status)
         chantier.status = new_status
 
@@ -1986,11 +2273,14 @@ def add_entry(current_user):
 
     try:
         heures = float(data.get('heures', 0))
-        materiel = float(data.get('materiel', 0))
     except (TypeError, ValueError):
-        return jsonify({'error': 'heures/materiel must be numbers'}), 400
-    if heures < 0 or materiel < 0:
-        return jsonify({'error': 'heures/materiel cannot be negative'}), 400
+        return jsonify({'error': 'heures must be a number'}), 400
+    if heures < 0:
+        return jsonify({'error': 'heures cannot be negative'}), 400
+
+    description = (data.get('description') or '').strip()
+    if not description:
+        return jsonify({'error': 'Description de la tâche requise'}), 400
 
     # Offline-queued submissions (see frontend offlineQueue.ts) carry a
     # client-generated ref — if a retry's earlier attempt actually succeeded
@@ -2007,10 +2297,10 @@ def add_entry(current_user):
         chantier_id=chantier_id,
         date=date,
         heures=heures,
-        materiel=materiel,
         status='PENDING',
         created_by_id=data.get('created_by_id', current_user.id),
-        client_ref=client_ref
+        client_ref=client_ref,
+        description=description
     )
     db.session.add(new_entry)
     db.session.commit()
@@ -2031,6 +2321,157 @@ def get_pending_entries(current_user):
         return jsonify({'error': 'Admin access required'}), 403
     entries = Entry.query.filter_by(status='PENDING').all()
     return jsonify([e.to_dict() for e in entries])
+
+
+# Fenêtre de rattrapage pour "Heures non entrées" — une anomalie reste dans
+# la liste tant qu'elle n'est pas acquittée (pas de disparition automatique),
+# mais on ne la RECALCULE que sur les 60 derniers jours pour rester bon
+# marché : au-delà, on part du principe qu'un admin l'aurait déjà traitée
+# (voir l'échange de cadrage — 60 jours plutôt que 30, pour couvrir un
+# éventuel retard admin sans scanner une fenêtre non bornée).
+MISSING_ENTRY_WINDOW_DAYS = 60
+
+
+def _compute_missing_entries(window_start, window_end):
+    """(user_id, date) sans Entry ni Leave APPROVED ce jour-là, pour chaque
+    jour ouvré où l'employé avait une chantier_assignment confirmée dans
+    [window_start, window_end]. 3 requêtes groupées (assignments/entries/
+    leaves) + les acquittements déjà faits sur la fenêtre — jamais de requête
+    par utilisateur/jour. Retourne une liste de dicts triée par date."""
+    from collections import defaultdict
+
+    ws, we = window_start.isoformat(), window_end.isoformat()
+
+    assignments = ChantierAssignment.query.filter(
+        ChantierAssignment.statut == 'confirme',
+        ChantierAssignment.date_debut <= we,
+        ChantierAssignment.date_fin >= ws,
+    ).all()
+    entries = db.session.query(Entry.user_id, Entry.date).filter(
+        Entry.date >= ws, Entry.date <= we
+    ).distinct().all()
+    leaves = Leave.query.filter(
+        Leave.status == 'APPROVED',
+        Leave.date_start <= we,
+        Leave.date_end >= ws,
+    ).all()
+    acked = {
+        (a.user_id, a.date) for a in MissingEntryAcknowledgement.query.filter(
+            MissingEntryAcknowledgement.date >= ws, MissingEntryAcknowledgement.date <= we
+        ).all()
+    }
+
+    # user_id -> set of "YYYY-MM-DD" jours ouvrés où il était planifié, et
+    # (user_id, jour) -> chantiers concernés ce jour-là (peut en couvrir
+    # plusieurs si affecté à des chantiers différents le même jour).
+    planned_days_by_user = defaultdict(set)
+    chantiers_by_user_day = defaultdict(set)
+    for a in assignments:
+        d1 = datetime.datetime.strptime(a.date_debut, '%Y-%m-%d').date()
+        d2 = datetime.datetime.strptime(a.date_fin, '%Y-%m-%d').date()
+        clipped = _clip_range(d1, d2, window_start, window_end)
+        if not clipped:
+            continue
+        for day in _iter_business_days(*clipped):
+            day_str = day.isoformat()
+            planned_days_by_user[a.user_id].add(day_str)
+            chantiers_by_user_day[(a.user_id, day_str)].add(a.chantier_id)
+
+    entry_days_by_user = defaultdict(set)
+    for uid, d in entries:
+        entry_days_by_user[uid].add(d)
+
+    leave_days_by_user = defaultdict(set)
+    for leave in leaves:
+        d1 = datetime.datetime.strptime(leave.date_start, '%Y-%m-%d').date()
+        d2 = datetime.datetime.strptime(leave.date_end, '%Y-%m-%d').date()
+        clipped = _clip_range(d1, d2, window_start, window_end)
+        if not clipped:
+            continue
+        d = clipped[0]
+        one_day = datetime.timedelta(days=1)
+        while d <= clipped[1]:
+            leave_days_by_user[leave.user_id].add(d.isoformat())
+            d += one_day
+
+    anomalies = []
+    for uid, days in planned_days_by_user.items():
+        for day_str in days:
+            if day_str in entry_days_by_user.get(uid, ()):
+                continue
+            if day_str in leave_days_by_user.get(uid, ()):
+                continue
+            if (uid, day_str) in acked:
+                continue
+            anomalies.append({'user_id': uid, 'date': day_str, 'chantier_ids': sorted(chantiers_by_user_day[(uid, day_str)])})
+
+    anomalies.sort(key=lambda a: (a['date'], a['user_id']))
+    return anomalies
+
+
+@app.route('/api/admin/missing-entries', methods=['GET'])
+@token_required
+def get_missing_entries(current_user):
+    if current_user.role != 'admin':
+        return jsonify({'error': 'Admin access required'}), 403
+
+    window_end = datetime.date.today() - datetime.timedelta(days=1)  # jamais aujourd'hui, la journée n'est pas finie
+    window_start = window_end - datetime.timedelta(days=MISSING_ENTRY_WINDOW_DAYS - 1)
+    anomalies = _compute_missing_entries(window_start, window_end)
+
+    user_ids = {a['user_id'] for a in anomalies}
+    users_by_id = {u.id: u for u in User.query.filter(User.id.in_(user_ids)).all()} if user_ids else {}
+    chantier_ids = {cid for a in anomalies for cid in a['chantier_ids']}
+    chantiers_by_id = {c.id: c for c in Chantier.query.filter(Chantier.id.in_(chantier_ids)).all()} if chantier_ids else {}
+
+    result = [{
+        'user_id': a['user_id'],
+        'user_name': users_by_id[a['user_id']].username if a['user_id'] in users_by_id else f"#{a['user_id']}",
+        'date': a['date'],
+        'chantiers': [
+            {'id': cid, 'nom': chantiers_by_id[cid].nom} for cid in a['chantier_ids'] if cid in chantiers_by_id
+        ],
+    } for a in anomalies]
+
+    return jsonify({
+        'window_start': window_start.isoformat(), 'window_end': window_end.isoformat(),
+        'anomalies': result,
+    })
+
+
+@app.route('/api/admin/missing-entries/acknowledge', methods=['POST'])
+@token_required
+def acknowledge_missing_entry(current_user):
+    if current_user.role != 'admin':
+        return jsonify({'error': 'Admin access required'}), 403
+
+    data = request.json or {}
+    user_id = data.get('user_id')
+    date = data.get('date')
+    if not user_id or not date:
+        return jsonify({'error': 'user_id and date are required'}), 400
+
+    target_user = db.session.get(User, user_id)
+    if not target_user:
+        return jsonify({'error': 'User not found'}), 404
+    try:
+        datetime.datetime.strptime(date, '%Y-%m-%d')
+    except ValueError:
+        return jsonify({'error': 'date must be YYYY-MM-DD'}), 400
+
+    if MissingEntryAcknowledgement.query.filter_by(user_id=user_id, date=date).first():
+        return jsonify({'error': 'Already acknowledged'}), 409
+
+    ack = MissingEntryAcknowledgement(
+        user_id=user_id, date=date, acknowledged_by_id=current_user.id,
+        reason=(data.get('reason') or '').strip() or None,
+    )
+    db.session.add(ack)
+    db.session.commit()
+    audit_log('missing_entries', current_user,
+               f"acknowledged missing entry: {target_user.username} on {date}" + (f" — {ack.reason}" if ack.reason else ""))
+    return jsonify(ack.to_dict()), 201
+
 
 @app.route('/api/entries/<int:entry_id>/validate', methods=['PUT'])
 @token_required
@@ -2059,7 +2500,7 @@ def manage_entry(current_user, entry_id):
     if request.method == 'DELETE':
         audit_log('entries', current_user,
                    f"deleted/rejected entry #{entry.id} ({entry.user.username}, chantier {entry.chantier.nom if entry.chantier else entry.chantier_id}, "
-                   f"date {entry.date}, {entry.heures}h, materiel {entry.materiel})")
+                   f"date {entry.date}, {entry.heures}h)")
         db.session.delete(entry)
         db.session.commit()
         return jsonify({'message': 'Entry deleted'})
@@ -2068,11 +2509,10 @@ def manage_entry(current_user, entry_id):
         data = request.json or {}
         try:
             heures = float(data.get('heures', entry.heures))
-            materiel = float(data.get('materiel', entry.materiel))
         except (TypeError, ValueError):
-            return jsonify({'error': 'heures/materiel must be numbers'}), 400
-        if heures < 0 or materiel < 0:
-            return jsonify({'error': 'heures/materiel cannot be negative'}), 400
+            return jsonify({'error': 'heures must be a number'}), 400
+        if heures < 0:
+            return jsonify({'error': 'heures cannot be negative'}), 400
 
         # Admin can reassign an entry to a different user (e.g. it was logged
         # under the wrong name).
@@ -2089,19 +2529,21 @@ def manage_entry(current_user, entry_id):
         changes = []
         if heures != entry.heures:
             changes.append(f'heures {entry.heures} -> {heures}')
-        if materiel != entry.materiel:
-            changes.append(f'materiel {entry.materiel} -> {materiel}')
         if reassigned_to:
             changes.append(f'user {old_user.username} -> {reassigned_to.username}')
 
         entry.heures = heures
-        entry.materiel = materiel
         if 'status' in data:
             if data['status'] != entry.status:
                 changes.append(f"status {entry.status} -> {data['status']}")
             entry.status = data['status']
         if 'admin_note' in data:
             entry.admin_note = data['admin_note']
+        if 'description' in data:
+            new_description = (data['description'] or '').strip()
+            if not new_description:
+                return jsonify({'error': 'Description de la tâche requise'}), 400
+            entry.description = new_description
 
         db.session.commit()
 
@@ -2119,6 +2561,127 @@ def compute_days_count(date_start, date_end):
     if end < start:
         raise ValueError("date_end is before date_start")
     return float((end - start).days + 1)
+
+# --- Horaire de travail — Statistiques RH & Planning (absentéisme, heures
+# planifié vs réel). Lun-Jeu 7h30-12h + 13h-17h30 (9h/jour), Ven 7h30-12h
+# seulement (4h30). Weekend jamais compté — les chantiers ne se planifient
+# pas le weekend dans ce modèle. date.weekday() : Monday=0 ... Sunday=6.
+WORKDAY_HOURS = {0: 9.0, 1: 9.0, 2: 9.0, 3: 9.0, 4: 4.5, 5: 0.0, 6: 0.0}
+
+
+def _iter_business_days(start_date, end_date):
+    """Yields each Mon-Fri date in [start_date, end_date] inclusive (date objects)."""
+    d = start_date
+    one_day = datetime.timedelta(days=1)
+    while d <= end_date:
+        if d.weekday() < 5:
+            yield d
+        d += one_day
+
+
+def _clip_range(d1, d2, start, end):
+    """Intersection of [d1,d2] and [start,end] (date objects), or None if disjoint."""
+    lo = max(d1, start)
+    hi = min(d2, end)
+    return (lo, hi) if lo <= hi else None
+
+
+def _parse_date_arg(name):
+    """GET query param -> date, or (None, (response, status)) on missing/invalid."""
+    raw = request.args.get(name)
+    if not raw:
+        return None, (jsonify({'error': f'{name} is required (YYYY-MM-DD)'}), 400)
+    try:
+        return datetime.datetime.strptime(raw, '%Y-%m-%d').date(), None
+    except ValueError:
+        return None, (jsonify({'error': f'{name} must be YYYY-MM-DD'}), 400)
+
+
+# Renamed from VACATION/SICKNESS/OTHER — see the leaves type migration in
+# init_db(). Mirrors frontend Planning.tsx's LEAVE_TYPE_OPTIONS; keep both in
+# sync if a label changes.
+LEAVE_TYPES = ['CONGE', 'MALADIE', 'ABSENCE', 'ARMEE', 'CONGE_PAT_MAT', 'DEMENAGEMENT']
+LEAVE_TYPE_LABELS = {
+    'CONGE': 'Congé',
+    'MALADIE': 'Maladie',
+    'ABSENCE': 'Absence',
+    'ARMEE': 'Armée',
+    'CONGE_PAT_MAT': 'Congé pat./mat.',
+    'DEMENAGEMENT': 'Déménagement',
+}
+# Fixed, distinct color per absence type for the Agenda grid. No per-type
+# palette existed anywhere in the app before this (Planning.tsx colors by
+# *status* only — green/orange/red for approved/pending/holiday), so this is
+# new, not a reuse of an existing one.
+LEAVE_TYPE_COLORS = {
+    'CONGE': '#8B5CF6',          # violet-500
+    'MALADIE': '#F87171',        # red-400 (saumon)
+    'ABSENCE': '#94A3B8',        # slate-400
+    'ARMEE': '#4B5563',          # gray-600
+    'CONGE_PAT_MAT': '#F472B6',  # pink-400
+    'DEMENAGEMENT': '#FB923C',   # orange-400
+}
+# Deterministic per-chantier color for the Agenda grid — hash(chantier_id)
+# into a fixed 15-color palette chosen to stay visually distinct from
+# LEAVE_TYPE_COLORS above (no hue reused between the two palettes).
+CHANTIER_COLOR_PALETTE = [
+    '#2563EB', '#059669', '#D97706', '#DC2626', '#7C3AED',
+    '#0891B2', '#65A30D', '#DB2777', '#EA580C', '#0D9488',
+    '#4F46E5', '#CA8A04', '#BE123C', '#16A34A', '#9333EA',
+]
+
+def _chantier_color(chantier_id):
+    return CHANTIER_COLOR_PALETTE[chantier_id % len(CHANTIER_COLOR_PALETTE)]
+
+
+def _approve_leave(leave):
+    """Marks a leave APPROVED and deducts the vacation balance for CONGE —
+    the one piece of business logic behind "approving a leave", shared by
+    the manual admin validation route (PUT /api/leaves/<id>/status) and the
+    calendar auto-approve-on-create rule for admin-authored entries (POST
+    /api/calendar/leaves). Do not duplicate this elsewhere."""
+    leave.status = 'APPROVED'
+    if leave.type == 'CONGE':
+        user = db.session.get(User, leave.user_id)
+        if user:
+            user.vacation_balance -= leave.days_count
+
+
+def _validate_period(payload):
+    """Validates/normalizes date_debut, date_fin, heure_debut, heure_fin,
+    toute_la_journee from a request payload (or a dict the caller already
+    merged onto an existing row's values, for a partial drag&drop payload).
+    Returns (normalized_dict, None) or (None, (response, status)) to return
+    as-is on failure."""
+    date_debut = payload.get('date_debut')
+    date_fin = payload.get('date_fin')
+    if not date_debut or not date_fin:
+        return None, (jsonify({'error': 'date_debut and date_fin are required'}), 400)
+    try:
+        d1 = datetime.datetime.strptime(date_debut, '%Y-%m-%d').date()
+        d2 = datetime.datetime.strptime(date_fin, '%Y-%m-%d').date()
+    except ValueError:
+        return None, (jsonify({'error': 'Invalid date format, expected YYYY-MM-DD'}), 400)
+    if d2 < d1:
+        return None, (jsonify({'error': 'date_fin must be >= date_debut'}), 400)
+
+    toute_la_journee = payload.get('toute_la_journee', True)
+    heure_debut = payload.get('heure_debut')
+    heure_fin = payload.get('heure_fin')
+    if not toute_la_journee:
+        if not heure_debut or not heure_fin:
+            return None, (jsonify({'error': 'heure_debut and heure_fin are required when toute_la_journee is false'}), 400)
+        if heure_fin <= heure_debut:  # "HH:MM" zero-padded strings compare lexicographically same as chronologically
+            return None, (jsonify({'error': 'heure_fin must be after heure_debut'}), 400)
+
+    return {
+        'date_debut': date_debut,
+        'date_fin': date_fin,
+        'heure_debut': None if toute_la_journee else heure_debut,
+        'heure_fin': None if toute_la_journee else heure_fin,
+        'toute_la_journee': bool(toute_la_journee),
+    }, None
+
 
 @app.route('/api/leaves', methods=['GET', 'POST'])
 @token_required
@@ -2142,7 +2705,7 @@ def manage_leaves(current_user):
             return jsonify({'error': 'User not found'}), 404
 
         leave_type = data.get('type')
-        if leave_type not in ['VACATION', 'SICKNESS', 'OTHER']:
+        if leave_type not in LEAVE_TYPES:
             return jsonify({'error': 'Invalid type'}), 400
 
         try:
@@ -2156,7 +2719,8 @@ def manage_leaves(current_user):
             date_start=data['date_start'],
             date_end=data['date_end'],
             days_count=days_count,
-            status='PENDING'
+            status='PENDING',
+            created_by_id=current_user.id,
         )
         db.session.add(new_leave)
         db.session.commit()
@@ -2170,22 +2734,17 @@ def update_leave_status(current_user, leave_id):
     leave = Leave.query.get(leave_id)
     if not leave:
         return jsonify({'error': 'Leave not found'}), 404
-        
+
     data = request.json
     status = data.get('status')
     if status not in ['APPROVED', 'REJECTED', 'PENDING']:
         return jsonify({'error': 'Invalid status'}), 400
-        
-    leave.status = status
-    
-    # Logic: Deduct balance if approved?
-    if status == 'APPROVED' and leave.type == 'VACATION':
-        # Deduct from user balance
-        user = db.session.get(User, leave.user_id)
-        if user:
-             # Logic to calculate days should be robust, here relying on frontend/data
-             user.vacation_balance -= leave.days_count
-             
+
+    if status == 'APPROVED':
+        _approve_leave(leave)
+    else:
+        leave.status = status
+
     db.session.commit()
     return jsonify(leave.to_dict())
 
@@ -2212,18 +2771,43 @@ def manage_single_leave(current_user, leave_id):
     if request.method == 'PUT':
         data = request.json or {}
         if 'type' in data:
-            if data['type'] not in ['VACATION', 'SICKNESS', 'OTHER']:
+            if data['type'] not in LEAVE_TYPES:
                 return jsonify({'error': 'Invalid type'}), 400
             leave.type = data['type']
-        if 'date_start' in data:
-            leave.date_start = data['date_start']
-        if 'date_end' in data:
-            leave.date_end = data['date_end']
+        if 'description' in data:
+            leave.description = data['description']
+
+        # Agenda edit form additions (heure_debut/heure_fin/toute_la_journee) —
+        # same validation as chantier-assignments/reschedule (_validate_period),
+        # merged onto the row's current values so a payload that only touches
+        # e.g. description isn't rejected for "missing" dates. Plain
+        # date_start/date_end (the old Planning.tsx edit form's only fields)
+        # still work exactly as before.
+        if any(k in data for k in ('date_start', 'date_end', 'heure_debut', 'heure_fin', 'toute_la_journee')):
+            merged = {
+                'date_debut': data.get('date_start', leave.date_start),
+                'date_fin': data.get('date_end', leave.date_end),
+                'heure_debut': data.get('heure_debut', leave.heure_debut),
+                'heure_fin': data.get('heure_fin', leave.heure_fin),
+                'toute_la_journee': data.get('toute_la_journee', leave.toute_la_journee),
+            }
+            period, err = _validate_period(merged)
+            if err:
+                return err
+            leave.date_start = period['date_debut']
+            leave.date_end = period['date_fin']
+            leave.heure_debut = period['heure_debut']
+            leave.heure_fin = period['heure_fin']
+            leave.toute_la_journee = period['toute_la_journee']
+
         # Only admin can attach an admin note or change status from here.
         if is_admin and 'admin_note' in data:
             leave.admin_note = data['admin_note']
         if is_admin and 'status' in data:
             leave.status = data['status']
+
+        leave.updated_by_id = current_user.id
+        leave.updated_at = datetime.datetime.utcnow()
         # days_count is always recomputed server-side from the (possibly just
         # updated) dates — never trust a client-supplied value here.
         try:
@@ -2233,6 +2817,346 @@ def manage_single_leave(current_user, leave_id):
 
         db.session.commit()
         return jsonify(leave.to_dict())
+
+
+# --- Agenda: unified calendar (chantier assignments + leaves) ----------
+# GET merges both sources read-only. Writes stay on two dedicated families of
+# routes (chantier-assignments vs leaves) because they have genuinely
+# different rules — a chantier assignment is confirmed on creation, a leave
+# goes through the existing PENDING/APPROVED workflow (see _approve_leave).
+
+@app.route('/api/calendar', methods=['GET'])
+@token_required
+def get_calendar(current_user):
+    start = request.args.get('start')
+    end = request.args.get('end')
+    if not start or not end:
+        return jsonify({'error': 'start and end query params are required (YYYY-MM-DD)'}), 400
+    user_id = request.args.get('user_id', type=int)
+
+    # date_start/date_end (and date_debut/date_fin) are plain "YYYY-MM-DD"
+    # strings, so lexicographic comparison is chronological comparison —
+    # standard overlap test: entry starts on/before the window ends AND
+    # ends on/after the window starts.
+    leaves_q = Leave.query.filter(Leave.date_start <= end, Leave.date_end >= start)
+    assignments_q = ChantierAssignment.query.filter(ChantierAssignment.date_debut <= end, ChantierAssignment.date_fin >= start)
+    if user_id:
+        leaves_q = leaves_q.filter(Leave.user_id == user_id)
+        assignments_q = assignments_q.filter(ChantierAssignment.user_id == user_id)
+
+    items = []
+    for l in leaves_q.all():
+        items.append({
+            'id': l.id,
+            'source': 'leave',
+            'type': l.type,
+            'user_id': l.user_id,
+            'chantier_id': None,
+            'titre': LEAVE_TYPE_LABELS.get(l.type, l.type),
+            'date_debut': l.date_start,
+            'heure_debut': l.heure_debut,
+            'date_fin': l.date_end,
+            'heure_fin': l.heure_fin,
+            'toute_la_journee': bool(l.toute_la_journee),
+            'description': l.description,
+            'status': l.status,
+            'statut': None,  # leaves have no confirme/proposition concept — chantier-only
+            'proposal_group_id': None,
+            'couleur': LEAVE_TYPE_COLORS.get(l.type, '#94A3B8'),
+        })
+    for a in assignments_q.all():
+        items.append({
+            'id': a.id,
+            'source': 'chantier',
+            'type': 'chantier',
+            'user_id': a.user_id,
+            'chantier_id': a.chantier_id,
+            'titre': a.chantier.nom if a.chantier else 'Chantier inconnu',
+            'date_debut': a.date_debut,
+            'heure_debut': a.heure_debut,
+            'date_fin': a.date_fin,
+            'heure_fin': a.heure_fin,
+            'toute_la_journee': bool(a.toute_la_journee),
+            'description': a.description,
+            'status': None,
+            # statut/proposal_group_id: "chantier à planifier" — several
+            # candidate dates blocked provisionally (statut='proposition')
+            # until the client confirms one (see .../valider below). The
+            # frontend renders 'proposition' as a paler version of `couleur`
+            # (same hex, its own CSS opacity+dotted-border) — couleur itself
+            # is unchanged so it stays the SAME hue as the eventual confirmed
+            # entry, not a different color needing its own lookup here.
+            'statut': a.statut,
+            'proposal_group_id': a.proposal_group_id,
+            'couleur': _chantier_color(a.chantier_id),
+        })
+    return jsonify(items)
+
+
+@app.route('/api/calendar/chantier-assignments', methods=['POST'])
+@token_required
+def create_chantier_assignments(current_user):
+    data = request.json or {}
+    chantier = db.session.get(Chantier, data.get('chantier_id'))
+    if not chantier:
+        return jsonify({'error': 'Chantier not found'}), 404
+
+    user_ids = data.get('user_ids') or []
+    if not isinstance(user_ids, list) or not user_ids:
+        return jsonify({'error': 'user_ids must be a non-empty array'}), 400
+    found_ids = {u.id for u in User.query.filter(User.id.in_(user_ids)).all()}
+    if found_ids != set(user_ids):
+        return jsonify({'error': 'One or more user_id not found'}), 404
+
+    # "Chantier à planifier" — several candidate date ranges the client
+    # hasn't picked between yet. Every (employee × candidate) row is created
+    # at once, statut='proposition', all sharing one proposal_group_id —
+    # /valider on any single one confirms it and drops the rest of the
+    # group. Plain creation (a_planifier absent/false) is unchanged:
+    # one range, statut='confirme', no group.
+    if data.get('a_planifier'):
+        candidates = data.get('candidates') or []
+        if not isinstance(candidates, list) or not candidates:
+            return jsonify({'error': 'candidates must be a non-empty array when a_planifier is set'}), 400
+        periods = []
+        for candidate in candidates:
+            period, err = _validate_period(candidate)
+            if err:
+                return err
+            periods.append(period)
+
+        group_id = uuid.uuid4().hex
+        created = []
+        for uid in user_ids:
+            for period in periods:
+                a = ChantierAssignment(
+                    chantier_id=chantier.id,
+                    user_id=uid,
+                    description=data.get('description'),
+                    created_by_id=current_user.id,
+                    statut='proposition',
+                    proposal_group_id=group_id,
+                    **period,
+                )
+                db.session.add(a)
+                created.append(a)
+        db.session.commit()
+        return jsonify([a.to_dict() for a in created]), 201
+
+    period, err = _validate_period(data)
+    if err:
+        return err
+
+    created = []
+    for uid in user_ids:
+        a = ChantierAssignment(
+            chantier_id=chantier.id,
+            user_id=uid,
+            description=data.get('description'),
+            created_by_id=current_user.id,
+            **period,
+        )
+        db.session.add(a)
+        created.append(a)
+    db.session.commit()
+    return jsonify([a.to_dict() for a in created]), 201
+
+
+@app.route('/api/calendar/chantier-assignments/<int:assignment_id>/valider', methods=['PUT'])
+@token_required
+def valider_chantier_assignment(current_user, assignment_id):
+    """Client picked this candidate DATE — not this one employee's row.
+    "à planifier" applies the same employees to every candidate date, so a
+    group can hold several rows (one per employee) for the SAME date as well
+    as rows for the other, losing, candidate dates. Validating one entry
+    must confirm every row sharing its exact date/heure/toute_la_journee
+    (every employee on the winning date) and only delete the rows for the
+    OTHER candidate dates — not every other row in the group indiscriminately
+    (that first cut deleted every other employee's row too, even the ones on
+    the SAME winning date — bug, reported after real use).
+    Only meaningful on a statut='proposition' row — confirming an
+    already-confirme entry (no group) is a no-op error, not a silent
+    success, since there'd be nothing to actually resolve."""
+    a = db.session.get(ChantierAssignment, assignment_id)
+    if not a:
+        return jsonify({'error': 'Assignment not found'}), 404
+    if a.statut != 'proposition':
+        return jsonify({'error': 'Cette entrée n\'est pas une proposition à valider'}), 400
+
+    if a.proposal_group_id:
+        winning_period = (a.date_debut, a.date_fin, a.heure_debut, a.heure_fin, bool(a.toute_la_journee))
+        siblings = ChantierAssignment.query.filter(
+            ChantierAssignment.proposal_group_id == a.proposal_group_id,
+            ChantierAssignment.id != a.id,
+        ).all()
+        for sibling in siblings:
+            sibling_period = (sibling.date_debut, sibling.date_fin, sibling.heure_debut, sibling.heure_fin, bool(sibling.toute_la_journee))
+            if sibling_period == winning_period:
+                # Same candidate date, different employee — this date won
+                # for everyone assigned to it, confirm them too.
+                sibling.statut = 'confirme'
+                sibling.proposal_group_id = None
+                sibling.updated_by_id = current_user.id
+                sibling.updated_at = datetime.datetime.utcnow()
+            else:
+                db.session.delete(sibling)
+
+    a.statut = 'confirme'
+    a.proposal_group_id = None  # no longer part of a group of one
+    a.updated_by_id = current_user.id
+    a.updated_at = datetime.datetime.utcnow()
+    db.session.commit()
+    return jsonify(a.to_dict())
+
+
+@app.route('/api/calendar/chantier-assignments/<int:assignment_id>', methods=['PUT', 'DELETE'])
+@token_required
+def manage_chantier_assignment(current_user, assignment_id):
+    a = db.session.get(ChantierAssignment, assignment_id)
+    if not a:
+        return jsonify({'error': 'Assignment not found'}), 404
+
+    if request.method == 'DELETE':
+        db.session.delete(a)
+        db.session.commit()
+        return jsonify({'message': 'Assignment deleted'})
+
+    data = request.json or {}
+    if 'chantier_id' in data:
+        chantier = db.session.get(Chantier, data['chantier_id'])
+        if not chantier:
+            return jsonify({'error': 'Chantier not found'}), 404
+        a.chantier_id = chantier.id
+    if 'user_id' in data:
+        if not db.session.get(User, data['user_id']):
+            return jsonify({'error': 'User not found'}), 404
+        a.user_id = data['user_id']
+    if 'description' in data:
+        a.description = data['description']
+
+    # Drag&drop sends only the fields that moved (e.g. just date_debut/
+    # date_fin) — merge onto the row's current values before validating, so
+    # a partial payload isn't rejected for "missing" fields it never meant
+    # to touch.
+    merged = {
+        'date_debut': data.get('date_debut', a.date_debut),
+        'date_fin': data.get('date_fin', a.date_fin),
+        'heure_debut': data.get('heure_debut', a.heure_debut),
+        'heure_fin': data.get('heure_fin', a.heure_fin),
+        'toute_la_journee': data.get('toute_la_journee', a.toute_la_journee),
+    }
+    period, err = _validate_period(merged)
+    if err:
+        return err
+
+    a.date_debut = period['date_debut']
+    a.date_fin = period['date_fin']
+    a.heure_debut = period['heure_debut']
+    a.heure_fin = period['heure_fin']
+    a.toute_la_journee = period['toute_la_journee']
+    a.updated_by_id = current_user.id
+    a.updated_at = datetime.datetime.utcnow()
+    db.session.commit()
+    return jsonify(a.to_dict())
+
+
+@app.route('/api/calendar/leaves', methods=['POST'])
+@token_required
+def create_calendar_leaves(current_user):
+    data = request.json or {}
+    leave_type = data.get('type')
+    if leave_type not in LEAVE_TYPES:
+        return jsonify({'error': 'Invalid type'}), 400
+
+    user_ids = data.get('user_ids') or []
+    if not isinstance(user_ids, list) or not user_ids:
+        return jsonify({'error': 'user_ids must be a non-empty array'}), 400
+    # Same rule as POST /api/leaves: only admin can file a leave request for
+    # someone else — not reinvented, just applied per selected user here.
+    if current_user.role != 'admin' and set(user_ids) != {current_user.id}:
+        return jsonify({'error': 'Cannot create a leave request for another user'}), 403
+    found_ids = {u.id for u in User.query.filter(User.id.in_(user_ids)).all()}
+    if found_ids != set(user_ids):
+        return jsonify({'error': 'One or more user_id not found'}), 404
+
+    period, err = _validate_period(data)
+    if err:
+        return err
+    try:
+        days_count = compute_days_count(period['date_debut'], period['date_fin'])
+    except ValueError as e:
+        return jsonify({'error': f'Invalid dates: {e}'}), 400
+
+    # Admin-authored leaves are auto-approved immediately (new rule — see
+    # _approve_leave); anyone else's request goes through the existing
+    # PENDING workflow, untouched.
+    is_admin = current_user.role == 'admin'
+
+    created = []
+    for uid in user_ids:
+        leave = Leave(
+            user_id=uid,
+            type=leave_type,
+            date_start=period['date_debut'],
+            date_end=period['date_fin'],
+            heure_debut=period['heure_debut'],
+            heure_fin=period['heure_fin'],
+            toute_la_journee=period['toute_la_journee'],
+            description=data.get('description'),
+            days_count=days_count,
+            status='PENDING',
+            created_by_id=current_user.id,
+        )
+        db.session.add(leave)
+        if is_admin:
+            _approve_leave(leave)
+        created.append(leave)
+    db.session.commit()
+    return jsonify([l.to_dict() for l in created]), 201
+
+
+@app.route('/api/calendar/leaves/<int:leave_id>/reschedule', methods=['PUT'])
+@token_required
+def reschedule_leave(current_user, leave_id):
+    """Drag&drop-only endpoint: date_debut/date_fin/heure_debut/heure_fin.
+    Deliberately separate from PUT /api/leaves/<id> so it can't accidentally
+    touch type/status/admin_note — but enforces the exact same permission
+    rule as that route (owner while PENDING, admin always), not a new one."""
+    leave = db.session.get(Leave, leave_id)
+    if not leave:
+        return jsonify({'error': 'Leave not found'}), 404
+
+    is_admin = current_user.role == 'admin'
+    is_owner = leave.user_id == current_user.id
+    if not is_admin and not (is_owner and leave.status == 'PENDING'):
+        return jsonify({'error': 'Admin access required'}), 403
+
+    data = request.json or {}
+    merged = {
+        'date_debut': data.get('date_debut', leave.date_start),
+        'date_fin': data.get('date_fin', leave.date_end),
+        'heure_debut': data.get('heure_debut', leave.heure_debut),
+        'heure_fin': data.get('heure_fin', leave.heure_fin),
+        'toute_la_journee': data.get('toute_la_journee', leave.toute_la_journee),
+    }
+    period, err = _validate_period(merged)
+    if err:
+        return err
+
+    leave.date_start = period['date_debut']
+    leave.date_end = period['date_fin']
+    leave.heure_debut = period['heure_debut']
+    leave.heure_fin = period['heure_fin']
+    leave.toute_la_journee = period['toute_la_journee']
+    try:
+        leave.days_count = compute_days_count(leave.date_start, leave.date_end)
+    except ValueError as e:
+        return jsonify({'error': f'Invalid dates: {e}'}), 400
+    leave.updated_by_id = current_user.id
+    leave.updated_at = datetime.datetime.utcnow()
+    db.session.commit()
+    return jsonify(leave.to_dict())
+
 
 @app.route('/api/chantiers/<int:chantier_id>/alerts', methods=['GET', 'POST'])
 @token_required
@@ -2721,8 +3645,8 @@ def export_data(current_user):
     si = io.StringIO()
     cw = csv.writer(si)
     # Headers
-    cw.writerow(['ID', 'Date', 'Chantier', 'Ouvrier', 'Heures', 'Materiel', 'Statut'])
-    
+    cw.writerow(['ID', 'Date', 'Chantier', 'Ouvrier', 'Heures', 'Description', 'Statut'])
+
     for e in filtered_entries:
         cw.writerow([
             e.id,
@@ -2730,7 +3654,7 @@ def export_data(current_user):
             csv_safe(e.chantier.nom if e.chantier else 'Supprimé'),
             csv_safe(e.user.username if e.user else 'Inconnu'),
             e.heures,
-            e.materiel,
+            csv_safe(e.description or ''),
             e.status
         ])
     
@@ -2759,71 +3683,66 @@ def get_stats(current_user):
     
     total_entries = db.session.query(func.count(Entry.id)).scalar() or 0
     total_hours = db.session.query(func.sum(Entry.heures)).scalar() or 0
-    total_material = db.session.query(func.sum(Entry.materiel)).scalar() or 0
-    
-    # Active chantiers count
-    active_chantiers = db.session.query(func.count(Chantier.id)).filter(Chantier.status == 'ACTIVE').scalar() or 0
+
+    # "Actifs" = phase EN_COURS côté frontend (voir chantierPhase.ts) : pas
+    # DONE et au moins une chantier_assignment. Chantier.status=='ACTIVE' ne
+    # veut plus dire grand-chose depuis que ce champ n'est plus édité
+    # manuellement (statut dérivé de has_assignments, sauf pour DONE via le
+    # bouton Clôturer/Ré-ouvrir) — recalculé pareil ici pour rester cohérent.
+    chantier_ids_with_assignments = db.session.query(ChantierAssignment.chantier_id).distinct()
+    active_chantiers = db.session.query(func.count(Chantier.id)).filter(
+        Chantier.status != 'DONE',
+        Chantier.id.in_(chantier_ids_with_assignments)
+    ).scalar() or 0
     
     # History Processing (Last 12 Months)
     entries = Entry.query.all()
     
     # Group by Month and Year for Comparison
-    monthly_data = defaultdict(lambda: {'hours': 0, 'material': 0})
+    monthly_data = defaultdict(lambda: {'hours': 0})
     current_year = datetime.now().year
     last_year = current_year - 1
-    
+
     total_hours_curr = 0
     total_hours_last = 0
-    total_mat_curr = 0
-    total_mat_last = 0
 
     for e in entries:
         try:
             # Assumes e.date is YYYY-MM-DD
             year = int(e.date[:4])
             month_key = e.date[:7] # YYYY-MM
-            
+
             monthly_data[month_key]['hours'] += e.heures
-            monthly_data[month_key]['material'] += e.materiel
-            
+
             if year == current_year:
                 total_hours_curr += e.heures
-                total_mat_curr += e.materiel
             elif year == last_year:
                 total_hours_last += e.heures
-                total_mat_last += e.materiel
         except:
             continue
-            
+
     # Format for Frontend (Sorted keys)
     sorted_months = sorted(monthly_data.keys())[-12:] # Last 12 months
-    
+
     history = []
     for m in sorted_months:
         history.append({
             'month': m,
             'hours': round(monthly_data[m]['hours'], 1),
-            'material': round(monthly_data[m]['material'], 2)
         })
 
     # Calculate Growth
     hours_growth = 0
     if total_hours_last > 0:
         hours_growth = ((total_hours_curr - total_hours_last) / total_hours_last) * 100
-        
-    mat_growth = 0
-    if total_mat_last > 0:
-        mat_growth = ((total_mat_curr - total_mat_last) / total_mat_last) * 100
 
     return jsonify({
         'total_entries': total_entries,
         'total_hours': round(total_hours, 1),
-        'total_material': round(total_material, 2),
         'active_chantiers': active_chantiers,
         'history': history,
         'comparison': {
             'hours_growth': round(hours_growth, 1),
-            'material_growth': round(mat_growth, 1),
             'hours_curr': round(total_hours_curr, 1),
             'hours_last': round(total_hours_last, 1)
         }
@@ -2911,6 +3830,196 @@ def get_financier_stats(current_user):
 
     per_chantier.sort(key=lambda c: c['marge_reelle'], reverse=True)
     return jsonify({'chantiers': per_chantier, 'totals': totals})
+
+
+@app.route('/api/stats/absenteeism', methods=['GET'])
+@token_required
+def get_absenteeism_stats(current_user):
+    """Taux d'absentéisme sur [start,end] — onglet "RH & Planning" de la page
+    Statistiques. Seules les leaves status='APPROVED' comptent, périmètre =
+    employés terrain (role != 'admin'). Leave.days_count compte les jours
+    CALENDAIRES (voir compute_days_count) ; ici on recompte en jours OUVRÉS
+    sur l'intersection avec la période demandée, pour rester cohérent avec
+    le dénominateur "jours ouvrés de la période"."""
+    if current_user.role != 'admin':
+        return jsonify({'error': 'Admin access required'}), 403
+
+    from collections import defaultdict
+
+    start, err = _parse_date_arg('start')
+    if err:
+        return err
+    end, err = _parse_date_arg('end')
+    if err:
+        return err
+    if end < start:
+        return jsonify({'error': 'end must be >= start'}), 400
+
+    working_days_period = sum(1 for _ in _iter_business_days(start, end))
+    non_admin_users = User.query.filter(User.role != 'admin').all()
+    headcount = len(non_admin_users)
+
+    if headcount == 0:
+        return jsonify({
+            'start': start.isoformat(), 'end': end.isoformat(),
+            'working_days_period': working_days_period, 'headcount': 0,
+            'total_working_person_days': 0, 'absence_days_total': 0.0,
+            'rate': None, 'by_type': [], 'by_employee': [],
+        })
+
+    users_by_id = {u.id: u for u in non_admin_users}
+    leaves = Leave.query.filter(
+        Leave.status == 'APPROVED',
+        Leave.user_id.in_(list(users_by_id.keys())),
+        Leave.date_start <= end.isoformat(),
+        Leave.date_end >= start.isoformat(),
+    ).all()
+
+    by_type = defaultdict(float)
+    by_employee = defaultdict(float)
+    total_absence_days = 0.0
+    for leave in leaves:
+        d1 = datetime.datetime.strptime(leave.date_start, '%Y-%m-%d').date()
+        d2 = datetime.datetime.strptime(leave.date_end, '%Y-%m-%d').date()
+        clipped = _clip_range(d1, d2, start, end)
+        if not clipped:
+            continue
+        days = float(sum(1 for _ in _iter_business_days(*clipped)))
+        if days == 0:
+            continue
+        total_absence_days += days
+        by_type[leave.type] += days
+        by_employee[leave.user_id] += days
+
+    total_working_person_days = working_days_period * headcount
+
+    return jsonify({
+        'start': start.isoformat(), 'end': end.isoformat(),
+        'working_days_period': working_days_period,
+        'headcount': headcount,
+        'total_working_person_days': total_working_person_days,
+        'absence_days_total': round(total_absence_days, 1),
+        'rate': round(total_absence_days / total_working_person_days, 4) if total_working_person_days else None,
+        'by_type': [
+            {'type': t, 'label': LEAVE_TYPE_LABELS.get(t, t), 'days': round(d, 1)}
+            for t, d in sorted(by_type.items(), key=lambda kv: -kv[1])
+        ],
+        'by_employee': [
+            {'user_id': uid, 'user_name': users_by_id[uid].username, 'days': round(d, 1)}
+            for uid, d in sorted(by_employee.items(), key=lambda kv: -kv[1])
+        ],
+    })
+
+
+@app.route('/api/stats/headcount', methods=['GET'])
+@token_required
+def get_headcount_stats(current_user):
+    """Effectifs actuels — simple snapshot (pas de date d'embauche/sortie en
+    base, donc pas d'évolution dans le temps possible pour l'instant).
+    Périmètre = employés terrain (role != 'admin'), comme /api/stats/absenteeism."""
+    if current_user.role != 'admin':
+        return jsonify({'error': 'Admin access required'}), 403
+
+    from collections import defaultdict
+
+    non_admin = User.query.filter(User.role != 'admin').all()
+    by_role = defaultdict(int)
+    for u in non_admin:
+        by_role[u.role] += 1
+
+    return jsonify({
+        'total': len(non_admin),
+        'by_role': [{'role': r, 'count': c} for r, c in sorted(by_role.items())],
+    })
+
+
+def _assignment_hours_in_range(assignment, start, end):
+    """Heures planifiées d'une chantier_assignment 'confirme' sur son
+    intersection avec [start,end]. Chaque jour ouvré de l'intersection compte
+    l'horaire de travail (WORKDAY_HOURS) si toute_la_journee ; sinon la durée
+    heure_debut->heure_fin, répétée pour chaque jour ouvré de la plage (le
+    modèle ne porte qu'une seule paire heure_debut/heure_fin pour toute la
+    plage date_debut..date_fin, jamais un horaire différent par jour)."""
+    d1 = datetime.datetime.strptime(assignment.date_debut, '%Y-%m-%d').date()
+    d2 = datetime.datetime.strptime(assignment.date_fin, '%Y-%m-%d').date()
+    clipped = _clip_range(d1, d2, start, end)
+    if not clipped:
+        return 0.0
+    days = list(_iter_business_days(*clipped))
+    if not days:
+        return 0.0
+    if assignment.toute_la_journee:
+        return sum(WORKDAY_HOURS[d.weekday()] for d in days)
+    h1 = datetime.datetime.strptime(assignment.heure_debut, '%H:%M')
+    h2 = datetime.datetime.strptime(assignment.heure_fin, '%H:%M')
+    per_day = (h2 - h1).total_seconds() / 3600
+    return per_day * len(days)
+
+
+@app.route('/api/stats/planned-vs-actual-hours', methods=['GET'])
+@token_required
+def get_planned_vs_actual_hours(current_user):
+    """Heures planifiées (chantier_assignments.statut='confirme' — les
+    propositions non confirmées n'engagent personne, ignorées ici) vs heures
+    réelles (Entry.heures) sur [start,end], groupées par chantier ou par
+    employé. Pas de FK entre les deux tables (voir exploration précédente) —
+    le rapprochement se fait par la clé de groupby, pas ligne à ligne."""
+    if current_user.role != 'admin':
+        return jsonify({'error': 'Admin access required'}), 403
+
+    start, err = _parse_date_arg('start')
+    if err:
+        return err
+    end, err = _parse_date_arg('end')
+    if err:
+        return err
+    if end < start:
+        return jsonify({'error': 'end must be >= start'}), 400
+
+    group_by = request.args.get('group_by', 'chantier')
+    if group_by not in ('chantier', 'user'):
+        return jsonify({'error': "group_by must be 'chantier' or 'user'"}), 400
+
+    from collections import defaultdict
+
+    assignments = ChantierAssignment.query.filter(
+        ChantierAssignment.statut == 'confirme',
+        ChantierAssignment.date_debut <= end.isoformat(),
+        ChantierAssignment.date_fin >= start.isoformat(),
+    ).all()
+    planned_by_key = defaultdict(float)
+    for a in assignments:
+        key = a.chantier_id if group_by == 'chantier' else a.user_id
+        planned_by_key[key] += _assignment_hours_in_range(a, start, end)
+
+    group_col = Entry.chantier_id if group_by == 'chantier' else Entry.user_id
+    actual_by_key = dict(
+        db.session.query(group_col, func.sum(Entry.heures))
+        .filter(Entry.date >= start.isoformat(), Entry.date <= end.isoformat())
+        .group_by(group_col).all()
+    )
+
+    ids = set(planned_by_key) | set(actual_by_key)
+    if group_by == 'chantier':
+        labels = {c.id: c.nom for c in Chantier.query.filter(Chantier.id.in_(ids)).all()} if ids else {}
+    else:
+        labels = {u.id: u.username for u in User.query.filter(User.id.in_(ids)).all()} if ids else {}
+
+    rows = []
+    for key in ids:
+        planned = round(planned_by_key.get(key, 0.0), 1)
+        actual = round(actual_by_key.get(key, 0.0) or 0.0, 1)
+        rows.append({
+            'id': key,
+            'label': labels.get(key, f'#{key}'),
+            'planned': planned,
+            'actual': actual,
+            'delta': round(actual - planned, 1),
+        })
+    rows.sort(key=lambda r: r['planned'], reverse=True)
+
+    return jsonify({'start': start.isoformat(), 'end': end.isoformat(), 'group_by': group_by, 'rows': rows})
+
 
 # Error handlers: never leak a raw traceback to the client, always JSON.
 from sqlalchemy.exc import IntegrityError

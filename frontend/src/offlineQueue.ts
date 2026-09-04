@@ -1,4 +1,4 @@
-// Queues an hour/material entry that failed to submit because there's no
+// Queues an hour entry that failed to submit because there's no
 // network — chantiers often have weak/no signal, and a submit that just
 // silently fails there is a real problem, not an edge case. Persisted in
 // localStorage so it survives a reload; retried automatically once the
@@ -11,7 +11,7 @@ export interface QueuedEntry {
     chantier_nom: string;
     date: string;
     heures: number;
-    materiel: number;
+    description: string;
     created_by_id: number;
     queuedAt: string;
     /** Set once a sync attempt gets a 401/403 back — almost always means a
