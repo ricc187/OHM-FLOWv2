@@ -3768,15 +3768,22 @@ def prevision_detail(current_user, prevision_id):
 @token_required
 def import_prevision(current_user):
     """Read-only import of real chantiers into the prévision calendar, as
-    statut='confirme'. NEVER writes to `chantiers` or any other table outside
-    chantiers_prevision — only reads Chantier.date_start/date_end here.
+    statut='confirme'. NEVER writes to `chantiers`, `chantier_assignments` or
+    any other table outside chantiers_prevision — only reads from them here.
 
-    Note (base main @ this branch's fork point): there is no chantier_assignments
-    table / Agenda module yet in this codebase (it lives in a separate,
-    unmerged branch) — theoretical dates are sourced from the chantier's own
-    date_start/date_end fields instead, staying empty when those are unset.
-    If/when an Agenda module with confirmed assignments lands, this is the
-    one place to extend (still read-only) to prefer assignment-derived dates.
+    Theoretical dates are MIN(date_debut)/MAX(date_fin) over that chantier's
+    ChantierAssignment rows with statut='confirme' (a 'proposition' — a
+    candidate date not yet picked by the client, see ChantierAssignment's
+    docstring — isn't real yet, so it's excluded). No confirmed assignment ->
+    dates stay empty, same as before.
+
+    (Chantier.date_start/date_end, this import's original source, were
+    dropped from the product — the columns are still in the DB per this
+    repo's "never drop a column" convention, but the Chantier model no
+    longer maps them, and ChantierAssignment/the Agenda module is what
+    replaced the concept of a chantier's period. Only the source of the
+    dates changed here — the read-only contract and the idempotency below
+    did not.)
 
     Idempotent: a chantier already linked to a chantiers_prevision row
     (chantier_id set) is left untouched — re-running the import only picks up
@@ -3789,14 +3796,26 @@ def import_prevision(current_user):
     }
     to_import = Chantier.query.filter(~Chantier.id.in_(already_imported_ids)).all() if already_imported_ids else Chantier.query.all()
 
+    # One grouped query for every chantier's confirmed-assignment date span,
+    # instead of a per-chantier query in the loop below.
+    assignment_dates = {
+        chantier_id: (min_debut, max_fin)
+        for chantier_id, min_debut, max_fin in db.session.query(
+            ChantierAssignment.chantier_id,
+            func.min(ChantierAssignment.date_debut),
+            func.max(ChantierAssignment.date_fin),
+        ).filter(ChantierAssignment.statut == 'confirme').group_by(ChantierAssignment.chantier_id).all()
+    }
+
     created = []
     for chantier in to_import:
+        debut, fin = assignment_dates.get(chantier.id, (None, None))
         prevision = ChantierPrevision(
             nom=chantier.nom,
             statut='confirme',
             chantier_id=chantier.id,
-            date_debut_theorique=chantier.date_start,
-            date_fin_theorique=chantier.date_end,
+            date_debut_theorique=debut,
+            date_fin_theorique=fin,
         )
         db.session.add(prevision)
         created.append(prevision)
