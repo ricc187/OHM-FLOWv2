@@ -5,6 +5,7 @@ import datetime
 import functools
 import uuid
 import re
+import threading
 import zipfile
 import tempfile
 from io import BytesIO
@@ -1051,6 +1052,15 @@ class VoltaApiCallLog(db.Model):
             'endpoint': self.endpoint,
             'succes': self.succes,
         }
+
+class VoltaSyncRun(db.Model):
+    """Ligne UNIQUE (id=1) — horodatage du dernier déclenchement RÉEL du
+    cron de synchro Volta, tous workers gunicorn confondus (voir
+    _try_claim_volta_sync_run). N'existe que pour ce garde-fou anti-doublon
+    — pas un historique, une seule ligne mise à jour en place."""
+    __tablename__ = 'volta_sync_run'
+    id = db.Column(db.Integer, primary_key=True)
+    last_run_at = db.Column(db.DateTime, nullable=True)
 
 def sanitize_folder_name(name):
     """Make a chantier name safe to use as a filesystem folder name."""
@@ -4044,6 +4054,75 @@ def process_volta_sync_queue(fetch_invoice_amount=fetch_invoice_amount,
 
     return {'processed': processed, 'stopped_reason': None}
 
+# --- Cron de synchro Volta ---
+# gunicorn tourne en -w 4 (voir Dockerfile) : jusqu'à 4 process serveur
+# séparés, chacun avec son propre interpréteur Python. Si chacun démarre son
+# propre thread de cron (le cas naïf, indépendamment des détails exacts de
+# --preload/fork), ça ferait déclencher process_volta_sync_queue() jusqu'à
+# 4x par intervalle — 4x la conso du quota Volta au même instant. Le
+# garde-fou (_try_claim_volta_sync_run) est un UPDATE conditionnel atomique
+# sur une ligne unique en base (VoltaSyncRun, id=1) : tous les workers
+# partagent le même fichier SQLite, qui sérialise les écritures concurrentes
+# — un seul thread (peu importe dans quel worker) "gagne" la course et
+# exécute réellement le cycle, les autres voient rowcount=0 et sautent ce
+# cycle sans y toucher. Correct quel que soit le nombre de threads
+# effectivement en vie, sans avoir besoin d'un vrai lock distribué.
+VOLTA_SYNC_CRON_INTERVAL_SECONDS = 5 * 60   # tentative toutes les 5 minutes par thread/worker
+VOLTA_SYNC_CRON_CLAIM_WINDOW_SECONDS = 4 * 60  # marge sous l'intervalle — un run < 4 min = un autre worker vient de traiter ce cycle, skip
+
+def _try_claim_volta_sync_run(now=None):
+    """Tente de réserver le cycle courant. Renvoie True pour le thread qui
+    gagne la course (à lui d'appeler process_volta_sync_queue() ensuite),
+    False pour tous les autres (qui doivent sauter ce cycle sans rien
+    faire). Volontairement un UPDATE conditionnel (pas lire-puis-écrire
+    depuis Python, qui serait sujet à une vraie race entre process gunicorn
+    distincts — chacun avec sa propre mémoire, un simple verrou en mémoire
+    ne les protégerait pas les uns des autres)."""
+    now = now or datetime.datetime.utcnow()
+    threshold = now - datetime.timedelta(seconds=VOLTA_SYNC_CRON_CLAIM_WINDOW_SECONDS)
+
+    if db.session.get(VoltaSyncRun, 1) is None:
+        db.session.add(VoltaSyncRun(id=1, last_run_at=None))
+        try:
+            db.session.commit()
+        except Exception:
+            db.session.rollback()  # créée entre-temps par un autre worker/thread — normal, pas une erreur
+
+    result = db.session.execute(
+        text("UPDATE volta_sync_run SET last_run_at = :now WHERE id = 1 AND (last_run_at IS NULL OR last_run_at < :threshold)"),
+        {'now': now, 'threshold': threshold},
+    )
+    db.session.commit()
+    return result.rowcount > 0
+
+_volta_sync_cron_stop_event = threading.Event()
+_volta_sync_cron_thread = None
+
+def _volta_sync_cron_loop():
+    """Boucle de fond d'un thread daemon (voir _start_volta_sync_cron) —
+    tente un cycle toutes les VOLTA_SYNC_CRON_INTERVAL_SECONDS secondes,
+    tant que le process vit. `_volta_sync_cron_stop_event.wait(...)` plutôt
+    que time.sleep : réagit immédiatement à l'arrêt (utile en test) au lieu
+    d'attendre la fin du sommeil."""
+    while not _volta_sync_cron_stop_event.wait(VOLTA_SYNC_CRON_INTERVAL_SECONDS):
+        try:
+            with app.app_context():
+                if _try_claim_volta_sync_run():
+                    process_volta_sync_queue()
+        except Exception:
+            logger.exception("Volta sync cron cycle failed")
+
+def _start_volta_sync_cron():
+    """Démarre le thread de cron — jamais pendant les tests unitaires (voir
+    OHM_DISABLE_VOLTA_CRON tout en bas du fichier, positionné par
+    test_volta_sync.py AVANT d'importer ce module). Idempotent : un second
+    appel dans le même process ne recrée pas de thread."""
+    global _volta_sync_cron_thread
+    if _volta_sync_cron_thread is not None:
+        return
+    _volta_sync_cron_thread = threading.Thread(target=_volta_sync_cron_loop, name='volta-sync-cron', daemon=True)
+    _volta_sync_cron_thread.start()
+
 @app.route('/api/volta-sync/run', methods=['POST'])
 @token_required
 def run_volta_sync(current_user):
@@ -4782,6 +4861,24 @@ def set_security_headers(response):
 
 # Initialize Database (Run migration)
 init_db()
+
+# Cron de synchro Volta — jamais démarré pendant les tests unitaires.
+# test_volta_sync.py positionne OHM_DISABLE_VOLTA_CRON=1 dans os.environ
+# AVANT d'importer ce module (voir son en-tête) : sans ce garde, importer
+# app.py dans la suite de tests démarrerait un vrai thread de fond qui
+# tournerait pendant (et après, daemon ou pas) toute la suite, de façon non
+# déterministe.
+#
+# Combien de fois ce thread démarre réellement dépend de détails d'exécution
+# de gunicorn --preload (le module est importé une fois dans le processus
+# arbitre avant le fork des 4 workers — si/comment un thread Python survit
+# ensuite dans chaque worker forké n'est pas quelque chose sur quoi ce code
+# doit parier). C'est précisément pour ça que la protection réelle contre le
+# traitement en double est _try_claim_volta_sync_run (un UPDATE atomique en
+# base, vu par tous les process qui partagent le même fichier SQLite) et non
+# une hypothèse sur le nombre de threads effectivement démarrés ici.
+if not os.environ.get('OHM_DISABLE_VOLTA_CRON'):
+    _start_volta_sync_cron()
 
 if __name__ == '__main__':
     # Fail closed: debug only turns on if FLASK_ENV is explicitly 'development'.

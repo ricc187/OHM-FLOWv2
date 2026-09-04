@@ -27,11 +27,17 @@ import os
 import sys
 import shutil
 import tempfile
+import threading
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # backend/
 
 os.environ.setdefault('SECRET_KEY', 'test-secret-key-for-unittests-only')
+# Doit être positionné AVANT `import app` : app.py démarre le thread de cron
+# Volta au niveau module (juste après init_db()), gardé par cette variable —
+# sans ça, importer app.py ici démarrerait un vrai thread de fond qui
+# tournerait pendant (et après) toute la suite. Voir test_cron_thread_does_not_start_during_tests.
+os.environ['OHM_DISABLE_VOLTA_CRON'] = '1'
 
 _TEST_DIR = tempfile.mkdtemp(prefix='ohmflow_volta_sync_test_')
 _orig_cwd = os.getcwd()
@@ -581,6 +587,65 @@ class VoltaSyncTestCase(unittest.TestCase):
         client = ohmapp.app.test_client()
         client.set_cookie(ohmapp.COOKIE_NAME, token)
         self.assertEqual(client.get('/api/volta-sync/status').status_code, 403)
+
+    # --- Cron de synchro Volta : garde-fou anti-doublon multi-workers ---
+
+    def test_cron_thread_does_not_start_during_tests(self):
+        # OHM_DISABLE_VOLTA_CRON=1 est positionné tout en haut de ce fichier,
+        # AVANT `import app` — vérifie que ça a bien empêché le thread de
+        # démarrer (import déjà fait une fois pour toute la classe/suite),
+        # et qu'aucun thread résiduel de ce nom ne tourne en fond.
+        self.assertIsNone(ohmapp._volta_sync_cron_thread)
+        self.assertNotIn('volta-sync-cron', [t.name for t in threading.enumerate()])
+
+    def test_claim_guard_only_one_of_two_concurrent_workers_wins(self):
+        # Simule 2 "workers" gunicorn qui tentent de déclencher le même
+        # cycle au même instant — un seul doit gagner la course.
+        with ohmapp.app.app_context():
+            ohmapp.VoltaSyncRun.query.delete()
+            ohmapp.db.session.commit()
+
+        now = ohmapp.datetime.datetime.utcnow()
+        with ohmapp.app.app_context():
+            first_worker_claims = ohmapp._try_claim_volta_sync_run(now=now)
+        with ohmapp.app.app_context():
+            second_worker_claims = ohmapp._try_claim_volta_sync_run(now=now)
+
+        self.assertTrue(first_worker_claims)
+        self.assertFalse(second_worker_claims)
+
+        with ohmapp.app.app_context():
+            self.assertEqual(ohmapp.VoltaSyncRun.query.count(), 1)  # ligne singleton, pas de doublon
+
+    def test_claim_guard_respects_interval_then_allows_next_cycle(self):
+        with ohmapp.app.app_context():
+            ohmapp.VoltaSyncRun.query.delete()
+            ohmapp.db.session.commit()
+
+        t0 = ohmapp.datetime.datetime.utcnow()
+        with ohmapp.app.app_context():
+            self.assertTrue(ohmapp._try_claim_volta_sync_run(now=t0))
+
+        # Bien avant la fin de la fenêtre de garde -> toujours refusé,
+        # comme un 2e worker qui retenterait trop tôt.
+        soon = t0 + ohmapp.datetime.timedelta(minutes=1)
+        with ohmapp.app.app_context():
+            self.assertFalse(ohmapp._try_claim_volta_sync_run(now=soon))
+
+        # Une fois VOLTA_SYNC_CRON_CLAIM_WINDOW_SECONDS écoulées -> un
+        # nouveau cycle peut être réclamé.
+        later = t0 + ohmapp.datetime.timedelta(seconds=ohmapp.VOLTA_SYNC_CRON_CLAIM_WINDOW_SECONDS + 1)
+        with ohmapp.app.app_context():
+            self.assertTrue(ohmapp._try_claim_volta_sync_run(now=later))
+
+    def test_claim_guard_singleton_row_survives_repeated_calls(self):
+        with ohmapp.app.app_context():
+            ohmapp.VoltaSyncRun.query.delete()
+            ohmapp.db.session.commit()
+        with ohmapp.app.app_context():
+            ohmapp._try_claim_volta_sync_run()
+            ohmapp._try_claim_volta_sync_run()  # la ligne id=1 existe déjà — ne doit pas planter
+            self.assertEqual(ohmapp.VoltaSyncRun.query.count(), 1)
 
 
 if __name__ == '__main__':
