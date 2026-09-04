@@ -1,5 +1,4 @@
 import os
-import json
 import secrets
 import shutil
 import datetime
@@ -3466,29 +3465,6 @@ def manage_financier(current_user, chantier_id):
         sync_petites_fournitures(chantier_id, financier)
 
     return jsonify(_financier_payload(chantier_id))
-
-# --- Volta debug panel (TEMPORAIRE) ---
-# Sert les données brutes déjà récupérées manuellement depuis l'API Volta
-# (voir scripts/explore_volta_api.py et VOLTA_API_NOTES.md) pour comparaison
-# à l'œil avec le module financier, le temps de finaliser un vrai mapping.
-# Aucun appel live à Volta ici — juste un fichier JSON statique, précisément
-# pour respecter le rate-limit de l'API Volta. Hardcodé sur le chantier
-# "La Baita" (id 15) le temps de cette exploration — à retirer/généraliser
-# une fois l'intégration réelle décidée.
-VOLTA_DEBUG_CHANTIER_ID = 15
-VOLTA_DEBUG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'volta_debug_la_baita.json')
-
-@app.route('/api/chantiers/<int:chantier_id>/volta-debug', methods=['GET'])
-@token_required
-def get_volta_debug(current_user, chantier_id):
-    if current_user.role != 'admin':
-        return jsonify({'error': 'Admin access required'}), 403
-    if chantier_id != VOLTA_DEBUG_CHANTIER_ID:
-        return jsonify({'error': 'Aucune donnée Volta de debug pour ce chantier'}), 404
-    if not os.path.isfile(VOLTA_DEBUG_FILE):
-        return jsonify({'error': 'Fichier de debug Volta introuvable'}), 404
-    with open(VOLTA_DEBUG_FILE, encoding='utf-8') as f:
-        return jsonify(json.load(f))
 
 @app.route('/api/chantiers/<int:chantier_id>/ca_lignes', methods=['POST'])
 @token_required
