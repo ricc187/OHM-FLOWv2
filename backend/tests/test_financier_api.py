@@ -81,7 +81,7 @@ class FinancierApiTestCase(unittest.TestCase):
     def _add_entry(self, heures):
         with ohmapp.app.app_context():
             e = ohmapp.Entry(user_id=self.admin_id, chantier_id=self.chantier_id, date='2026-01-01',
-                              heures=heures, materiel=0, created_by_id=self.admin_id)
+                              heures=heures, created_by_id=self.admin_id)
             ohmapp.db.session.add(e)
             ohmapp.db.session.commit()
 

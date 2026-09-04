@@ -4,15 +4,24 @@ interface StatusBadgeProps {
     type: 'chantier' | 'entry' | 'leave' | 'prevision';
 }
 
+// Callers pass a ChantierPhase key ('NON_PLANIFIE' | 'EN_COURS' | 'TERMINE',
+// see chantierPhase.ts) for type='chantier' — this maps it to both the
+// display label and the color, one source of truth for the 3 states.
+const CHANTIER_PHASE_LABELS: Record<string, string> = {
+    NON_PLANIFIE: 'Non planifié',
+    EN_COURS: 'En cours',
+    TERMINE: 'Terminé',
+};
+
 export const StatusBadge = ({ status, type }: StatusBadgeProps) => {
     let colorClass = 'bg-slate-100 text-slate-300'; // Default
 
     const normalizedStatus = status.toUpperCase();
 
     if (type === 'chantier') {
-        if (normalizedStatus === 'FUTURE') colorClass = 'bg-status-future/20 text-status-future border border-status-future/30';
-        if (normalizedStatus === 'ACTIVE') colorClass = 'bg-status-active/20 text-status-active border border-status-active/30';
-        if (normalizedStatus === 'DONE') colorClass = 'bg-status-done/40 text-emerald-300 border border-status-done/50';
+        if (normalizedStatus === 'NON_PLANIFIE') colorClass = 'bg-slate-200/60 text-slate-500 border border-slate-300/50';
+        if (normalizedStatus === 'EN_COURS') colorClass = 'bg-status-active/20 text-status-active border border-status-active/30';
+        if (normalizedStatus === 'TERMINE') colorClass = 'bg-status-done/40 text-emerald-300 border border-status-done/50';
     }
 
     if (type === 'entry') {
@@ -33,7 +42,7 @@ export const StatusBadge = ({ status, type }: StatusBadgeProps) => {
 
     return (
         <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider ${colorClass}`}>
-            {status}
+            {type === 'chantier' ? (CHANTIER_PHASE_LABELS[normalizedStatus] || status) : status}
         </span>
     );
 };

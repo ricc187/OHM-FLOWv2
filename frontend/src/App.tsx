@@ -15,7 +15,12 @@ import { useInactivityLogout } from './hooks/useInactivityLogout';
 const ChantierDetail = lazy(() => import('./components/ChantierDetail').then(m => ({ default: m.ChantierDetail })));
 const AdminUsers = lazy(() => import('./components/AdminUsers').then(m => ({ default: m.AdminUsers })));
 const AdminEntries = lazy(() => import('./components/AdminEntries').then(m => ({ default: m.AdminEntries })));
+const MissingEntries = lazy(() => import('./components/MissingEntries').then(m => ({ default: m.MissingEntries })));
+const AdminLeaves = lazy(() => import('./components/AdminLeaves').then(m => ({ default: m.AdminLeaves })));
 const Planning = lazy(() => import('./components/Planning').then(m => ({ default: m.Planning })));
+const Agenda = lazy(() => import('./components/Agenda').then(m => ({ default: m.Agenda })));
+const MesConges = lazy(() => import('./components/MesConges').then(m => ({ default: m.MesConges })));
+const PotAChantier = lazy(() => import('./components/PotAChantier').then(m => ({ default: m.PotAChantier })));
 const GlobalStats = lazy(() => import('./components/GlobalStats').then(m => ({ default: m.GlobalStats })));
 const AdminNotices = lazy(() => import('./components/AdminNotices').then(m => ({ default: m.AdminNotices })));
 
@@ -25,8 +30,8 @@ const PageLoader = () => (
     </div>
 );
 
-type View = 'dashboard' | 'admin' | 'admin-entries' | 'planning' | 'stats' | 'notices';
-const VALID_VIEWS: View[] = ['dashboard', 'admin', 'admin-entries', 'planning', 'stats', 'notices'];
+type View = 'dashboard' | 'admin' | 'admin-entries' | 'missing-entries' | 'admin-leaves' | 'planning' | 'agenda' | 'mes-conges' | 'pot-a-chantier' | 'stats' | 'notices';
+const VALID_VIEWS: View[] = ['dashboard', 'admin', 'admin-entries', 'missing-entries', 'admin-leaves', 'planning', 'agenda', 'mes-conges', 'pot-a-chantier', 'stats', 'notices'];
 
 // Reads the current view/selected-chantier out of the URL — used both on
 // first load and whenever the user hits browser back/forward.
@@ -148,7 +153,12 @@ function App() {
         if (path === 'dashboard') next = 'dashboard';
         else if (path === 'admin-users') next = 'admin';
         else if (path === 'admin-entries') next = 'admin-entries';
+        else if (path === 'missing-entries') next = 'missing-entries';
+        else if (path === 'admin-leaves') next = 'admin-leaves';
         else if (path === 'planning') next = 'planning';
+        else if (path === 'agenda') next = 'agenda';
+        else if (path === 'mes-conges') next = 'mes-conges';
+        else if (path === 'pot-a-chantier') next = 'pot-a-chantier';
         else if (path === 'stats') next = 'stats';
         else if (path === 'notices') next = 'notices';
         setView(next);
@@ -188,22 +198,38 @@ function App() {
         >
             <NoticeBanner />
             <Suspense fallback={<PageLoader />}>
-                {view === 'admin' ? (
-                    <AdminUsers currentUser={user} />
-                ) : view === 'planning' ? (
-                    <Planning currentUser={user} />
-                ) : view === 'stats' ? (
-                    <GlobalStats />
-                ) : view === 'admin-entries' ? (
-                    <AdminEntries currentUser={user} />
-                ) : view === 'notices' ? (
-                    <AdminNotices />
-                ) : selectedChantier ? (
+                {selectedChantier ? (
+                    // Vérifié avant les vues nommées : sinon un chantier ouvert
+                    // depuis l'Agenda ("Voir le chantier") reste bloqué sur
+                    // view === 'agenda' et ne s'affiche jamais (bug corrigé).
+                    // onBack referme juste selectedChantier, view ne change
+                    // pas — on revient exactement là où on était (Agenda ou
+                    // Dashboard selon d'où on est venu).
                     <ChantierDetail
                         chantier={selectedChantier}
                         currentUser={user}
                         onBack={handleBackFromChantier}
                     />
+                ) : view === 'admin' ? (
+                    <AdminUsers currentUser={user} />
+                ) : view === 'planning' ? (
+                    <Planning currentUser={user} />
+                ) : view === 'agenda' ? (
+                    <Agenda currentUser={user} onOpenChantier={handleSelectChantier} />
+                ) : view === 'mes-conges' ? (
+                    <MesConges currentUser={user} />
+                ) : view === 'pot-a-chantier' ? (
+                    <PotAChantier currentUser={user} />
+                ) : view === 'stats' ? (
+                    <GlobalStats />
+                ) : view === 'admin-entries' ? (
+                    <AdminEntries currentUser={user} />
+                ) : view === 'missing-entries' ? (
+                    <MissingEntries />
+                ) : view === 'admin-leaves' ? (
+                    <AdminLeaves />
+                ) : view === 'notices' ? (
+                    <AdminNotices />
                 ) : selectedChantierId ? (
                     null // fetching the chantier for a refreshed/direct link — avoid a dashboard flash
                 ) : (

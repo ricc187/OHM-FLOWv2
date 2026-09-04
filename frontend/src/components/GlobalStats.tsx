@@ -1,34 +1,32 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api';
+import { SlidingTabs } from './ui/SlidingTabs';
+import { RhPlanningTab } from './RhPlanningTab';
+import { D_POS, D_NEG, GRID, formatPct, StatTile, LegendSwatch } from './statsUi';
 
-// Page "Statistiques" — vue d'ensemble opérationnelle (heures/matériel dans
-// le temps) + vue financière agrégée (marge, avancement, CA prévu/réel par
+type StatsTab = 'FINANCIER' | 'RH';
+
+// Page "Statistiques" — vue d'ensemble opérationnelle (heures dans le
+// temps) + vue financière agrégée (marge, avancement, CA prévu/réel par
 // chantier), construite selon la méthode dataviz : forme choisie par le job
 // des données, couleur categorical/diverging/status assignée par rôle (jamais
 // décorative), légende dès 2 séries, tooltip au survol, table en repli.
+// D_POS/D_NEG/GRID/StatTile/LegendSwatch/formatPct partagés avec RhPlanningTab
+// (onglet RH & Planning) — voir statsUi.tsx.
 
-// --- Palette (validée — voir dataviz skill) ---
-// Diverging : polarité (marge positive/négative, CA au-dessus/en-dessous du
-// prévu) — le neutre au zéro est juste la ligne de base (slate-300 en JSX),
-// pas une couleur de remplissage.
-const D_POS = '#2a78d6';
-const D_NEG = '#e34948';
 // Status (avancement vs budget) — mêmes seuils que l'onglet Finances d'un chantier.
 const S_GOOD = '#16a34a';
 const S_WARN = '#f59e0b';
 const S_CRIT = '#ef4444';
 const S_NONE = '#cbd5e1';
 
-const GRID = '#e2e8f0';      // slate-200
-
-interface MonthlyStats { month: string; hours: number; material: number; }
+interface MonthlyStats { month: string; hours: number; }
 interface StatsData {
     total_entries: number;
     total_hours: number;
-    total_material: number;
     active_chantiers: number;
     history: MonthlyStats[];
-    comparison?: { hours_growth: number; material_growth: number; hours_curr: number; hours_last: number };
+    comparison?: { hours_growth: number; hours_curr: number; hours_last: number };
 }
 
 interface ChantierFinancierStat {
@@ -59,36 +57,12 @@ const formatCHF = (v: number | null | undefined, compact = false) => {
     }
     return v.toLocaleString('fr-CH', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
 };
-const formatPct = (v: number | null | undefined) => v == null ? '—' : `${(v * 100).toLocaleString('fr-CH', { maximumFractionDigits: 1 })}%`;
 const formatMonth = (ym: string) => {
     if (!ym) return '';
     const [y, m] = ym.split('-');
     return new Date(parseInt(y), parseInt(m) - 1).toLocaleString('fr-FR', { month: 'short' }).replace('.', '');
 };
 const statusColor = (pct: number | null) => pct == null ? S_NONE : pct > 1 ? S_CRIT : pct >= 0.9 ? S_WARN : S_GOOD;
-
-// --- Stat tile — label / value / delta, pas d'icône décorative (voir dataviz "figures") ---
-const StatTile: React.FC<{ label: string; value: React.ReactNode; sub?: string; delta?: { value: string; good: boolean } }> =
-    ({ label, value, sub, delta }) => (
-        <div className="card">
-            <div className="text-xs font-bold text-slate-500 uppercase tracking-wider">{label}</div>
-            <div className="mt-2 flex items-baseline gap-2 flex-wrap">
-                <div className="text-3xl font-semibold text-slate-900">{value}</div>
-                {delta && (
-                    <span className={`text-xs font-bold px-1.5 py-0.5 rounded ${delta.good ? 'text-green-700 bg-green-50' : 'text-red-700 bg-red-50'}`}>
-                        {delta.value}
-                    </span>
-                )}
-            </div>
-            {sub && <div className="mt-1 text-xs text-slate-400">{sub}</div>}
-        </div>
-    );
-
-const LegendSwatch: React.FC<{ color: string; label: string }> = ({ color, label }) => (
-    <span className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-600">
-        <span className="w-3 h-3 rounded-sm shrink-0" style={{ backgroundColor: color }} /> {label}
-    </span>
-);
 
 // --- Donut d'avancement global (réel/prévu, sommé sur tous les chantiers) ---
 const AvancementDonut: React.FC<{ label: string; pct: number | null }> = ({ label, pct }) => {
@@ -223,8 +197,8 @@ const CaScatterChart: React.FC<{ data: ChantierFinancierStat[] }> = ({ data }) =
     );
 };
 
-// --- Tendance mensuelle heures/matériel — courbe + barres, interaction crosshair ---
-const TrendLineChart: React.FC<{ data: MonthlyStats[]; dataKey: 'hours' | 'material'; color: string; unit: string; height?: number }> =
+// --- Tendance mensuelle des heures — courbe + aire, interaction crosshair ---
+const TrendLineChart: React.FC<{ data: MonthlyStats[]; dataKey: 'hours'; color: string; unit: string; height?: number }> =
     ({ data, dataKey, color, unit, height = 220 }) => {
         const containerRef = useRef<HTMLDivElement>(null);
         const [hoverIndex, setHoverIndex] = useState<number | null>(null);
@@ -294,6 +268,7 @@ const TrendLineChart: React.FC<{ data: MonthlyStats[]; dataKey: 'hours' | 'mater
     };
 
 export const GlobalStats: React.FC = () => {
+    const [activeTab, setActiveTab] = useState<StatsTab>('FINANCIER');
     const [stats, setStats] = useState<StatsData | null>(null);
     const [fin, setFin] = useState<FinancierStatsData | null>(null);
     const [filterRange, setFilterRange] = useState<'3M' | '6M' | '1Y' | 'ALL'>('1Y');
@@ -335,6 +310,19 @@ export const GlobalStats: React.FC = () => {
                 <h2 className="text-2xl sm:text-3xl font-bold text-slate-900">Statistiques</h2>
                 <p className="text-slate-500 mt-1 text-sm">Vue d'ensemble opérationnelle et financière.</p>
             </div>
+
+            <SlidingTabs
+                tabs={[
+                    { id: 'FINANCIER', label: 'Financier' },
+                    { id: 'RH', label: 'RH & Planning' },
+                ]}
+                active={activeTab}
+                onChange={setActiveTab}
+            />
+
+            {activeTab === 'RH' && <RhPlanningTab />}
+
+            {activeTab === 'FINANCIER' && <>
 
             {/* ===== KPI ===== */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -486,6 +474,8 @@ export const GlobalStats: React.FC = () => {
                     </table>
                 </div>
             )}
+
+            </>}
         </div>
     );
 };

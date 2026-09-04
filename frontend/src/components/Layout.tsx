@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { OhmIcon } from './Icons';
-import { LayoutDashboard, Calendar, Users, ClipboardCheck, LogOut, BarChart3, Menu, X, ChevronRight, CloudOff, Megaphone } from 'lucide-react';
+import { LayoutDashboard, CalendarDays, CalendarCheck, Users, ClipboardCheck, LogOut, BarChart3, Menu, X, ChevronRight, CloudOff, Megaphone, Inbox, AlertTriangle, CalendarClock } from 'lucide-react';
 import { MODAL_STATE_EVENT } from '../modalState';
 import { api } from '../api';
 import { getQueuedEntries, onQueueChange } from '../offlineQueue';
@@ -11,7 +11,7 @@ interface User {
     role: string;
 }
 
-type View = 'dashboard' | 'admin' | 'admin-entries' | 'planning' | 'stats' | 'notices';
+type View = 'dashboard' | 'admin' | 'admin-entries' | 'missing-entries' | 'admin-leaves' | 'planning' | 'agenda' | 'mes-conges' | 'pot-a-chantier' | 'stats' | 'notices';
 
 interface LayoutProps {
     children: React.ReactNode;
@@ -23,13 +23,21 @@ interface LayoutProps {
 
 const NAV_ITEMS = [
     { path: 'dashboard', view: 'dashboard' as View, icon: LayoutDashboard, label: 'Tableau de bord' },
-    { path: 'planning', view: 'planning' as View, icon: Calendar, label: 'Planning & Congés' },
+    // Agenda replaces Planning & Congés (the Tipee-replacement grid, signed
+    // off end-to-end — see the Agenda refonte task). Planning.tsx itself and
+    // its 'planning' view/route are deliberately NOT deleted, just no longer
+    // reachable from the nav — kept until we're 100% sure nothing was missed.
+    { path: 'agenda', view: 'agenda' as View, icon: CalendarDays, label: 'Agenda' },
+    { path: 'mes-conges', view: 'mes-conges' as View, icon: CalendarCheck, label: 'Mes congés' },
+    { path: 'pot-a-chantier', view: 'pot-a-chantier' as View, icon: Inbox, label: 'Pot à chantier' },
 ];
 
 const ADMIN_NAV_ITEMS = [
     { path: 'stats', view: 'stats' as View, icon: BarChart3, label: 'Statistiques' },
     { path: 'admin-users', view: 'admin' as View, icon: Users, label: 'Gestion Utilisateurs' },
     { path: 'admin-entries', view: 'admin-entries' as View, icon: ClipboardCheck, label: 'Validation Saisies' },
+    { path: 'missing-entries', view: 'missing-entries' as View, icon: AlertTriangle, label: 'Heures non entrées' },
+    { path: 'admin-leaves', view: 'admin-leaves' as View, icon: CalendarClock, label: 'Validation Congés' },
     { path: 'notices', view: 'notices' as View, icon: Megaphone, label: 'Annonces' },
 ];
 
@@ -61,6 +69,47 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, activeView, onLo
         const interval = setInterval(fetchCount, 60000);
         return () => clearInterval(interval);
     }, [user?.role]);
+
+    // Anomalies "Heures non entrées" en attente — admin only, même pattern que pendingCount.
+    const [missingEntriesCount, setMissingEntriesCount] = useState(0);
+    useEffect(() => {
+        if (user?.role !== 'admin') return;
+        const fetchCount = async () => {
+            const res = await api.get('/api/admin/missing-entries');
+            if (res.ok) setMissingEntriesCount((await res.json()).anomalies.length);
+        };
+        fetchCount();
+        const interval = setInterval(fetchCount, 60000);
+        return () => clearInterval(interval);
+    }, [user?.role]);
+
+    // Congés status='PENDING' en attente — admin only, même pattern que
+    // pendingCount. Pas d'endpoint dédié (voir échange de cadrage) : filtre
+    // sur la même réponse GET /api/leaves que l'écran lui-même.
+    const [pendingLeavesCount, setPendingLeavesCount] = useState(0);
+    useEffect(() => {
+        if (user?.role !== 'admin') return;
+        const fetchCount = async () => {
+            const res = await api.get('/api/leaves');
+            if (res.ok) setPendingLeavesCount((await res.json()).filter((l: { status: string }) => l.status === 'PENDING').length);
+        };
+        fetchCount();
+        const interval = setInterval(fetchCount, 60000);
+        return () => clearInterval(interval);
+    }, [user?.role]);
+
+    // Chantiers dans le "Pot à chantier" (aucune chantier_assignment) — visible
+    // de tous (le menu lui-même l'est), pas juste admin comme pendingCount ci-dessus.
+    const [potCount, setPotCount] = useState(0);
+    useEffect(() => {
+        const fetchPotCount = async () => {
+            const res = await api.get('/api/chantiers?has_assignments=false');
+            if (res.ok) setPotCount((await res.json()).length);
+        };
+        fetchPotCount();
+        const interval = setInterval(fetchPotCount, 60000);
+        return () => clearInterval(interval);
+    }, []);
 
     // Offline-queued entries (see offlineQueue.ts) — a small persistent
     // indicator so it's obvious something is waiting to send, not silently lost.
@@ -158,7 +207,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, activeView, onLo
 
                 <nav className="flex-1 py-6 px-3 space-y-2 flex flex-col w-full overflow-y-auto overflow-x-hidden no-scrollbar">
                     {NAV_ITEMS.map(item => (
-                        <NavItem key={item.path} icon={<item.icon size={22} />} label={item.label} active={activeView === item.view} onClick={() => handleNavigate(item.path)} />
+                        <NavItem key={item.path} icon={<item.icon size={22} />} label={item.label} active={activeView === item.view} onClick={() => handleNavigate(item.path)} badge={item.path === 'pot-a-chantier' ? potCount : undefined} />
                     ))}
 
                     {user?.role === 'admin' && (
@@ -168,7 +217,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, activeView, onLo
                             </div>
                             <div className="space-y-2">
                                 {ADMIN_NAV_ITEMS.map(item => (
-                                    <NavItem key={item.path} icon={<item.icon size={22} />} label={item.label} active={activeView === item.view} onClick={() => handleNavigate(item.path)} badge={item.path === 'admin-entries' ? pendingCount : undefined} />
+                                    <NavItem key={item.path} icon={<item.icon size={22} />} label={item.label} active={activeView === item.view} onClick={() => handleNavigate(item.path)} badge={item.path === 'admin-entries' ? pendingCount : item.path === 'missing-entries' ? missingEntriesCount : item.path === 'admin-leaves' ? pendingLeavesCount : undefined} />
                                 ))}
                             </div>
                         </div>
@@ -258,7 +307,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, activeView, onLo
 
                         <nav className="flex-1 py-4 px-3 space-y-1 overflow-y-auto">
                             {NAV_ITEMS.map(item => (
-                                <NavItemMobile key={item.path} icon={<item.icon size={22} />} label={item.label} active={activeView === item.view} onClick={() => handleNavigate(item.path)} />
+                                <NavItemMobile key={item.path} icon={<item.icon size={22} />} label={item.label} active={activeView === item.view} onClick={() => handleNavigate(item.path)} badge={item.path === 'pot-a-chantier' ? potCount : undefined} />
                             ))}
 
                             {user?.role === 'admin' && (
@@ -267,7 +316,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, activeView, onLo
                                         Administration
                                     </div>
                                     {ADMIN_NAV_ITEMS.map(item => (
-                                        <NavItemMobile key={item.path} icon={<item.icon size={22} />} label={item.label} active={activeView === item.view} onClick={() => handleNavigate(item.path)} badge={item.path === 'admin-entries' ? pendingCount : undefined} />
+                                        <NavItemMobile key={item.path} icon={<item.icon size={22} />} label={item.label} active={activeView === item.view} onClick={() => handleNavigate(item.path)} badge={item.path === 'admin-entries' ? pendingCount : item.path === 'missing-entries' ? missingEntriesCount : item.path === 'admin-leaves' ? pendingLeavesCount : undefined} />
                                     ))}
                                 </div>
                             )}

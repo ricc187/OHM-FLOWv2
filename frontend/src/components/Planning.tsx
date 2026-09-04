@@ -5,6 +5,7 @@ import { StatusBadge } from './StatusBadge';
 import { AwesomeSelect } from './ui/AwesomeSelect';
 import { AwesomeDatePicker } from './ui/AwesomeDatePicker';
 import { api } from '../api';
+import { LEAVE_TYPE_OPTIONS, LEAVE_TYPE_LABELS } from '../leaveTypes';
 
 // Helper to get days in month
 const getDaysInMonth = (year: number, month: number) => new Date(year, month + 1, 0).getDate();
@@ -209,11 +210,11 @@ export const Planning: React.FC<Props> = ({ currentUser }) => {
 
     // New Leave State
     const [showNewLeave, setShowNewLeave] = useState(false);
-    const [newLeave, setNewLeave] = useState({ start_date: '', end_date: '', type: 'VACATION' });
+    const [newLeave, setNewLeave] = useState({ start_date: '', end_date: '', type: 'CONGE' });
 
     // Admin Edit Leave State
     const [editingLeaveId, setEditingLeaveId] = useState<number | null>(null);
-    const [editLeaveForm, setEditLeaveForm] = useState({ start_date: '', end_date: '', type: 'VACATION', admin_note: '' });
+    const [editLeaveForm, setEditLeaveForm] = useState({ start_date: '', end_date: '', type: 'CONGE', admin_note: '' });
 
     useEffect(() => {
         fetchLeaves();
@@ -237,7 +238,7 @@ export const Planning: React.FC<Props> = ({ currentUser }) => {
             date_end: newLeave.end_date
         });
         if (res.ok) {
-            setNewLeave({ start_date: '', end_date: '', type: 'VACATION' });
+            setNewLeave({ start_date: '', end_date: '', type: 'CONGE' });
             setShowNewLeave(false);
             fetchLeaves();
         }
@@ -274,14 +275,7 @@ export const Planning: React.FC<Props> = ({ currentUser }) => {
         });
     };
 
-    const renderLeaveType = (type: string) => {
-        switch (type) {
-            case 'VACATION': return 'Vacances';
-            case 'SICKNESS': return 'Maladie';
-            case 'OTHER': return 'Autre';
-            default: return type;
-        }
-    };
+    const renderLeaveType = (type: string) => LEAVE_TYPE_LABELS[type] || type;
 
     return (
         <div className="space-y-8 animate-fade-in pb-12">
@@ -336,11 +330,7 @@ export const Planning: React.FC<Props> = ({ currentUser }) => {
                                     <AwesomeSelect
                                         value={newLeave.type}
                                         onChange={(v) => setNewLeave({ ...newLeave, type: v })}
-                                        options={[
-                                            { value: 'VACATION', label: 'Vacances' },
-                                            { value: 'SICKNESS', label: 'Maladie' },
-                                            { value: 'OTHER', label: 'Autre' }
-                                        ]}
+                                        options={LEAVE_TYPE_OPTIONS}
                                     />
                                 </div>
                                 <div className="flex justify-end gap-2">
@@ -406,11 +396,7 @@ export const Planning: React.FC<Props> = ({ currentUser }) => {
                                                 <AwesomeSelect
                                                     value={editLeaveForm.type}
                                                     onChange={v => setEditLeaveForm({...editLeaveForm, type: v})}
-                                                    options={[
-                                                        { value: 'VACATION', label: 'Vacances' },
-                                                        { value: 'SICKNESS', label: 'Maladie' },
-                                                        { value: 'OTHER', label: 'Autre' }
-                                                    ]}
+                                                    options={LEAVE_TYPE_OPTIONS}
                                                 />
                                             </div>
                                             <textarea 

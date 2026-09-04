@@ -25,16 +25,48 @@ export interface Chantier {
     plan_pdf_path?: string; // New PDF
     address_work?: string;
     address_billing?: string;
-    date_start?: string;
-    date_end?: string;
     remarque?: string;
     status: ChantierStatus;
     archived?: boolean; // documents zipped + originals freed (set on close, cleared on reopen)
     numero?: string; // {AA}{NNNNN} nomenclature prefix, e.g. "2600347" — undefined on legacy chantiers
     commune?: string;
     client_repere?: string;
+    referent_id?: number | null; // collaborateur qui a apporté le chantier — undefined sur les chantiers legacy
+    referent_name?: string | null;
+    created_at?: string | null; // ISO — null sur les chantiers créés avant l'ajout de cette colonne
+    deadline?: string | null; // YYYY-MM-DD, optionnelle — pilote le code couleur de ChantierCard
+    avancement_declare?: number | null; // 0-100, déclaré à la main par un admin (distinct des % calculés du module Finances)
     hours_total?: number;
+    // true dès qu'une chantier_assignment existe (proposition ou confirmée) —
+    // false = chantier encore dans le "Pot à chantier", pas encore planifié.
+    has_assignments?: boolean;
     members: number[]; // Array of User IDs
+}
+
+// Unified shape returned by GET /api/calendar — one leave or chantier
+// assignment, already merged/typed server-side (see app.py get_calendar).
+export type CalendarSource = 'leave' | 'chantier';
+
+export interface CalendarItem {
+    id: number;
+    source: CalendarSource;
+    type: string; // LeaveType value when source='leave', 'chantier' when source='chantier'
+    user_id: number;
+    chantier_id: number | null;
+    titre: string;
+    date_debut: string; // YYYY-MM-DD
+    heure_debut: string | null; // HH:MM, null when toute_la_journee
+    date_fin: string;
+    heure_fin: string | null;
+    toute_la_journee: boolean;
+    description: string | null;
+    status: 'PENDING' | 'APPROVED' | 'REJECTED' | null; // null for source='chantier'
+    couleur: string; // hex
+    // "Chantier à planifier" — several candidate dates blocked provisionally
+    // until the client confirms one. null/'confirme' for everything else
+    // (leaves never carry this — always null there).
+    statut: 'confirme' | 'proposition' | null;
+    proposal_group_id: string | null;
 }
 
 export interface AdminNotice {
@@ -68,10 +100,12 @@ export interface Entry {
     chantier_nom: string;
     date: string;
     heures: number;
-    materiel: number;
     status: 'PENDING' | 'VALIDATED';
     created_by_id?: number;
     admin_note?: string;
+    // Obligatoire pour toute nouvelle saisie (voir POST /api/entries) — optionnel
+    // ici seulement pour les entries créées avant l'ajout de cette colonne.
+    description?: string | null;
 }
 
 // --- Module financier ---
@@ -184,15 +218,30 @@ export interface PrevisionImportResult {
     created: ChantierPrevision[];
 }
 
+// CONGE/MALADIE/ABSENCE/ARMEE/CONGE_PAT_MAT/DEMENAGEMENT mirror the backend
+// Leave.type enum (renamed from VACATION/SICKNESS/OTHER — see app.py's
+// leaves type migration). HOLIDAY is frontend-only (synthetic calendar entries,
+// see Planning.tsx's CalendarView), never sent to/from the API.
+export type LeaveType = 'CONGE' | 'MALADIE' | 'ABSENCE' | 'ARMEE' | 'CONGE_PAT_MAT' | 'DEMENAGEMENT' | 'HOLIDAY';
+
 export interface Leave {
     id: number;
     user_id: number;
     user_name: string;
-    type: 'VACATION' | 'SICKNESS' | 'OTHER' | 'HOLIDAY';
+    type: LeaveType;
     date_start: string;
     date_end: string;
     status: 'PENDING' | 'APPROVED' | 'REJECTED';
     days_count: number;
     admin_note?: string;
+    heure_debut?: string;
+    heure_fin?: string;
+    toute_la_journee?: boolean;
+    description?: string;
+    created_by_id?: number;
+    created_by_name?: string;
+    updated_by_id?: number;
+    updated_by_name?: string;
+    updated_at?: string;
 }
 
