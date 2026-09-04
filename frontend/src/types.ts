@@ -158,6 +158,32 @@ export interface FinancierPayload extends Partial<FinancierCalculs> {
     achats: AchatMateriel[];
 }
 
+// --- Module prévision annuelle ---
+// Totalement indépendant de l'Agenda / chantier_assignments / financier —
+// voir backend/app.py (ChantierPrevision). Le seul lien avec un chantier réel
+// est chantier_id, en lecture seule (jamais réécrit depuis le frontend).
+
+export type PrevisionStatut = 'prevu' | 'confirme';
+
+export interface ChantierPrevision {
+    id: number;
+    nom: string;
+    referent_id: number | null;
+    referent_username: string | null;
+    montant_estime: number | null;
+    date_debut_theorique: string | null; // YYYY-MM-DD
+    date_fin_theorique: string | null; // YYYY-MM-DD
+    statut: PrevisionStatut;
+    chantier_id: number | null;
+    created_at: string | null;
+}
+
+export interface PrevisionImportResult {
+    created_count: number;
+    already_imported_count: number;
+    created: ChantierPrevision[];
+}
+
 export interface Leave {
     id: number;
     user_id: number;
