@@ -220,6 +220,32 @@ class PrevisionApiTestCase(unittest.TestCase):
 
     # --- Import (lecture seule depuis chantiers) ---
 
+    def test_import_montant_estime_from_ca_prevu(self):
+        # Bug réel post-merge : montant_estime restait None pour tout chantier
+        # importé — seuls les items 'prevu' créés à la main en avaient un.
+        # montant_estime doit reprendre le CA prévisionnel (ca_prevu, réf.
+        # financier_calculs.compute_financier) : SUM des ca_lignes.
+        c1 = self._create_real_chantier('Import Montant')
+        res = self.client.put(f'/api/chantiers/{c1}/financier', json={})
+        self.assertEqual(res.status_code, 200, res.get_json())
+        res = self.client.post(f'/api/chantiers/{c1}/ca_lignes', json={'libelle': 'Adjugé', 'montant': 5000, 'heures': 50})
+        self.assertEqual(res.status_code, 201, res.get_json())
+        res = self.client.post(f'/api/chantiers/{c1}/ca_lignes', json={'libelle': 'Régie', 'montant': 1500, 'heures': 0})
+        self.assertEqual(res.status_code, 201, res.get_json())
+
+        res = self.client.post('/api/prevision/import')
+        self.assertEqual(res.status_code, 200, res.get_json())
+        created = next(p for p in res.get_json()['created'] if p['chantier_id'] == c1)
+        self.assertEqual(created['montant_estime'], 6500)
+
+    def test_import_montant_estime_none_without_financier(self):
+        # Pas de ChantierFinancier/ca_lignes du tout -> reste None, jamais
+        # inventé à 0 — même règle que les dates théoriques vides.
+        c1 = self._create_real_chantier('Import Sans Financier')
+        res = self.client.post('/api/prevision/import')
+        created = next(p for p in res.get_json()['created'] if p['chantier_id'] == c1)
+        self.assertIsNone(created['montant_estime'])
+
     def test_import_creates_confirme_rows_from_real_chantiers(self):
         c1 = self._create_real_chantier('Import A', date_debut='2026-04-01', date_fin='2026-04-30')
         c2 = self._create_real_chantier('Import B')  # pas de dates -> reste vide
