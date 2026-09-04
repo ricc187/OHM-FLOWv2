@@ -28,3 +28,7 @@ npm/
 # Dev leftovers
 *.log
 get-pip.py
+
+# Volta API exploration (scripts/explore_volta_api.py) — raw dumps contain
+# real client data, never committed.
+scripts/volta_dumps/

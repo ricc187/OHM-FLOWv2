@@ -1,0 +1,5 @@
+# Deps for scripts/explore_volta_api.py only — NOT merged into backend/requirements.txt.
+# requests and openpyxl are already present in the dev Python env used for this
+# exploration; python-dotenv is the only addition needed.
+requests>=2.31
+python-dotenv>=1.0
