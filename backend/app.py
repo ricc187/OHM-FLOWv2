@@ -983,6 +983,74 @@ class ChantierPrevision(db.Model):
             'created_at': self.created_at.isoformat() if self.created_at else None,
         }
 
+# --- Module financier — rattachement Volta (synchro) ---
+# Le formulaire pour créer ces liens (onglet Finances) arrive à l'étape 4 —
+# ici, seulement le modèle + le worker (voir process_volta_sync_queue plus
+# bas) qui les traite. Pas de vrai appel HTTP Volta à cette étape (voir
+# fetch_invoice_amount / fetch_project_offers_or_contracts) : mocké, en
+# attendant l'étape 2.
+
+VOLTA_SYNC_STATUTS = ('en_attente', 'synced', 'erreur')
+
+class VoltaDocumentLink(db.Model):
+    """Rattachement d'un chantier à un jeu de documents Volta (projet +
+    facture + offre optionnelle) à synchroniser vers son module financier.
+    Plusieurs lignes possibles par chantier (ex: plusieurs factures au fil
+    du chantier, chacune sa propre entrée).
+
+    La file de synchro FIFO n'est PAS une table séparée — c'est directement
+    `VoltaDocumentLink.query.filter_by(statut_sync='en_attente').order_by(created_at)`
+    (voir process_volta_sync_queue). Une table `volta_sync_queue` distincte
+    aurait dupliqué cet état (statut_sync vivrait à deux endroits à
+    resynchroniser) sans rien apporter, vu qu'aucune information de queue
+    (priorité, tentative, verrou...) n'est demandée au-delà du statut lui-même
+    — voir le rapport de cette passe si cette hypothèse doit être revue."""
+    __tablename__ = 'volta_document_links'
+    id = db.Column(db.Integer, primary_key=True)
+    chantier_id = db.Column(db.Integer, db.ForeignKey('chantiers.id'), nullable=False)
+    numero_projet = db.Column(db.String(20), nullable=False)   # ex "024042.001"
+    numero_facture = db.Column(db.String(20), nullable=False)  # ex "7098"
+    numero_offre = db.Column(db.String(20), nullable=True)     # optionnel — ex "7747"
+    statut_sync = db.Column(db.String(20), nullable=False, default='en_attente')  # en_attente | synced | erreur
+    derniere_sync_at = db.Column(db.DateTime, nullable=True)
+    erreur_message = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+
+    chantier = db.relationship('Chantier', backref=db.backref('volta_document_links', cascade='all, delete-orphan', lazy='selectin'))
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'chantier_id': self.chantier_id,
+            'numero_projet': self.numero_projet,
+            'numero_facture': self.numero_facture,
+            'numero_offre': self.numero_offre,
+            'statut_sync': self.statut_sync,
+            'derniere_sync_at': self.derniere_sync_at.isoformat() if self.derniere_sync_at else None,
+            'erreur_message': self.erreur_message,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
+
+class VoltaApiCallLog(db.Model):
+    """Historique brut de chaque appel (tenté) vers l'API Volta métier —
+    sert uniquement à calculer le rate-limit glissant : COUNT(*) WHERE
+    called_at > now - 1h (voir process_volta_sync_queue). Une ligne par
+    appel, y compris les échecs (succes=False) — un appel raté compte quand
+    même dans le quota côté Volta, donc il compte aussi ici."""
+    __tablename__ = 'volta_api_call_log'
+    id = db.Column(db.Integer, primary_key=True)
+    called_at = db.Column(db.DateTime, default=datetime.datetime.utcnow, nullable=False)
+    endpoint = db.Column(db.String(100), nullable=False)
+    succes = db.Column(db.Boolean, nullable=False, default=True)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'called_at': self.called_at.isoformat() if self.called_at else None,
+            'endpoint': self.endpoint,
+            'succes': self.succes,
+        }
+
 def sanitize_folder_name(name):
     """Make a chantier name safe to use as a filesystem folder name."""
     name = (name or '').strip()
@@ -3633,6 +3701,215 @@ def achat_detail(current_user, chantier_id, achat_id):
         achat.date = date
     db.session.commit()
     return jsonify(achat.to_dict())
+
+# --- Synchro Volta — worker (voir VoltaDocumentLink/VoltaApiCallLog plus haut) ---
+# ÉTAPE 1 (celle-ci) : modèle + worker, avec les deux appels Volta mockés via
+# des fonctions injectables — AUCUN vrai appel HTTP. L'étape 2 remplacera le
+# corps de fetch_invoice_amount/fetch_project_offers_or_contracts par les
+# vrais appels (endpoints confirmés dans VOLTA_API_NOTES.md : GET
+# /v2/documents/invoice-amount pour la facture, GET /v2/offers ou
+# /v2/contracts filtré par projectMainNumber/projectSubNumber pour l'offre —
+# ce dernier confirmé round 5 comme regroupant TOUTES les offres d'un projet
+# avec montants complets en 1 appel, contrairement aux factures qui ne se
+# regroupent jamais par projet). Le vrai déclenchement (cron/bouton) et
+# l'endpoint de création des VoltaDocumentLink (le formulaire) sont pour
+# les étapes 4/5 — ici seulement le déclenchement manuel de test.
+
+VOLTA_SYNC_RATE_LIMIT_PER_HOUR = 6  # volontairement < la recommandation Volta (~10/h) — marge de sécurité
+
+class VoltaSyncError(Exception):
+    """Levée par les fonctions injectables ci-dessous sur tout échec (réseau,
+    réponse HTTP d'erreur, réponse malformée...). process_volta_sync_queue()
+    l'attrape (avec toute autre Exception, par défense) pour marquer la
+    ligne 'erreur' sans jamais interrompre le traitement des lignes
+    suivantes de la file."""
+    pass
+
+def fetch_invoice_amount(numero_facture):
+    """Récupère le montant d'une facture Volta par son numéro.
+
+    ÉTAPE 1 — PLACEHOLDER, pas encore branché sur un vrai appel HTTP (voir
+    VOLTA_API_NOTES.md round 3/4 : le vrai endpoint sera GET
+    /v2/documents/invoice-amount?orgUnitCode=...&invoiceNumber=<numero_facture>,
+    1 appel = 1 facture, aucun batch possible). Toujours appelée via le
+    paramètre injectable de process_volta_sync_queue() à cette étape — ce
+    corps ne doit jamais s'exécuter en dehors d'un test qui override
+    explicitement le mock.
+
+    Contrat (fixe dès maintenant, pour que l'étape 2 n'ait qu'à remplir le
+    corps sans toucher aux appelants) :
+        Retour  : dict {'montant': float}
+        Lève    : VoltaSyncError sur tout échec.
+    """
+    raise NotImplementedError(
+        "fetch_invoice_amount n'est pas encore branché sur un vrai appel Volta (étape 2) — "
+        "passe un override explicite fetch_invoice_amount=... (voir tests)."
+    )
+
+def fetch_project_offers_or_contracts(numero_projet):
+    """Récupère toutes les offres/contrats Volta d'un projet, avec leurs
+    montants complets.
+
+    ÉTAPE 1 — PLACEHOLDER, pas encore branché (voir VOLTA_API_NOTES.md round
+    1/5 : vrai endpoint GET /v2/offers ou /v2/contracts filtré par
+    projectMainNumber/projectSubNumber — confirmé : 1 appel renvoie TOUS les
+    documents du projet avec sums complets, contrairement aux factures).
+
+    Contrat :
+        Retour  : list[dict], un item par offre/contrat, au moins
+                  {'numero_offre': str, 'montant': float, 'heures': float,
+                   'materiel': float | None}
+                  ('materiel' à None quand cette offre-là ne porte pas de
+                  répartition matériel — jamais interprété comme 0, voir
+                  _upsert_ca_ligne_from_offer.)
+        Lève    : VoltaSyncError sur tout échec.
+    """
+    raise NotImplementedError(
+        "fetch_project_offers_or_contracts n'est pas encore branché sur un vrai appel Volta (étape 2) — "
+        "passe un override explicite fetch_project_offers_or_contracts=... (voir tests)."
+    )
+
+def _log_volta_call(endpoint, succes):
+    """Une ligne par appel (tenté) — committée immédiatement (pas groupée
+    avec le reste) pour que le compteur de rate-limit lu par
+    process_volta_sync_queue() la voie dès l'entrée suivante de la même
+    exécution, et qu'elle survive même si le traitement plante juste après."""
+    db.session.add(VoltaApiCallLog(endpoint=endpoint, succes=succes))
+    db.session.commit()
+
+def _upsert_acompte_from_invoice(link, invoice_result):
+    """Traduit le résultat de fetch_invoice_amount en une ligne `Acompte`
+    (CA réel) — une par numéro de facture, ré-identifiée par son libellé à
+    chaque sync (upsert, jamais de doublon)."""
+    if not isinstance(invoice_result, dict) or 'montant' not in invoice_result:
+        raise VoltaSyncError(f"Réponse facture Volta invalide pour {link.numero_facture!r}: {invoice_result!r}")
+    montant, err = _parse_amount(invoice_result, 'montant', required=True)
+    if err:
+        raise VoltaSyncError(f"Montant de facture invalide pour {link.numero_facture!r}: {invoice_result.get('montant')!r}")
+
+    libelle = f'Facture {link.numero_facture}'
+    acompte = Acompte.query.filter_by(chantier_id=link.chantier_id, libelle=libelle).first()
+    if acompte:
+        acompte.montant = montant
+    else:
+        db.session.add(Acompte(
+            chantier_id=link.chantier_id, libelle=libelle, montant=montant,
+            heures=0.0, date=datetime.date.today().isoformat(),
+        ))
+
+def _upsert_ca_ligne_from_offer(link, offer):
+    """Traduit une offre (issue de fetch_project_offers_or_contracts, déjà
+    filtrée sur link.numero_offre) en une ligne `CaLignePrevue` (upsert par
+    libellé). Le matériel (`ChantierFinancier.charge_materiel_prevue`)
+    n'est mis à jour QUE si cette offre le fournit explicitement — jamais
+    écrasé à 0/None quand ce n'est pas le cas, un chantier pouvant avoir
+    plusieurs offres dont une seule porte cette info."""
+    if not isinstance(offer, dict) or 'montant' not in offer:
+        raise VoltaSyncError(f"Réponse offre Volta invalide pour {link.numero_offre!r}: {offer!r}")
+    montant, err = _parse_amount(offer, 'montant', required=True)
+    if err:
+        raise VoltaSyncError(f"Montant d'offre invalide pour {link.numero_offre!r}: {offer.get('montant')!r}")
+    heures = offer.get('heures') or 0.0
+
+    libelle = f'Offre {link.numero_offre}'
+    ligne = CaLignePrevue.query.filter_by(chantier_id=link.chantier_id, libelle=libelle).first()
+    if ligne:
+        ligne.montant = montant
+        ligne.heures = heures
+    else:
+        db.session.add(CaLignePrevue(chantier_id=link.chantier_id, libelle=libelle, montant=montant, heures=heures))
+
+    materiel = offer.get('materiel')
+    if materiel is not None:
+        financier = ChantierFinancier.query.filter_by(chantier_id=link.chantier_id).first()
+        if not financier:
+            financier = ChantierFinancier(chantier_id=link.chantier_id)
+            db.session.add(financier)
+        financier.charge_materiel_prevue = materiel
+
+def _volta_calls_last_hour():
+    one_hour_ago = datetime.datetime.utcnow() - datetime.timedelta(hours=1)
+    return VoltaApiCallLog.query.filter(VoltaApiCallLog.called_at > one_hour_ago).count()
+
+def process_volta_sync_queue(fetch_invoice_amount=fetch_invoice_amount,
+                              fetch_project_offers_or_contracts=fetch_project_offers_or_contracts):
+    """Traite la file FIFO des VoltaDocumentLink 'en_attente' (voir son
+    docstring — la file EST la table, pas de table à part). Les deux
+    fonctions Volta sont injectables (paramètre avec défaut = le vrai
+    placeholder ci-dessus) précisément pour être mockées en test sans
+    toucher au corps de cette fonction.
+
+    Rate-limit : revérifié avant CHAQUE entrée (pas juste une fois au
+    début) — un cycle peut lui-même consommer le quota au fil des entrées
+    traitées. Dès que le compteur glissant sur l'heure précédente atteint
+    VOLTA_SYNC_RATE_LIMIT_PER_HOUR, le traitement s'arrête immédiatement
+    SANS toucher à l'entrée courante (elle reste 'en_attente' pour le
+    prochain cycle).
+
+    Une erreur sur une entrée (exception de l'un des deux appels, ou
+    réponse jugée invalide) marque cette entrée 'erreur' avec le message,
+    et le traitement continue avec la suivante — une entrée en échec ne
+    bloque jamais la file.
+
+    Retourne {'processed': N, 'stopped_reason': None | 'rate_limit'} — N
+    compte les entrées dont le traitement a été TENTÉ dans ce cycle (synced
+    ou erreur confondus), pas seulement les succès ; une entrée jamais
+    tentée (rate-limit atteint avant elle) n'est pas comptée."""
+    links = VoltaDocumentLink.query.filter_by(statut_sync='en_attente').order_by(VoltaDocumentLink.created_at).all()
+    project_cache = {}  # clé numero_projet -> résultat de fetch_project_offers_or_contracts, vidé à chaque appel de cette fonction
+    processed = 0
+
+    for link in links:
+        if _volta_calls_last_hour() >= VOLTA_SYNC_RATE_LIMIT_PER_HOUR:
+            return {'processed': processed, 'stopped_reason': 'rate_limit'}
+
+        try:
+            try:
+                invoice_result = fetch_invoice_amount(link.numero_facture)
+            except Exception:
+                _log_volta_call('fetch_invoice_amount', False)
+                raise
+            _log_volta_call('fetch_invoice_amount', True)
+            _upsert_acompte_from_invoice(link, invoice_result)
+
+            if link.numero_offre:
+                if link.numero_projet in project_cache:
+                    offers = project_cache[link.numero_projet]
+                else:
+                    try:
+                        offers = fetch_project_offers_or_contracts(link.numero_projet)
+                    except Exception:
+                        _log_volta_call('fetch_project_offers_or_contracts', False)
+                        raise
+                    _log_volta_call('fetch_project_offers_or_contracts', True)
+                    project_cache[link.numero_projet] = offers
+
+                offer = next((o for o in offers if str(o.get('numero_offre')) == str(link.numero_offre)), None)
+                if offer is None:
+                    raise VoltaSyncError(f"Offre {link.numero_offre} introuvable dans le projet {link.numero_projet}")
+                _upsert_ca_ligne_from_offer(link, offer)
+
+            link.statut_sync = 'synced'
+            link.derniere_sync_at = datetime.datetime.utcnow()
+            link.erreur_message = None
+        except Exception as e:
+            link.statut_sync = 'erreur'
+            link.erreur_message = str(e)
+
+        processed += 1
+        db.session.commit()
+
+    return {'processed': processed, 'stopped_reason': None}
+
+@app.route('/api/volta-sync/run', methods=['POST'])
+@token_required
+def run_volta_sync(current_user):
+    """Déclenchement MANUEL du worker — pour les tests à cette étape.
+    Le vrai déclenchement automatique (cron ou bouton dans l'UI) arrive à
+    l'étape 5."""
+    if current_user.role != 'admin':
+        return jsonify({'error': 'Admin access required'}), 403
+    return jsonify(process_volta_sync_queue()), 200
 
 PREVISION_STATUTS = ('prevu', 'confirme')
 

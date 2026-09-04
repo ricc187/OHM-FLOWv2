@@ -1,0 +1,417 @@
+"""Tests du module de synchro Volta — ÉTAPE 1 (modèle + worker mocké,
+AUCUN vrai appel HTTP Volta) : VoltaDocumentLink, VoltaApiCallLog,
+process_volta_sync_queue() et l'endpoint POST /api/volta-sync/run.
+
+Les deux fonctions injectables (fetch_invoice_amount,
+fetch_project_offers_or_contracts) sont toujours passées explicitement en
+mock ici — jamais les vrais placeholders du module (qui lèvent
+NotImplementedError, voir test_default_functions_are_unwired_placeholders).
+
+Isolation : importe app.py avec cwd pointé sur un dossier temporaire, comme
+test_prevision_api.py.
+
+Lancer : python -m unittest tests.test_volta_sync -v   (depuis backend/)
+"""
+import os
+import sys
+import shutil
+import tempfile
+import unittest
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # backend/
+
+os.environ.setdefault('SECRET_KEY', 'test-secret-key-for-unittests-only')
+
+_TEST_DIR = tempfile.mkdtemp(prefix='ohmflow_volta_sync_test_')
+_orig_cwd = os.getcwd()
+os.chdir(_TEST_DIR)
+try:
+    import app as ohmapp  # noqa: E402 — must import with cwd=_TEST_DIR (paths/init_db baked in at import time)
+finally:
+    os.chdir(_orig_cwd)
+
+
+def _addCleanupModule():
+    import atexit
+    atexit.register(lambda: shutil.rmtree(_TEST_DIR, ignore_errors=True))
+
+
+_addCleanupModule()
+
+
+def _ok_invoice(montant=2734.8):
+    def _fetch(numero_facture):
+        return {'montant': montant}
+    return _fetch
+
+
+def _failing_fetch(message='boom'):
+    def _fetch(*args, **kwargs):
+        raise ohmapp.VoltaSyncError(message)
+    return _fetch
+
+
+def _ok_offers(offers):
+    calls = []
+
+    def _fetch(numero_projet):
+        calls.append(numero_projet)
+        return offers
+    _fetch.calls = calls
+    return _fetch
+
+
+class VoltaSyncTestCase(unittest.TestCase):
+    """Une seule app/DB en mémoire pour toute la classe — chaque test crée
+    ses propres chantiers/links pour rester isolé, et nettoie
+    VoltaApiCallLog avant de s'exécuter pour ne jamais hériter du quota
+    consommé par un test précédent (le rate-limit est un état global,
+    contrairement au reste)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.client = ohmapp.app.test_client()
+        with ohmapp.app.app_context():
+            admin = ohmapp.User.query.filter_by(username='Admin').first()
+            cls.token = ohmapp.serializer.dumps({'user_id': admin.id})
+            cls.admin_id = admin.id
+        cls.client.set_cookie(ohmapp.COOKIE_NAME, cls.token)
+
+    def setUp(self):
+        with ohmapp.app.app_context():
+            ohmapp.VoltaApiCallLog.query.delete()
+            ohmapp.db.session.commit()
+
+    def _create_chantier(self, nom):
+        with ohmapp.app.app_context():
+            chantier = ohmapp.Chantier(nom=nom, annee=2026, status='ACTIVE')
+            ohmapp.db.session.add(chantier)
+            ohmapp.db.session.commit()
+            return chantier.id
+
+    def _create_link(self, chantier_id, numero_projet='024042.001', numero_facture='7098', numero_offre=None, statut_sync='en_attente'):
+        with ohmapp.app.app_context():
+            link = ohmapp.VoltaDocumentLink(
+                chantier_id=chantier_id, numero_projet=numero_projet,
+                numero_facture=numero_facture, numero_offre=numero_offre,
+                statut_sync=statut_sync,
+            )
+            ohmapp.db.session.add(link)
+            ohmapp.db.session.commit()
+            return link.id
+
+    def _reload_link(self, link_id):
+        with ohmapp.app.app_context():
+            return ohmapp.db.session.get(ohmapp.VoltaDocumentLink, link_id)
+
+    # --- Modèle / tables ---
+
+    def test_tables_exist_with_expected_columns(self):
+        with ohmapp.app.app_context():
+            inspector = ohmapp.inspect(ohmapp.db.engine)
+            tables = inspector.get_table_names()
+            self.assertIn('volta_document_links', tables)
+            self.assertIn('volta_api_call_log', tables)
+
+            link_cols = {c['name'] for c in inspector.get_columns('volta_document_links')}
+            self.assertTrue({
+                'id', 'chantier_id', 'numero_projet', 'numero_facture', 'numero_offre',
+                'statut_sync', 'derniere_sync_at', 'erreur_message', 'created_at',
+            }.issubset(link_cols), link_cols)
+
+            log_cols = {c['name'] for c in inspector.get_columns('volta_api_call_log')}
+            self.assertTrue({'id', 'called_at', 'endpoint', 'succes'}.issubset(log_cols), log_cols)
+
+    def test_no_separate_queue_table(self):
+        # Décision documentée : la file FIFO est directement
+        # VoltaDocumentLink.statut_sync='en_attente', pas de table à part.
+        with ohmapp.app.app_context():
+            inspector = ohmapp.inspect(ohmapp.db.engine)
+            self.assertNotIn('volta_sync_queue', inspector.get_table_names())
+
+    def test_default_functions_are_unwired_placeholders(self):
+        # Les vrais noms du module (utilisés comme défaut du paramètre
+        # injectable) ne doivent jamais faire de vrai appel réseau à cette
+        # étape — ils doivent lever NotImplementedError si jamais appelés
+        # sans override explicite.
+        with self.assertRaises(NotImplementedError):
+            ohmapp.fetch_invoice_amount('7098')
+        with self.assertRaises(NotImplementedError):
+            ohmapp.fetch_project_offers_or_contracts('024042.001')
+
+    # --- Cas nominal : facture seule ---
+
+    def test_invoice_only_success_upserts_acompte(self):
+        chantier_id = self._create_chantier('Baita sync 1')
+        link_id = self._create_link(chantier_id, numero_facture='7098')
+
+        with ohmapp.app.app_context():
+            result = ohmapp.process_volta_sync_queue(fetch_invoice_amount=_ok_invoice(2734.8))
+        self.assertEqual(result, {'processed': 1, 'stopped_reason': None})
+
+        link = self._reload_link(link_id)
+        self.assertEqual(link.statut_sync, 'synced')
+        self.assertIsNotNone(link.derniere_sync_at)
+        self.assertIsNone(link.erreur_message)
+
+        with ohmapp.app.app_context():
+            acompte = ohmapp.Acompte.query.filter_by(chantier_id=chantier_id).first()
+            self.assertIsNotNone(acompte)
+            self.assertEqual(acompte.libelle, 'Facture 7098')
+            self.assertEqual(acompte.montant, 2734.8)
+
+    def test_invoice_upsert_updates_existing_acompte_not_duplicate(self):
+        chantier_id = self._create_chantier('Baita sync upsert')
+        link_id = self._create_link(chantier_id, numero_facture='7098')
+
+        with ohmapp.app.app_context():
+            ohmapp.process_volta_sync_queue(fetch_invoice_amount=_ok_invoice(1000.0))
+        with ohmapp.app.app_context():
+            ohmapp.VoltaDocumentLink.query.filter_by(id=link_id).update({'statut_sync': 'en_attente'})
+            ohmapp.db.session.commit()
+        with ohmapp.app.app_context():
+            ohmapp.process_volta_sync_queue(fetch_invoice_amount=_ok_invoice(2734.8))
+
+        with ohmapp.app.app_context():
+            acomptes = ohmapp.Acompte.query.filter_by(chantier_id=chantier_id).all()
+            self.assertEqual(len(acomptes), 1)  # pas de doublon
+            self.assertEqual(acomptes[0].montant, 2734.8)  # dernière valeur gagne
+
+    def test_api_call_logged_on_success(self):
+        chantier_id = self._create_chantier('Baita log')
+        self._create_link(chantier_id)
+        with ohmapp.app.app_context():
+            ohmapp.process_volta_sync_queue(fetch_invoice_amount=_ok_invoice())
+            logs = ohmapp.VoltaApiCallLog.query.all()
+            self.assertEqual(len(logs), 1)
+            self.assertEqual(logs[0].endpoint, 'fetch_invoice_amount')
+            self.assertTrue(logs[0].succes)
+
+    # --- Erreur ---
+
+    def test_invoice_failure_marks_erreur_and_logs_failed_call(self):
+        chantier_id = self._create_chantier('Baita erreur')
+        link_id = self._create_link(chantier_id)
+
+        with ohmapp.app.app_context():
+            result = ohmapp.process_volta_sync_queue(fetch_invoice_amount=_failing_fetch('facture introuvable'))
+        self.assertEqual(result, {'processed': 1, 'stopped_reason': None})
+
+        link = self._reload_link(link_id)
+        self.assertEqual(link.statut_sync, 'erreur')
+        self.assertIn('facture introuvable', link.erreur_message)
+
+        with ohmapp.app.app_context():
+            logs = ohmapp.VoltaApiCallLog.query.all()
+            self.assertEqual(len(logs), 1)
+            self.assertFalse(logs[0].succes)
+            acompte = ohmapp.Acompte.query.filter_by(chantier_id=chantier_id).first()
+            self.assertIsNone(acompte)  # rien upserté sur échec
+
+    def test_error_does_not_block_the_queue(self):
+        c1 = self._create_chantier('Erreur 1')
+        c2 = self._create_chantier('OK apres erreur')
+        link1 = self._create_link(c1, numero_facture='FAIL')
+        link2 = self._create_link(c2, numero_facture='7098')
+
+        calls = {'n': 0}
+
+        def flaky(numero_facture):
+            calls['n'] += 1
+            if numero_facture == 'FAIL':
+                raise ohmapp.VoltaSyncError('échec simulé')
+            return {'montant': 42.0}
+
+        with ohmapp.app.app_context():
+            result = ohmapp.process_volta_sync_queue(fetch_invoice_amount=flaky)
+        self.assertEqual(result, {'processed': 2, 'stopped_reason': None})
+        self.assertEqual(self._reload_link(link1).statut_sync, 'erreur')
+        self.assertEqual(self._reload_link(link2).statut_sync, 'synced')
+
+    # --- Offre + cache projet ---
+
+    def test_offer_upserts_ca_ligne_and_materiel(self):
+        chantier_id = self._create_chantier('Baita offre')
+        link_id = self._create_link(chantier_id, numero_offre='7747')
+        offers_fetch = _ok_offers([
+            {'numero_offre': '7747', 'montant': 145750.05, 'heures': 1052.0, 'materiel': 66824.0},
+        ])
+
+        with ohmapp.app.app_context():
+            result = ohmapp.process_volta_sync_queue(fetch_invoice_amount=_ok_invoice(), fetch_project_offers_or_contracts=offers_fetch)
+        self.assertEqual(result, {'processed': 1, 'stopped_reason': None})
+        self.assertEqual(self._reload_link(link_id).statut_sync, 'synced')
+
+        with ohmapp.app.app_context():
+            ligne = ohmapp.CaLignePrevue.query.filter_by(chantier_id=chantier_id).first()
+            self.assertIsNotNone(ligne)
+            self.assertEqual(ligne.libelle, 'Offre 7747')
+            self.assertEqual(ligne.montant, 145750.05)
+            self.assertEqual(ligne.heures, 1052.0)
+
+            financier = ohmapp.ChantierFinancier.query.filter_by(chantier_id=chantier_id).first()
+            self.assertIsNotNone(financier)
+            self.assertEqual(financier.charge_materiel_prevue, 66824.0)
+
+    def test_offer_without_materiel_does_not_clobber_existing_charge_materiel(self):
+        chantier_id = self._create_chantier('Baita offre sans materiel')
+        with ohmapp.app.app_context():
+            ohmapp.db.session.add(ohmapp.ChantierFinancier(chantier_id=chantier_id, charge_materiel_prevue=999.0))
+            ohmapp.db.session.commit()
+
+        link_id = self._create_link(chantier_id, numero_offre='7747')
+        offers_fetch = _ok_offers([
+            {'numero_offre': '7747', 'montant': 100.0, 'heures': 1.0, 'materiel': None},
+        ])
+
+        with ohmapp.app.app_context():
+            ohmapp.process_volta_sync_queue(fetch_invoice_amount=_ok_invoice(), fetch_project_offers_or_contracts=offers_fetch)
+
+        with ohmapp.app.app_context():
+            financier = ohmapp.ChantierFinancier.query.filter_by(chantier_id=chantier_id).first()
+            self.assertEqual(financier.charge_materiel_prevue, 999.0)  # inchangé
+
+    def test_offer_not_found_in_project_marks_erreur(self):
+        chantier_id = self._create_chantier('Baita offre absente')
+        link_id = self._create_link(chantier_id, numero_offre='9999')
+        offers_fetch = _ok_offers([{'numero_offre': '7747', 'montant': 1.0, 'heures': 0.0}])
+
+        with ohmapp.app.app_context():
+            ohmapp.process_volta_sync_queue(fetch_invoice_amount=_ok_invoice(), fetch_project_offers_or_contracts=offers_fetch)
+
+        link = self._reload_link(link_id)
+        self.assertEqual(link.statut_sync, 'erreur')
+        self.assertIn('9999', link.erreur_message)
+
+    def test_project_cache_hit_avoids_second_call_same_run(self):
+        c1 = self._create_chantier('Meme projet 1')
+        c2 = self._create_chantier('Meme projet 2')
+        self._create_link(c1, numero_projet='024042.001', numero_facture='A1', numero_offre='7747')
+        self._create_link(c2, numero_projet='024042.001', numero_facture='A2', numero_offre='6638')
+        offers_fetch = _ok_offers([
+            {'numero_offre': '7747', 'montant': 145750.05, 'heures': 1052.0},
+            {'numero_offre': '6638', 'montant': 3074.8, 'heures': 0.0},
+        ])
+
+        with ohmapp.app.app_context():
+            result = ohmapp.process_volta_sync_queue(fetch_invoice_amount=_ok_invoice(), fetch_project_offers_or_contracts=offers_fetch)
+        self.assertEqual(result, {'processed': 2, 'stopped_reason': None})
+        self.assertEqual(len(offers_fetch.calls), 1)  # 1 seul appel pour les 2 entrées du même projet
+
+        with ohmapp.app.app_context():
+            logs = ohmapp.VoltaApiCallLog.query.filter_by(endpoint='fetch_project_offers_or_contracts').all()
+            self.assertEqual(len(logs), 1)
+
+    def test_project_cache_is_local_to_one_run_not_persisted(self):
+        c1 = self._create_chantier('Cache non persiste 1')
+        c2 = self._create_chantier('Cache non persiste 2')
+        link1 = self._create_link(c1, numero_projet='024042.001', numero_facture='A1', numero_offre='7747')
+        offers_fetch = _ok_offers([{'numero_offre': '7747', 'montant': 1.0, 'heures': 0.0}])
+
+        with ohmapp.app.app_context():
+            ohmapp.process_volta_sync_queue(fetch_invoice_amount=_ok_invoice(), fetch_project_offers_or_contracts=offers_fetch)
+        self.assertEqual(len(offers_fetch.calls), 1)
+
+        # Deuxième entrée créée APRÈS le premier run, même projet : un
+        # deuxième appel à process_volta_sync_queue() ne doit PAS réutiliser
+        # le cache du run précédent (il est local à l'appel de fonction).
+        self._create_link(c2, numero_projet='024042.001', numero_facture='A2', numero_offre='7747')
+        with ohmapp.app.app_context():
+            ohmapp.process_volta_sync_queue(fetch_invoice_amount=_ok_invoice(), fetch_project_offers_or_contracts=offers_fetch)
+        self.assertEqual(len(offers_fetch.calls), 2)
+
+    # --- Rate limit ---
+
+    def test_rate_limit_stops_cycle_and_leaves_rest_en_attente(self):
+        chantiers = [self._create_chantier(f'RL {i}') for i in range(3)]
+        links = [self._create_link(c, numero_facture=f'F{i}') for i, c in enumerate(chantiers)]
+
+        with ohmapp.app.app_context():
+            for _ in range(ohmapp.VOLTA_SYNC_RATE_LIMIT_PER_HOUR):
+                ohmapp.db.session.add(ohmapp.VoltaApiCallLog(endpoint='fetch_invoice_amount', succes=True))
+            ohmapp.db.session.commit()
+
+        with ohmapp.app.app_context():
+            result = ohmapp.process_volta_sync_queue(fetch_invoice_amount=_ok_invoice())
+        self.assertEqual(result, {'processed': 0, 'stopped_reason': 'rate_limit'})
+
+        for link_id in links:
+            self.assertEqual(self._reload_link(link_id).statut_sync, 'en_attente')
+
+    def test_rate_limit_reached_mid_cycle_stops_remaining_entries(self):
+        # Seuil - 1 appel déjà consommé : la 1ère entrée (1 appel facture,
+        # pas d'offre) passe encore, la 2e doit être bloquée par le
+        # rate-limit avant même d'être tentée.
+        c1 = self._create_chantier('Mid cycle 1')
+        c2 = self._create_chantier('Mid cycle 2')
+        link1 = self._create_link(c1, numero_facture='F1')
+        link2 = self._create_link(c2, numero_facture='F2')
+
+        with ohmapp.app.app_context():
+            for _ in range(ohmapp.VOLTA_SYNC_RATE_LIMIT_PER_HOUR - 1):
+                ohmapp.db.session.add(ohmapp.VoltaApiCallLog(endpoint='fetch_invoice_amount', succes=True))
+            ohmapp.db.session.commit()
+
+        with ohmapp.app.app_context():
+            result = ohmapp.process_volta_sync_queue(fetch_invoice_amount=_ok_invoice())
+        self.assertEqual(result, {'processed': 1, 'stopped_reason': 'rate_limit'})
+        self.assertEqual(self._reload_link(link1).statut_sync, 'synced')
+        self.assertEqual(self._reload_link(link2).statut_sync, 'en_attente')
+
+    def test_calls_older_than_one_hour_do_not_count(self):
+        chantier_id = self._create_chantier('Vieux appels')
+        self._create_link(chantier_id)
+
+        with ohmapp.app.app_context():
+            old = ohmapp.datetime.datetime.utcnow() - ohmapp.datetime.timedelta(hours=2)
+            for _ in range(ohmapp.VOLTA_SYNC_RATE_LIMIT_PER_HOUR + 5):
+                ohmapp.db.session.add(ohmapp.VoltaApiCallLog(endpoint='fetch_invoice_amount', succes=True, called_at=old))
+            ohmapp.db.session.commit()
+
+        with ohmapp.app.app_context():
+            result = ohmapp.process_volta_sync_queue(fetch_invoice_amount=_ok_invoice())
+        self.assertEqual(result, {'processed': 1, 'stopped_reason': None})
+
+    # --- Endpoint ---
+
+    def test_endpoint_requires_auth(self):
+        anon = ohmapp.app.test_client()
+        self.assertEqual(anon.post('/api/volta-sync/run').status_code, 401)
+
+    def test_endpoint_requires_admin(self):
+        with ohmapp.app.app_context():
+            user = ohmapp.User(username=f'plain_{self._testMethodName}', pin_hash='x', role='user', password_hash=None)
+            user.set_password('irrelevant-but-valid-Passw0rd!')
+            ohmapp.db.session.add(user)
+            ohmapp.db.session.commit()
+            token = ohmapp.serializer.dumps({'user_id': user.id})
+        client = ohmapp.app.test_client()
+        client.set_cookie(ohmapp.COOKIE_NAME, token)
+        self.assertEqual(client.post('/api/volta-sync/run').status_code, 403)
+
+    def test_endpoint_runs_with_default_placeholder_and_surfaces_notimplemented_as_500(self):
+        # Sans override (chemin par défaut de l'endpoint HTTP), le worker
+        # utilise les vrais placeholders — donc une entrée en attente doit
+        # se solder par une erreur Python normale (pas un crash silencieux),
+        # ici un 500 propagé par Flask puisque NotImplementedError n'est pas
+        # catché par le endpoint (seul process_volta_sync_queue catche les
+        # erreurs *Volta*, pas un bug de câblage complet côté serveur).
+        chantier_id = self._create_chantier('Endpoint sans override')
+        self._create_link(chantier_id)
+        res = self.client.post('/api/volta-sync/run')
+        # Le NotImplementedError est levé par fetch_invoice_amount, attrapé
+        # par le try/except générique de process_volta_sync_queue (qui logue
+        # l'appel en échec et marque la ligne 'erreur') — donc l'endpoint
+        # répond 200 avec processed=1, PAS un 500 : c'est exactement le
+        # comportement voulu (le placeholder est un échec "normal" comme un
+        # autre pour la file, pas un crash serveur).
+        self.assertEqual(res.status_code, 200, res.get_json())
+        self.assertEqual(res.get_json()['processed'], 1)
+        with ohmapp.app.app_context():
+            link = ohmapp.VoltaDocumentLink.query.filter_by(chantier_id=chantier_id).first()
+            self.assertEqual(link.statut_sync, 'erreur')
+            self.assertIn('pas encore branch', link.erreur_message or '')
+
+
+if __name__ == '__main__':
+    unittest.main()
