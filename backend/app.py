@@ -19,6 +19,7 @@ from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy import text, inspect, func
 from PIL import Image, ImageOps
 import fitz  # PyMuPDF
+import requests  # Volta API calls (see fetch_invoice_amount / fetch_project_offers_or_contracts)
 import logging
 from financier_calculs import compute_financier
 from auth_security import validate_password
@@ -3725,49 +3726,161 @@ class VoltaSyncError(Exception):
     suivantes de la file."""
     pass
 
+def _volta_env(key):
+    value = os.environ.get(key)
+    if not value:
+        raise VoltaSyncError(f"Variable d'environnement Volta manquante ou vide: {key}")
+    return value
+
+# Jeton Volta mis en cache au niveau module — un `process_volta_sync_queue()`
+# qui traite N entrées ne doit PAS s'authentifier N fois : /authenticate est
+# lui-même un vrai appel métier Volta (voir VOLTA_API_NOTES.md), donc chaque
+# ré-authentification évitable est un appel de moins consommé sur le quota
+# horaire partagé. Note : cet appel d'auth n'est volontairement PAS compté
+# dans VoltaApiCallLog (seuls les endpoints de données le sont, voir
+# _log_volta_call) — il compte quand même contre le vrai quota Volta, donc
+# le rate-limiter interne (basé sur VoltaApiCallLog) sous-estime légèrement
+# la consommation réelle tant qu'un nouveau jeton doit être émis. Compromis
+# accepté car l'auth est rare une fois mise en cache — voir rapport de
+# l'étape 2 pour le détail.
+_volta_token_cache = {'token': None, 'expires_at': None}
+
+def _volta_authenticate():
+    now = datetime.datetime.utcnow()
+    if _volta_token_cache['token'] and _volta_token_cache['expires_at'] and now < _volta_token_cache['expires_at']:
+        return _volta_token_cache['token']
+
+    base_url = _volta_env('VOLTA_API_BASE_URL').rstrip('/')
+    try:
+        resp = requests.post(f'{base_url}/authenticate', json={
+            'username': _volta_env('VOLTA_USERNAME'),
+            'password': _volta_env('VOLTA_PASSWORD'),
+            'clientAccountCode': _volta_env('VOLTA_CLIENT_ACCOUNT_CODE'),
+        }, timeout=30)
+    except requests.RequestException as e:
+        raise VoltaSyncError(f"Erreur réseau lors de l'authentification Volta: {e}")
+    if resp.status_code != 200:
+        raise VoltaSyncError(f"Authentification Volta refusée (HTTP {resp.status_code})")
+    token = (resp.json() or {}).get('access_token')
+    if not token:
+        raise VoltaSyncError("Authentification Volta: réponse sans access_token")
+
+    _volta_token_cache['token'] = token
+    _volta_token_cache['expires_at'] = now + datetime.timedelta(minutes=50)
+    return token
+
 def fetch_invoice_amount(numero_facture):
     """Récupère le montant d'une facture Volta par son numéro.
 
-    ÉTAPE 1 — PLACEHOLDER, pas encore branché sur un vrai appel HTTP (voir
-    VOLTA_API_NOTES.md round 3/4 : le vrai endpoint sera GET
-    /v2/documents/invoice-amount?orgUnitCode=...&invoiceNumber=<numero_facture>,
-    1 appel = 1 facture, aucun batch possible). Toujours appelée via le
-    paramètre injectable de process_volta_sync_queue() à cette étape — ce
-    corps ne doit jamais s'exécuter en dehors d'un test qui override
-    explicitement le mock.
+    ÉTAPE 2 — branché sur le vrai endpoint confirmé (VOLTA_API_NOTES.md
+    round 3/4) : GET /v2/documents/invoice-amount?orgUnitCode=...&
+    invoiceNumber=<numero_facture>. 1 appel = 1 facture, aucun batch
+    possible côté Volta (confirmé structurellement par le spec).
 
-    Contrat (fixe dès maintenant, pour que l'étape 2 n'ait qu'à remplir le
-    corps sans toucher aux appelants) :
+    Contrat (inchangé depuis l'étape 1) :
         Retour  : dict {'montant': float}
-        Lève    : VoltaSyncError sur tout échec.
+        Lève    : VoltaSyncError sur tout échec (réseau, HTTP non-200,
+                   réponse sans `amountExclVat`, `numero_facture` non
+                   convertible en entier).
     """
-    raise NotImplementedError(
-        "fetch_invoice_amount n'est pas encore branché sur un vrai appel Volta (étape 2) — "
-        "passe un override explicite fetch_invoice_amount=... (voir tests)."
-    )
+    try:
+        invoice_number = int(numero_facture)
+    except (TypeError, ValueError):
+        raise VoltaSyncError(f"numero_facture doit être numérique, reçu {numero_facture!r}")
+
+    base_url = _volta_env('VOLTA_API_BASE_URL').rstrip('/')
+    org_unit = _volta_env('VOLTA_ORG_UNIT_PROJECTS')
+    token = _volta_authenticate()
+    try:
+        resp = requests.get(
+            f'{base_url}/v2/documents/invoice-amount',
+            headers={'Authorization': f'Bearer {token}'},
+            params={'orgUnitCode': org_unit, 'invoiceNumber': invoice_number},
+            timeout=30,
+        )
+    except requests.RequestException as e:
+        raise VoltaSyncError(f"Erreur réseau Volta (facture {numero_facture}): {e}")
+    if resp.status_code != 200:
+        raise VoltaSyncError(f"Volta a renvoyé HTTP {resp.status_code} pour la facture {numero_facture}: {resp.text[:300]}")
+    data = resp.json() or {}
+    if 'amountExclVat' not in data:
+        raise VoltaSyncError(f"Réponse facture Volta sans amountExclVat pour {numero_facture}: {data!r}")
+    return {'montant': data['amountExclVat']}
 
 def fetch_project_offers_or_contracts(numero_projet):
-    """Récupère toutes les offres/contrats Volta d'un projet, avec leurs
-    montants complets.
+    """Récupère toutes les offres Volta d'un projet, avec leurs montants
+    complets.
 
-    ÉTAPE 1 — PLACEHOLDER, pas encore branché (voir VOLTA_API_NOTES.md round
-    1/5 : vrai endpoint GET /v2/offers ou /v2/contracts filtré par
-    projectMainNumber/projectSubNumber — confirmé : 1 appel renvoie TOUS les
-    documents du projet avec sums complets, contrairement aux factures).
+    ÉTAPE 2 — branché sur GET /v2/offers (PAS /v2/contracts) : un numéro
+    d'offre (`numero_offre`) désigne un document Volta de type OFFERTE_NPK
+    ("Offerte"/offre) — confirmé lors de l'exploration (documents 7747 et
+    9342, tous deux type OFFERTE_NPK, voir VOLTA_API_NOTES.md) — pas
+    VERTRAG_NPK (contrat), qui est le type des documents déjà signés/
+    facturables retournés par /v2/contracts (voir round 1 : les 8 lignes CA
+    de La Baita étaient des contrats, pas des offres — un chantier peut
+    avoir l'un ou l'autre selon son état, mais un `numero_offre` spécifique
+    vit dans le domaine /v2/offers). `numero_projet` arrive au format
+    Volta "NNNNNN.NNN" (ex "024064.001") — splitté ici en
+    projectMainNumber/projectSubNumber, les seuls filtres que l'endpoint
+    accepte (confirmé round 1/5 : pas de filtre par numéro d'offre direct,
+    donc toutes les offres du projet sont récupérées en 1 appel puis
+    filtrées côté appelant sur numero_offre, voir process_volta_sync_queue).
 
-    Contrat :
-        Retour  : list[dict], un item par offre/contrat, au moins
+    Contrat (inchangé depuis l'étape 1) :
+        Retour  : list[dict], un item par offre, au moins
                   {'numero_offre': str, 'montant': float, 'heures': float,
                    'materiel': float | None}
                   ('materiel' à None quand cette offre-là ne porte pas de
                   répartition matériel — jamais interprété comme 0, voir
-                  _upsert_ca_ligne_from_offer.)
-        Lève    : VoltaSyncError sur tout échec.
+                  _upsert_ca_ligne_from_offer.) 'heures' = sums.workH +
+                  sums.technicalElaborationH, même convention que le
+                  rapprochement round 1 (ligne "adjugé" de La Baita).
+        Lève    : VoltaSyncError sur tout échec (réseau, HTTP non-200,
+                   `numero_projet` mal formé).
     """
-    raise NotImplementedError(
-        "fetch_project_offers_or_contracts n'est pas encore branché sur un vrai appel Volta (étape 2) — "
-        "passe un override explicite fetch_project_offers_or_contracts=... (voir tests)."
-    )
+    try:
+        main_str, sub_str = str(numero_projet).split('.')
+        project_main_number, project_sub_number = int(main_str), int(sub_str)
+    except (ValueError, AttributeError):
+        raise VoltaSyncError(f"numero_projet mal formé (attendu 'NNNNNN.NNN'): {numero_projet!r}")
+
+    base_url = _volta_env('VOLTA_API_BASE_URL').rstrip('/')
+    org_unit = _volta_env('VOLTA_ORG_UNIT_PROJECTS')
+    token = _volta_authenticate()
+    try:
+        resp = requests.get(
+            f'{base_url}/v2/offers',
+            headers={'Authorization': f'Bearer {token}'},
+            params={
+                'orgUnitCode': org_unit,
+                # Date volontairement ancienne — cet appel veut TOUTES les
+                # offres du projet, `modifiedAfter` est obligatoire côté
+                # Volta mais sans intérêt de filtrage ici.
+                'modifiedAfter': '2000-01-01T00:00:00',
+                'projectMainNumber': project_main_number,
+                'projectSubNumber': project_sub_number,
+            },
+            timeout=30,
+        )
+    except requests.RequestException as e:
+        raise VoltaSyncError(f"Erreur réseau Volta (projet {numero_projet}): {e}")
+    if resp.status_code != 200:
+        raise VoltaSyncError(f"Volta a renvoyé HTTP {resp.status_code} pour le projet {numero_projet}: {resp.text[:300]}")
+    offers = resp.json() or []
+
+    result = []
+    for o in offers:
+        sums = o.get('sums') or {}
+        work_h = sums.get('workH')
+        tech_h = sums.get('technicalElaborationH')
+        heures = (work_h or 0.0) + (tech_h or 0.0) if (work_h is not None or tech_h is not None) else 0.0
+        result.append({
+            'numero_offre': o.get('documentNr'),
+            'montant': o.get('totalAmountExclVat'),
+            'heures': heures,
+            'materiel': sums.get('materialCHF'),
+        })
+    return result
 
 def _log_volta_call(endpoint, succes):
     """Une ligne par appel (tenté) — committée immédiatement (pas groupée

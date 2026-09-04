@@ -1,11 +1,22 @@
-"""Tests du module de synchro Volta — ÉTAPE 1 (modèle + worker mocké,
-AUCUN vrai appel HTTP Volta) : VoltaDocumentLink, VoltaApiCallLog,
+"""Tests du module de synchro Volta : VoltaDocumentLink, VoltaApiCallLog,
 process_volta_sync_queue() et l'endpoint POST /api/volta-sync/run.
 
 Les deux fonctions injectables (fetch_invoice_amount,
-fetch_project_offers_or_contracts) sont toujours passées explicitement en
-mock ici — jamais les vrais placeholders du module (qui lèvent
-NotImplementedError, voir test_default_functions_are_unwired_placeholders).
+fetch_project_offers_or_contracts) sont TOUJOURS passées explicitement en
+mock ici — jamais les vraies (celles du module, branchées sur le vrai
+Volta depuis l'étape 2) : ces tests ne doivent JAMAIS faire de vrai appel
+réseau. Ça marche par construction tant que ce process n'a pas
+VOLTA_API_BASE_URL/VOLTA_USERNAME/etc. dans son environnement (jamais le
+cas ici — .env n'est pas chargé par ce fichier ni par app.py) : les vraies
+fonctions échouent alors immédiatement avec VoltaSyncError avant tout appel
+réseau (voir test_default_functions_fail_fast_without_volta_env_vars) —
+un filet de sécurité, pas une excuse pour s'appuyer dessus ailleurs que
+dans ces deux tests dédiés.
+
+La validation d'un VRAI branchement Volta (étape 2) s'est faite
+manuellement, hors suite automatisée (voir VOLTA_API_NOTES.md et le
+rapport de cette passe) — jamais dans ce fichier, pour ne pas consommer le
+quota Volta à chaque lancement de la suite de tests.
 
 Isolation : importe app.py avec cwd pointé sur un dossier temporaire, comme
 test_prevision_api.py.
@@ -129,14 +140,18 @@ class VoltaSyncTestCase(unittest.TestCase):
             inspector = ohmapp.inspect(ohmapp.db.engine)
             self.assertNotIn('volta_sync_queue', inspector.get_table_names())
 
-    def test_default_functions_are_unwired_placeholders(self):
-        # Les vrais noms du module (utilisés comme défaut du paramètre
-        # injectable) ne doivent jamais faire de vrai appel réseau à cette
-        # étape — ils doivent lever NotImplementedError si jamais appelés
-        # sans override explicite.
-        with self.assertRaises(NotImplementedError):
+    def test_default_functions_fail_fast_without_volta_env_vars(self):
+        # Depuis l'étape 2, les vraies fonctions du module font de vrais
+        # appels HTTP — mais ce process de test n'a jamais les variables
+        # d'environnement Volta (VOLTA_API_BASE_URL etc., voir .env, jamais
+        # chargé ici), donc elles doivent échouer par VoltaSyncError AVANT
+        # toute tentative réseau, jamais par un KeyError brut ni un vrai
+        # appel sortant.
+        for key in ('VOLTA_API_BASE_URL', 'VOLTA_USERNAME', 'VOLTA_PASSWORD', 'VOLTA_CLIENT_ACCOUNT_CODE', 'VOLTA_ORG_UNIT_PROJECTS'):
+            self.assertNotIn(key, os.environ, f"{key} ne doit pas être défini pendant cette suite de tests (sécurité anti-appel-réseau)")
+        with self.assertRaises(ohmapp.VoltaSyncError):
             ohmapp.fetch_invoice_amount('7098')
-        with self.assertRaises(NotImplementedError):
+        with self.assertRaises(ohmapp.VoltaSyncError):
             ohmapp.fetch_project_offers_or_contracts('024042.001')
 
     # --- Cas nominal : facture seule ---
@@ -409,28 +424,23 @@ class VoltaSyncTestCase(unittest.TestCase):
         client.set_cookie(ohmapp.COOKIE_NAME, token)
         self.assertEqual(client.post('/api/volta-sync/run').status_code, 403)
 
-    def test_endpoint_runs_with_default_placeholder_and_surfaces_notimplemented_as_500(self):
-        # Sans override (chemin par défaut de l'endpoint HTTP), le worker
-        # utilise les vrais placeholders — donc une entrée en attente doit
-        # se solder par une erreur Python normale (pas un crash silencieux),
-        # ici un 500 propagé par Flask puisque NotImplementedError n'est pas
-        # catché par le endpoint (seul process_volta_sync_queue catche les
-        # erreurs *Volta*, pas un bug de câblage complet côté serveur).
+    def test_endpoint_runs_with_default_functions_and_stays_safe_without_volta_env(self):
+        # Sans override (chemin par défaut de l'endpoint HTTP) et sans
+        # variables d'environnement Volta dans ce process de test, le worker
+        # utilise les vraies fonctions du module — qui échouent par
+        # VoltaSyncError (variable d'environnement manquante) avant tout
+        # appel réseau. process_volta_sync_queue() catche ça comme n'importe
+        # quelle erreur Volta : la ligne passe 'erreur', l'endpoint répond
+        # 200 (pas de crash serveur, pas de vrai appel réseau tenté).
         chantier_id = self._create_chantier('Endpoint sans override')
         self._create_link(chantier_id)
         res = self.client.post('/api/volta-sync/run')
-        # Le NotImplementedError est levé par fetch_invoice_amount, attrapé
-        # par le try/except générique de process_volta_sync_queue (qui logue
-        # l'appel en échec et marque la ligne 'erreur') — donc l'endpoint
-        # répond 200 avec processed=1, PAS un 500 : c'est exactement le
-        # comportement voulu (le placeholder est un échec "normal" comme un
-        # autre pour la file, pas un crash serveur).
         self.assertEqual(res.status_code, 200, res.get_json())
         self.assertEqual(res.get_json()['processed'], 1)
         with ohmapp.app.app_context():
             link = ohmapp.VoltaDocumentLink.query.filter_by(chantier_id=chantier_id).first()
             self.assertEqual(link.statut_sync, 'erreur')
-            self.assertIn('pas encore branch', link.erreur_message or '')
+            self.assertIn('Variable d', link.erreur_message or '')
 
 
 if __name__ == '__main__':
