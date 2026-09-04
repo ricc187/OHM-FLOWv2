@@ -3,6 +3,12 @@ from app import app, db, User, Chantier, Entry
 from datetime import datetime, timedelta
 import random
 
+TASK_DESCRIPTIONS = [
+    "Pose de tuyaux", "Raccordement électrique", "Coffrage béton",
+    "Isolation combles", "Pose de cloisons", "Peinture façade",
+    "Installation sanitaire", "Câblage réseau", "Terrassement",
+]
+
 def seed_data():
     with app.app_context():
         print("Seeding mock data...")
@@ -43,14 +49,13 @@ def seed_data():
             
             # Weighted random hours (more likely standard days)
             heures = random.choices([4, 8, 8.5, 9, 2], weights=[1, 5, 2, 1, 0.5])[0]
-            materiel = random.uniform(0, 500) if random.random() > 0.7 else 0 # 30% chance of materiel
-            
+
             entry = Entry(
                 user_id=user.id,
                 chantier_id=chantier.id,
                 date=date_str,
                 heures=heures,
-                materiel=round(materiel, 2),
+                description=random.choice(TASK_DESCRIPTIONS),
                 status='VALIDATED',
                 created_by_id=user.id
             )
