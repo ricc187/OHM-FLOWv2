@@ -7,6 +7,10 @@ import { StatTile, LegendSwatch } from './statsUi';
 // (graphique SVG/CSS fait main, pas de nouvelle lib de charting). Recalcule
 // entièrement au changement de `year`, reçu en prop depuis PrevisionAnnuelle
 // (même state que la timeline juste en dessous, pour rester synchronisés).
+//
+// Les tuiles de comptage (countPrevu/countConfirme) sont volontairement PAS
+// filtrées par année/dates comme le reste du dashboard — voir leur commentaire
+// plus bas.
 
 const MONTH_SHORT = ['Janv', 'Févr', 'Mars', 'Avr', 'Mai', 'Juin', 'Juil', 'Août', 'Sept', 'Oct', 'Nov', 'Déc'];
 const PREVU_COLOR = '#fbbf24'; // tailwind amber-400 — same as PrevisionTimeline's bar
@@ -50,8 +54,17 @@ export const PrevisionDashboard: React.FC<Props> = ({ items, year }) => {
         () => itemsThisYear.filter(i => i.statut === 'confirme').reduce((s, i) => s + (i.montant_estime || 0), 0),
         [itemsThisYear]
     );
-    const countPrevu = useMemo(() => itemsThisYear.filter(i => i.statut === 'prevu').length, [itemsThisYear]);
-    const countConfirme = useMemo(() => itemsThisYear.filter(i => i.statut === 'confirme').length, [itemsThisYear]);
+    // Counts deliberately run over ALL items, not itemsThisYear: a confirmed
+    // chantier with no confirmed ChantierAssignment yet (frequent — it just
+    // hasn't been scheduled) has no theoretical dates, so overlapsYear drops
+    // it. That's correct for the monthly chart (no month to place it in) and
+    // for the CHF totals below (nothing to attribute to any specific year),
+    // but "how many chantiers are prevu vs confirme" is a portfolio-level
+    // fact that has nothing to do with the year filter — silently losing
+    // dateless confirmed chantiers from these two tiles would make them
+    // undercount exactly the case this fix exists for.
+    const countPrevu = useMemo(() => items.filter(i => i.statut === 'prevu').length, [items]);
+    const countConfirme = useMemo(() => items.filter(i => i.statut === 'confirme').length, [items]);
 
     // Répartition mensuelle : montant_estime est un forfait pour tout le
     // chantier (pas un taux mensuel) — chaque chantier apporte donc son
@@ -90,8 +103,8 @@ export const PrevisionDashboard: React.FC<Props> = ({ items, year }) => {
                     value={`${formatCHF(totalConfirme, true)} CHF`}
                     sub={totalEstime > 0 ? `${((totalConfirme / totalEstime) * 100).toLocaleString('fr-CH', { maximumFractionDigits: 0 })}% du total` : undefined}
                 />
-                <StatTile label="Chantiers prévus" value={countPrevu} />
-                <StatTile label="Chantiers confirmés" value={countConfirme} />
+                <StatTile label="Chantiers prévus" value={countPrevu} sub="Toutes années confondues" />
+                <StatTile label="Chantiers confirmés" value={countConfirme} sub="Toutes années confondues" />
             </div>
 
             <div className="card">

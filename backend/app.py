@@ -3785,10 +3785,17 @@ def import_prevision(current_user):
     dates changed here — the read-only contract and the idempotency below
     did not.)
 
+    montant_estime is that chantier's CA prévisionnel — SUM(CaLignePrevue.montant)
+    for it, the same figure financier_calculs.compute_financier calls ca_prevu
+    (réf. C15 = SUM(C10:C14) there). A chantier with no ChantierFinancier /
+    no ca_lignes at all has no group row in that SUM, so montant_estime stays
+    None rather than being invented as 0 — same "no data -> empty, never a
+    guessed value" rule as the dates above.
+
     Idempotent: a chantier already linked to a chantiers_prevision row
     (chantier_id set) is left untouched — re-running the import only picks up
     chantiers that aren't in the prévision calendar yet, so it never clobbers
-    dates a user has since edited by hand."""
+    dates/montant a user has since edited by hand."""
     if current_user.role != 'admin':
         return jsonify({'error': 'Admin access required'}), 403
     already_imported_ids = {
@@ -3806,6 +3813,12 @@ def import_prevision(current_user):
             func.max(ChantierAssignment.date_fin),
         ).filter(ChantierAssignment.statut == 'confirme').group_by(ChantierAssignment.chantier_id).all()
     }
+    # Same grouped-query approach for montant_estime (ca_prevu) — one query
+    # for every chantier's CA prévisionnel instead of one per chantier.
+    montant_estime_by_chantier = dict(
+        db.session.query(CaLignePrevue.chantier_id, func.sum(CaLignePrevue.montant))
+        .group_by(CaLignePrevue.chantier_id).all()
+    )
 
     created = []
     for chantier in to_import:
@@ -3816,6 +3829,7 @@ def import_prevision(current_user):
             chantier_id=chantier.id,
             date_debut_theorique=debut,
             date_fin_theorique=fin,
+            montant_estime=montant_estime_by_chantier.get(chantier.id),
         )
         db.session.add(prevision)
         created.append(prevision)
