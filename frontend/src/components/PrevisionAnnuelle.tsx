@@ -4,6 +4,7 @@ import { ChantierPrevision, PrevisionImportResult, User } from '../types';
 import { api } from '../api';
 import { StatusBadge } from './StatusBadge';
 import { AwesomeSelect } from './ui/AwesomeSelect';
+import { PrevisionTimeline } from './PrevisionTimeline';
 
 // Module de prévision annuelle — TOTALEMENT INDÉPENDANT de l'Agenda et des
 // chantier_assignments : ne lit/écrit que /api/prevision*. Isolé de toute
@@ -156,6 +157,8 @@ export const PrevisionAnnuelle: React.FC = () => {
                     </button>
                 </div>
             )}
+
+            <PrevisionTimeline items={items} setItems={setItems} onError={text => setMessage({ kind: 'error', text })} />
 
             <div className="bg-ohm-surface border border-slate-200 rounded-2xl shadow-xl overflow-hidden">
                 <div className="overflow-x-auto">
