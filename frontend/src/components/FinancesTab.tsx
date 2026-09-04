@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Loader2, TrendingUp, TrendingDown, Pencil, Plus, Trash2, Check, X, AlertTriangle } from 'lucide-react';
-import { Acompte, AchatMateriel, CaLignePrevue, ChantierFinancierPrevu, FinancierPayload } from '../types';
+import { Acompte, AchatMateriel, CaLignePrevue, ChantierFinancierPrevu, FinancierPayload, VoltaDocumentLink } from '../types';
 import { api } from '../api';
 import { useAutoRefresh } from '../hooks/useAutoRefresh';
 
@@ -386,6 +386,9 @@ export const FinancesTab: React.FC<Props> = ({ chantierId, avancementDeclare }) 
 
     return (
         <div className="space-y-6 animate-slide-up">
+            {/* ===== SYNCHRO VOLTA ===== */}
+            <VoltaLinksSection chantierId={chantierId} />
+
             {/* En-tête — indicateur de marge réelle */}
             <div className={`card flex items-center justify-between gap-4 border-l-4 ${margePositive ? 'border-l-green-500' : 'border-l-red-500'}`}>
                 <div>
@@ -776,6 +779,124 @@ const FirstTimeSetup: React.FC<{ chantierId: number; onCreated: (d: FinancierPay
             <button onClick={create} disabled={saving} className="w-full py-3 bg-ohm-primary text-ohm-bg font-black rounded-xl hover:bg-yellow-300 transition-all flex items-center justify-center gap-2 text-sm uppercase tracking-widest disabled:opacity-50">
                 {saving ? <Loader2 size={18} className="animate-spin" /> : <Plus size={18} />} Configurer le prévisionnel
             </button>
+        </div>
+    );
+};
+
+// --- Synchro Volta : formulaire de rattachement + liste des entrées de ce
+// chantier (voir backend VoltaDocumentLink / process_volta_sync_queue). Une
+// entrée créée ici part 'en_attente' — c'est le worker (déclenché à part)
+// qui la synchronise ensuite ; ce composant ne fait qu'ajouter/lister.
+const VoltaLinksSection: React.FC<{ chantierId: number }> = ({ chantierId }) => {
+    const [links, setLinks] = useState<VoltaDocumentLink[]>([]);
+    const [loading, setLoading] = useState(true);
+    const [saving, setSaving] = useState(false);
+    const [draft, setDraft] = useState({ numero_projet: '', numero_facture: '', numero_offre: '' });
+    const [error, setError] = useState<string | null>(null);
+
+    const fetchLinks = async () => {
+        const res = await api.get(`/api/chantiers/${chantierId}/volta-links`);
+        if (res.ok) setLinks(await res.json());
+    };
+
+    useEffect(() => {
+        setLoading(true);
+        fetchLinks().finally(() => setLoading(false));
+    }, [chantierId]);
+
+    const submit = async () => {
+        setError(null);
+        if (!draft.numero_projet.trim() || !draft.numero_facture.trim()) {
+            setError('Numéro de projet et numéro de facture sont obligatoires.');
+            return;
+        }
+        setSaving(true);
+        const res = await api.post(`/api/chantiers/${chantierId}/volta-links`, {
+            numero_projet: draft.numero_projet.trim(),
+            numero_facture: draft.numero_facture.trim(),
+            numero_offre: draft.numero_offre.trim() || null,
+        });
+        setSaving(false);
+        if (res.ok) {
+            setDraft({ numero_projet: '', numero_facture: '', numero_offre: '' });
+            await fetchLinks();
+        } else {
+            const err = await res.json().catch(() => ({}));
+            setError(err.error || "Erreur lors de l'enregistrement");
+        }
+    };
+
+    const statusLabel = (link: VoltaDocumentLink) => {
+        if (link.statut_sync === 'synced') {
+            const date = link.derniere_sync_at
+                ? new Date(link.derniere_sync_at).toLocaleDateString('fr-CH', { day: '2-digit', month: '2-digit', year: 'numeric' })
+                : null;
+            return <span className="text-green-600 font-bold text-xs">Synchronisé{date ? ` le ${date}` : ''}</span>;
+        }
+        if (link.statut_sync === 'erreur') {
+            return <span className="text-red-500 font-bold text-xs">Erreur — {link.erreur_message || 'raison inconnue'}</span>;
+        }
+        return <span className="text-slate-400 font-bold text-xs">En attente</span>;
+    };
+
+    return (
+        <div className="card">
+            <h4 className="text-sm font-black text-slate-900 uppercase tracking-wide mb-1">Synchro Volta</h4>
+            <p className="text-xs text-slate-400 mb-4">
+                Rattache une facture (et, si connue, l'offre correspondante) à ce chantier — synchronisée ensuite via la file d'attente Volta.
+            </p>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                    <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wide">Numéro de projet</label>
+                    <input
+                        type="text" placeholder="ex. 024042.001" value={draft.numero_projet}
+                        onChange={e => setDraft({ ...draft, numero_projet: e.target.value })}
+                        className="input-field mt-1 !py-2 text-sm"
+                    />
+                </div>
+                <div>
+                    <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wide">Numéro de facture</label>
+                    <input
+                        type="text" placeholder="ex. 7098" value={draft.numero_facture}
+                        onChange={e => setDraft({ ...draft, numero_facture: e.target.value })}
+                        className="input-field mt-1 !py-2 text-sm"
+                    />
+                </div>
+                <div>
+                    <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wide">Numéro d'offre (optionnel)</label>
+                    <input
+                        type="text" placeholder="ex. 7747" value={draft.numero_offre}
+                        onChange={e => setDraft({ ...draft, numero_offre: e.target.value })}
+                        className="input-field mt-1 !py-2 text-sm"
+                    />
+                </div>
+            </div>
+
+            {error && <p className="text-xs text-red-500 mt-2">{error}</p>}
+
+            <button
+                onClick={submit} disabled={saving}
+                className="mt-3 inline-flex items-center gap-2 bg-ohm-primary text-ohm-bg font-black rounded-xl px-5 py-2 text-xs uppercase tracking-widest hover:bg-yellow-300 transition-all disabled:opacity-50"
+            >
+                {saving ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />} Valider
+            </button>
+
+            {loading ? (
+                <div className="mt-4 text-slate-400 text-xs">Chargement…</div>
+            ) : links.length > 0 && (
+                <div className="mt-5 pt-4 border-t border-slate-100 space-y-2">
+                    {links.map(link => (
+                        <div key={link.id} className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-xs sm:text-sm">
+                            <span className="font-mono text-slate-600">
+                                Projet {link.numero_projet} · Facture {link.numero_facture}
+                                {link.numero_offre && <> · Offre {link.numero_offre}</>}
+                            </span>
+                            {statusLabel(link)}
+                        </div>
+                    ))}
+                </div>
+            )}
         </div>
     );
 };

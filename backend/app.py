@@ -2083,6 +2083,22 @@ def chantier_detail(current_user, chantier_id):
                     return jsonify({'error': 'avancement_declare must be between 0 and 100'}), 400
                 chantier.avancement_declare = pct
         new_status = data.get('status', chantier.status)
+
+        # Closure gating (même pattern/emplacement que l'ancien gating
+        # Mesures/Rapport d'intervention, voir git history — retiré depuis
+        # mais réutilisé ici à l'identique) : un chantier ne peut pas passer
+        # à DONE sans au moins un VoltaDocumentLink synchronisé avec succès.
+        # Vérifié uniquement sur une VRAIE transition (previous_status !=
+        # DONE) — rouvrir/refermer un chantier déjà DONE ne re-déclenche pas
+        # le contrôle.
+        if new_status == 'DONE' and previous_status != 'DONE':
+            has_synced_volta_link = VoltaDocumentLink.query.filter_by(
+                chantier_id=chantier.id, statut_sync='synced'
+            ).first() is not None
+            if not has_synced_volta_link:
+                db.session.rollback()
+                return jsonify({'error': "Impossible de clôturer : aucun document Volta (facture/offre) synchronisé pour ce chantier."}), 409
+
         chantier.status = new_status
 
         # Closing a chantier archives its document folder (zipped + originals
@@ -4031,12 +4047,71 @@ def process_volta_sync_queue(fetch_invoice_amount=fetch_invoice_amount,
 @app.route('/api/volta-sync/run', methods=['POST'])
 @token_required
 def run_volta_sync(current_user):
-    """Déclenchement MANUEL du worker — pour les tests à cette étape.
-    Le vrai déclenchement automatique (cron ou bouton dans l'UI) arrive à
-    l'étape 5."""
+    """Déclenchement MANUEL du worker — pour les tests. Le vrai
+    déclenchement automatique (cron) reste hors périmètre pour l'instant."""
     if current_user.role != 'admin':
         return jsonify({'error': 'Admin access required'}), 403
     return jsonify(process_volta_sync_queue()), 200
+
+@app.route('/api/chantiers/<int:chantier_id>/volta-links', methods=['GET', 'POST'])
+@token_required
+def manage_volta_links(current_user, chantier_id):
+    """CRUD minimal des VoltaDocumentLink d'un chantier — le formulaire
+    (onglet Finances) crée ici les entrées que process_volta_sync_queue()
+    traitera ensuite. Pas de PUT/DELETE à cette étape (pas demandé — une
+    entrée mal saisie peut être laissée 'erreur', son message explique
+    pourquoi)."""
+    if current_user.role != 'admin':
+        return jsonify({'error': 'Admin access required'}), 403
+    if not db.session.get(Chantier, chantier_id):
+        return jsonify({'error': 'Chantier not found'}), 404
+
+    if request.method == 'GET':
+        links = VoltaDocumentLink.query.filter_by(chantier_id=chantier_id).order_by(VoltaDocumentLink.created_at.desc()).all()
+        return jsonify([l.to_dict() for l in links])
+
+    data = request.json or {}
+    numero_projet = (data.get('numero_projet') or '').strip()
+    numero_facture = (data.get('numero_facture') or '').strip()
+    numero_offre = (data.get('numero_offre') or '').strip() or None
+
+    if not numero_projet:
+        return jsonify({'error': 'numero_projet is required'}), 400
+    if not numero_facture:
+        return jsonify({'error': 'numero_facture is required'}), 400
+
+    link = VoltaDocumentLink(
+        chantier_id=chantier_id,
+        numero_projet=numero_projet,
+        numero_facture=numero_facture,
+        numero_offre=numero_offre,
+    )
+    db.session.add(link)
+    db.session.commit()
+    return jsonify(link.to_dict()), 201
+
+@app.route('/api/volta-sync/status', methods=['GET'])
+@token_required
+def volta_sync_status(current_user):
+    """Indicateur global (tous chantiers confondus) de la file d'attente
+    Volta — pour un tableau de bord admin, pas un chantier en particulier.
+    Estimation volontairement simple (majorant, pas une simulation du cache
+    par projet de process_volta_sync_queue — 2 entrées en attente du même
+    projet avec chacune une offre COMPTENT 2x2=4 appels ici, alors qu'un
+    vrai run n'en ferait que 3 grâce au cache) : 1 appel par entrée
+    (facture), +1 si numero_offre est renseigné, divisé par le rate-limit
+    horaire pour une durée grossière en heures."""
+    if current_user.role != 'admin':
+        return jsonify({'error': 'Admin access required'}), 403
+    links = VoltaDocumentLink.query.filter_by(statut_sync='en_attente').all()
+    en_attente_count = len(links)
+    estimated_calls = sum(2 if link.numero_offre else 1 for link in links)
+    estimated_hours = -(-estimated_calls // VOLTA_SYNC_RATE_LIMIT_PER_HOUR) if estimated_calls else 0  # ceil sans import math
+    return jsonify({
+        'en_attente_count': en_attente_count,
+        'estimated_calls': estimated_calls,
+        'estimated_hours': estimated_hours,
+    })
 
 PREVISION_STATUTS = ('prevu', 'confirme')
 

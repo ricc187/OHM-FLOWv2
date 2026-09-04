@@ -3,6 +3,7 @@ import { api } from '../api';
 import { SlidingTabs } from './ui/SlidingTabs';
 import { RhPlanningTab } from './RhPlanningTab';
 import { D_POS, D_NEG, GRID, formatPct, StatTile, LegendSwatch } from './statsUi';
+import { VoltaSyncStatusGlobal } from '../types';
 
 type StatsTab = 'FINANCIER' | 'RH';
 
@@ -271,11 +272,13 @@ export const GlobalStats: React.FC = () => {
     const [activeTab, setActiveTab] = useState<StatsTab>('FINANCIER');
     const [stats, setStats] = useState<StatsData | null>(null);
     const [fin, setFin] = useState<FinancierStatsData | null>(null);
+    const [voltaStatus, setVoltaStatus] = useState<VoltaSyncStatusGlobal | null>(null);
     const [filterRange, setFilterRange] = useState<'3M' | '6M' | '1Y' | 'ALL'>('1Y');
 
     useEffect(() => {
         api.get('/api/stats').then(async r => { if (r.ok) setStats(await r.json()); });
         api.get('/api/stats/financier').then(async r => { if (r.ok) setFin(await r.json()); });
+        api.get('/api/volta-sync/status').then(async r => { if (r.ok) setVoltaStatus(await r.json()); });
     }, []);
 
     const filteredHistory = useMemo(() => {
@@ -348,6 +351,28 @@ export const GlobalStats: React.FC = () => {
                     sub={totals ? `${totals.chantiers_positive_marge} en marge positive · ${totals.chantiers_negative_marge} négative` : undefined}
                 />
             </div>
+
+            {/* ===== File d'attente Volta (tous chantiers) =====
+                Placée ici (page Statistiques, onglet Financier, admin-only —
+                même page que les KPI financiers agrégés) plutôt que sur
+                chaque fiche chantier : c'est un indicateur d'ops GLOBAL, pas
+                lié à un chantier en particulier, et cette page est déjà le
+                point de passage admin pour "l'état financier d'ensemble". */}
+            {voltaStatus && voltaStatus.en_attente_count > 0 && (
+                <div className="card border-l-4 border-l-amber-400 flex items-center justify-between gap-4 flex-wrap">
+                    <div>
+                        <div className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">File d'attente Volta</div>
+                        <div className="text-2xl font-black text-slate-900">
+                            {voltaStatus.en_attente_count} document{voltaStatus.en_attente_count > 1 ? 's' : ''} en attente
+                        </div>
+                        <div className="text-xs text-slate-400 mt-1">
+                            Estimation : ~{voltaStatus.estimated_calls} appel{voltaStatus.estimated_calls > 1 ? 's' : ''} Volta,
+                            soit environ {voltaStatus.estimated_hours} heure{voltaStatus.estimated_hours > 1 ? 's' : ''} avant traitement complet
+                            (majorant simple, hors mise en cache par projet).
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* ===== Avancement global ===== */}
             {totals && (

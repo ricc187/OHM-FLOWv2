@@ -218,6 +218,35 @@ export interface PrevisionImportResult {
     created: ChantierPrevision[];
 }
 
+// --- Synchro Volta ---
+// Un chantier peut avoir plusieurs VoltaDocumentLink (une par facture/offre
+// à synchroniser) — voir backend/app.py (VoltaDocumentLink,
+// process_volta_sync_queue). La clôture d'un chantier (status -> DONE) est
+// bloquée tant qu'aucune de ses entrées n'a statut_sync='synced'.
+
+export type VoltaSyncStatut = 'en_attente' | 'synced' | 'erreur';
+
+export interface VoltaDocumentLink {
+    id: number;
+    chantier_id: number;
+    numero_projet: string;
+    numero_facture: string;
+    numero_offre: string | null;
+    statut_sync: VoltaSyncStatut;
+    derniere_sync_at: string | null;
+    erreur_message: string | null;
+    created_at: string | null;
+}
+
+// Indicateur global (tous chantiers confondus) de GET /api/volta-sync/status
+// — estimation grossière (majorant, pas une simulation du cache par
+// projet), voir le commentaire de la route côté backend.
+export interface VoltaSyncStatusGlobal {
+    en_attente_count: number;
+    estimated_calls: number;
+    estimated_hours: number;
+}
+
 // CONGE/MALADIE/ABSENCE/ARMEE/CONGE_PAT_MAT/DEMENAGEMENT mirror the backend
 // Leave.type enum (renamed from VACATION/SICKNESS/OTHER — see app.py's
 // leaves type migration). HOLIDAY is frontend-only (synthetic calendar entries,

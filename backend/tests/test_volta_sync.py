@@ -91,6 +91,14 @@ class VoltaSyncTestCase(unittest.TestCase):
     def setUp(self):
         with ohmapp.app.app_context():
             ohmapp.VoltaApiCallLog.query.delete()
+            # process_volta_sync_queue()/l'endpoint /api/volta-sync/run
+            # traitent TOUTES les entrées 'en_attente' tous chantiers
+            # confondus — un test qui en laisse une derrière (ex: le gating
+            # de clôture n'en consomme aucune, il vérifie juste qu'il en
+            # existe une 'synced') pollue sinon n'importe quel test suivant
+            # qui appelle le worker global. Table repartie à vide à chaque
+            # test pour rester déterministe quel que soit l'ordre.
+            ohmapp.VoltaDocumentLink.query.delete()
             ohmapp.db.session.commit()
 
     def _create_chantier(self, nom):
@@ -441,6 +449,138 @@ class VoltaSyncTestCase(unittest.TestCase):
             link = ohmapp.VoltaDocumentLink.query.filter_by(chantier_id=chantier_id).first()
             self.assertEqual(link.statut_sync, 'erreur')
             self.assertIn('Variable d', link.erreur_message or '')
+
+    # --- Blocage de clôture (même pattern/emplacement que l'ancien gating
+    # Mesures/Rapport d'intervention — PUT /api/chantiers/<id>) ---
+
+    def test_closure_blocked_without_any_link(self):
+        chantier_id = self._create_chantier('Cloture sans link')
+        res = self.client.put(f'/api/chantiers/{chantier_id}', json={'status': 'DONE'})
+        self.assertEqual(res.status_code, 409)
+        self.assertIn('Volta', res.get_json()['error'])
+        with ohmapp.app.app_context():
+            chantier = ohmapp.db.session.get(ohmapp.Chantier, chantier_id)
+            self.assertEqual(chantier.status, 'ACTIVE')  # inchangé
+
+    def test_closure_blocked_with_only_en_attente_or_erreur_links(self):
+        chantier_id = self._create_chantier('Cloture liens pas synced')
+        self._create_link(chantier_id, numero_facture='F1', statut_sync='en_attente')
+        self._create_link(chantier_id, numero_facture='F2', statut_sync='erreur')
+        res = self.client.put(f'/api/chantiers/{chantier_id}', json={'status': 'DONE'})
+        self.assertEqual(res.status_code, 409)
+
+    def test_closure_allowed_with_at_least_one_synced_link(self):
+        chantier_id = self._create_chantier('Cloture link synced')
+        self._create_link(chantier_id, numero_facture='F1', statut_sync='en_attente')
+        self._create_link(chantier_id, numero_facture='F2', statut_sync='synced')
+        res = self.client.put(f'/api/chantiers/{chantier_id}', json={'status': 'DONE'})
+        self.assertEqual(res.status_code, 200, res.get_json())
+        self.assertEqual(res.get_json()['status'], 'DONE')
+
+    def test_closure_gating_only_checked_on_real_transition(self):
+        chantier_id = self._create_chantier('Deja DONE')
+        self._create_link(chantier_id, statut_sync='synced')
+        res = self.client.put(f'/api/chantiers/{chantier_id}', json={'status': 'DONE'})
+        self.assertEqual(res.status_code, 200, res.get_json())
+
+        # Le lien synced disparaît après coup ; renvoyer status=DONE (déjà
+        # DONE, pas une vraie transition) ne doit PAS redéclencher le
+        # contrôle.
+        with ohmapp.app.app_context():
+            ohmapp.VoltaDocumentLink.query.filter_by(chantier_id=chantier_id).delete()
+            ohmapp.db.session.commit()
+        res2 = self.client.put(f'/api/chantiers/{chantier_id}', json={'status': 'DONE'})
+        self.assertEqual(res2.status_code, 200, res2.get_json())
+
+    # --- Endpoint CRUD minimal des VoltaDocumentLink (formulaire étape 4) ---
+
+    def test_volta_links_create_and_list(self):
+        chantier_id = self._create_chantier('Links CRUD')
+        res = self.client.post(f'/api/chantiers/{chantier_id}/volta-links', json={
+            'numero_projet': '024042.001', 'numero_facture': '7098', 'numero_offre': '7747',
+        })
+        self.assertEqual(res.status_code, 201, res.get_json())
+        data = res.get_json()
+        self.assertEqual(data['numero_projet'], '024042.001')
+        self.assertEqual(data['numero_facture'], '7098')
+        self.assertEqual(data['numero_offre'], '7747')
+        self.assertEqual(data['statut_sync'], 'en_attente')
+
+        res2 = self.client.get(f'/api/chantiers/{chantier_id}/volta-links')
+        self.assertEqual(res2.status_code, 200)
+        self.assertEqual(len(res2.get_json()), 1)
+
+    def test_volta_links_numero_offre_optional(self):
+        chantier_id = self._create_chantier('Links offre optionnelle')
+        res = self.client.post(f'/api/chantiers/{chantier_id}/volta-links', json={
+            'numero_projet': '024042.001', 'numero_facture': '7098',
+        })
+        self.assertEqual(res.status_code, 201, res.get_json())
+        self.assertIsNone(res.get_json()['numero_offre'])
+
+    def test_volta_links_requires_numero_projet_and_facture(self):
+        chantier_id = self._create_chantier('Links validation')
+        res = self.client.post(f'/api/chantiers/{chantier_id}/volta-links', json={'numero_facture': '7098'})
+        self.assertEqual(res.status_code, 400)
+        res2 = self.client.post(f'/api/chantiers/{chantier_id}/volta-links', json={'numero_projet': '024042.001'})
+        self.assertEqual(res2.status_code, 400)
+
+    def test_volta_links_unknown_chantier_404(self):
+        res = self.client.post('/api/chantiers/999999/volta-links', json={'numero_projet': 'x', 'numero_facture': 'y'})
+        self.assertEqual(res.status_code, 404)
+        res2 = self.client.get('/api/chantiers/999999/volta-links')
+        self.assertEqual(res2.status_code, 404)
+
+    def test_volta_links_requires_admin(self):
+        chantier_id = self._create_chantier('Links admin only')
+        with ohmapp.app.app_context():
+            user = ohmapp.User(username=f'plain_{self._testMethodName}', pin_hash='x', role='user', password_hash=None)
+            user.set_password('irrelevant-but-valid-Passw0rd!')
+            ohmapp.db.session.add(user)
+            ohmapp.db.session.commit()
+            token = ohmapp.serializer.dumps({'user_id': user.id})
+        client = ohmapp.app.test_client()
+        client.set_cookie(ohmapp.COOKIE_NAME, token)
+        self.assertEqual(client.get(f'/api/chantiers/{chantier_id}/volta-links').status_code, 403)
+        self.assertEqual(client.post(f'/api/chantiers/{chantier_id}/volta-links', json={}).status_code, 403)
+
+    # --- Indicateur global de la file (tous chantiers confondus) ---
+
+    def test_volta_sync_status_empty_queue(self):
+        with ohmapp.app.app_context():
+            ohmapp.VoltaDocumentLink.query.delete()
+            ohmapp.db.session.commit()
+        res = self.client.get('/api/volta-sync/status')
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.get_json(), {'en_attente_count': 0, 'estimated_calls': 0, 'estimated_hours': 0})
+
+    def test_volta_sync_status_counts_and_estimates(self):
+        with ohmapp.app.app_context():
+            ohmapp.VoltaDocumentLink.query.delete()
+            ohmapp.db.session.commit()
+        c1 = self._create_chantier('Status 1')
+        c2 = self._create_chantier('Status 2')
+        self._create_link(c1, numero_facture='F1', numero_offre=None)                        # 1 appel
+        self._create_link(c2, numero_facture='F2', numero_offre='7747')                      # 2 appels
+        self._create_link(c2, numero_facture='F3', numero_offre='6638', statut_sync='synced')  # ignoré, pas en_attente
+
+        res = self.client.get('/api/volta-sync/status')
+        self.assertEqual(res.status_code, 200)
+        data = res.get_json()
+        self.assertEqual(data['en_attente_count'], 2)
+        self.assertEqual(data['estimated_calls'], 3)  # 1 (facture seule) + 2 (facture+offre)
+        self.assertEqual(data['estimated_hours'], 1)  # ceil(3 / VOLTA_SYNC_RATE_LIMIT_PER_HOUR=6)
+
+    def test_volta_sync_status_requires_admin(self):
+        with ohmapp.app.app_context():
+            user = ohmapp.User(username=f'plain_{self._testMethodName}', pin_hash='x', role='user', password_hash=None)
+            user.set_password('irrelevant-but-valid-Passw0rd!')
+            ohmapp.db.session.add(user)
+            ohmapp.db.session.commit()
+            token = ohmapp.serializer.dumps({'user_id': user.id})
+        client = ohmapp.app.test_client()
+        client.set_cookie(ohmapp.COOKIE_NAME, token)
+        self.assertEqual(client.get('/api/volta-sync/status').status_code, 403)
 
 
 if __name__ == '__main__':
