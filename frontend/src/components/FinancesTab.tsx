@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Loader2, TrendingUp, TrendingDown, Pencil, Plus, Trash2, Check, X, AlertTriangle, ChevronDown, ChevronRight, Wrench } from 'lucide-react';
+import { Loader2, TrendingUp, TrendingDown, Pencil, Plus, Trash2, Check, X, AlertTriangle } from 'lucide-react';
 import { Acompte, AchatMateriel, CaLignePrevue, ChantierFinancierPrevu, FinancierPayload } from '../types';
 import { api } from '../api';
 import { useAutoRefresh } from '../hooks/useAutoRefresh';
@@ -701,79 +701,6 @@ export const FinancesTab: React.FC<Props> = ({ chantierId, avancementDeclare }) 
                     <Td className={`text-right ${signColor(data.ecart_marge)}`}>{formatCHF(data.ecart_marge)}</Td>
                 </tr>
             </SectionCard>
-
-            {/* ===== DEBUG VOLTA (TEMPORAIRE) =====
-                Panneau exploratoire — affiche telles quelles les données brutes déjà
-                récupérées manuellement depuis l'API Volta (voir VOLTA_API_NOTES.md /
-                scripts/explore_volta_api.py), à côté du module financier ci-dessus,
-                pour que l'utilisateur les associe lui-même à l'œil. À retirer une fois
-                le mapping définitif intégré. */}
-            <VoltaDebugPanel chantierId={chantierId} />
-        </div>
-    );
-};
-
-// Panneau pliable/dépliable — ne récupère le JSON de debug qu'à la première
-// ouverture (pas de fetch tant que c'est replié), et ne le refait pas ensuite
-// tant que le composant reste monté.
-const VoltaDebugPanel: React.FC<{ chantierId: number }> = ({ chantierId }) => {
-    const [open, setOpen] = useState(false);
-    const [loaded, setLoaded] = useState(false);
-    const [loading, setLoading] = useState(false);
-    const [error, setError] = useState<string | null>(null);
-    const [raw, setRaw] = useState<unknown>(null);
-
-    const toggle = async () => {
-        const next = !open;
-        setOpen(next);
-        if (next && !loaded) {
-            setLoading(true);
-            setError(null);
-            try {
-                const res = await api.get(`/api/chantiers/${chantierId}/volta-debug`);
-                if (res.ok) {
-                    setRaw(await res.json());
-                    setLoaded(true);
-                } else {
-                    const err = await res.json().catch(() => ({}));
-                    setError(err.error || 'Aucune donnée Volta de debug pour ce chantier');
-                }
-            } catch {
-                setError('Erreur réseau lors de la récupération des données Volta');
-            } finally {
-                setLoading(false);
-            }
-        }
-    };
-
-    return (
-        <div className="card p-0 overflow-hidden border-2 border-dashed border-amber-300">
-            <button
-                onClick={toggle}
-                className="w-full flex items-center justify-between gap-2 px-4 py-3 bg-amber-50 hover:bg-amber-100/70 transition-colors text-left"
-            >
-                <span className="inline-flex items-center gap-2 font-black text-xs uppercase tracking-wide text-amber-800">
-                    <Wrench size={14} /> Debug Volta (temporaire)
-                </span>
-                {open ? <ChevronDown size={16} className="text-amber-600" /> : <ChevronRight size={16} className="text-amber-600" />}
-            </button>
-            {open && (
-                <div className="p-4 bg-amber-50/30 border-t border-amber-200">
-                    <p className="text-[11px] text-slate-500 mb-3 italic">
-                        Données brutes récupérées manuellement depuis l'API Volta pour ce
-                        chantier (voir VOLTA_API_NOTES.md). Panneau exploratoire, sans
-                        rafraîchissement automatique — à retirer une fois le mapping
-                        définitif intégré.
-                    </p>
-                    {loading && <div className="flex items-center gap-2 text-slate-400 text-sm"><Loader2 size={14} className="animate-spin" /> Chargement…</div>}
-                    {error && <div className="text-sm text-red-500">{error}</div>}
-                    {!loading && !error && raw != null && (
-                        <pre className="text-[11px] leading-relaxed bg-slate-900 text-slate-100 rounded-lg p-3 overflow-auto max-h-[500px] whitespace-pre-wrap break-words">
-                            {JSON.stringify(raw, null, 2)}
-                        </pre>
-                    )}
-                </div>
-            )}
         </div>
     );
 };
