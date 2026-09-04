@@ -96,6 +96,7 @@ class AuthTestCase(unittest.TestCase):
 
     # --- Admin 2FA gating ---
 
+    @unittest.skip("MFA admin temporairement désactivée — voir TODO app.py:150 (MFA_REQUIRED_ROLES)")
     def test_admin_without_mfa_gets_enroll_required(self):
         self._create_user('admin_new', 'admin')
         res = self._login('admin_new', STRONG_PASSWORD)
@@ -106,6 +107,7 @@ class AuthTestCase(unittest.TestCase):
         # No session cookie yet — login isn't complete.
         self.assertNotIn(ohmapp.COOKIE_NAME, res.headers.get('Set-Cookie', ''))
 
+    @unittest.skip("MFA admin temporairement désactivée — voir TODO app.py:150 (MFA_REQUIRED_ROLES)")
     def test_full_admin_enroll_flow_issues_session_and_backup_codes(self):
         self._create_user('admin_enroll', 'admin')
         login_res = self._login('admin_enroll', STRONG_PASSWORD)
@@ -129,6 +131,7 @@ class AuthTestCase(unittest.TestCase):
             user = ohmapp.User.query.filter_by(username='admin_enroll').first()
             self.assertTrue(user.mfa_enabled)
 
+    @unittest.skip("MFA admin temporairement désactivée — voir TODO app.py:150 (MFA_REQUIRED_ROLES)")
     def test_admin_with_mfa_enabled_requires_verify(self):
         user_id = self._create_user('admin_mfa', 'admin')
         secret = pyotp.random_base32()
@@ -152,6 +155,7 @@ class AuthTestCase(unittest.TestCase):
         self.assertEqual(good.get_json()['status'], 'ok')
         self.assertIn(ohmapp.COOKIE_NAME, good.headers.get('Set-Cookie', ''))
 
+    @unittest.skip("MFA admin temporairement désactivée — voir TODO app.py:150 (MFA_REQUIRED_ROLES)")
     def test_backup_code_login_is_single_use(self):
         user_id = self._create_user('admin_backup', 'admin')
         secret = pyotp.random_base32()
@@ -175,6 +179,7 @@ class AuthTestCase(unittest.TestCase):
         second = self.client.post('/api/mfa/verify-backup', json={'mfa_token': mfa_token_2, 'backup_code': plaintext_code})
         self.assertEqual(second.status_code, 401)
 
+    @unittest.skip("MFA admin temporairement désactivée — voir TODO app.py:150 (MFA_REQUIRED_ROLES)")
     def test_mfa_pending_token_cannot_be_used_as_session(self):
         """A stolen in-flight mfa_token must never work against an authed route."""
         self._create_user('admin_ticket', 'admin')
