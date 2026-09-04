@@ -91,10 +91,13 @@ interface Props {
     items: ChantierPrevision[];
     setItems: React.Dispatch<React.SetStateAction<ChantierPrevision[]>>;
     onError: (message: string) => void;
+    // Lifted to PrevisionAnnuelle.tsx (not local state here) — the dashboard
+    // needs to recompute off the exact same displayed year.
+    year: number;
+    setYear: React.Dispatch<React.SetStateAction<number>>;
 }
 
-export const PrevisionTimeline: React.FC<Props> = ({ items, setItems, onError }) => {
-    const [year, setYear] = useState(new Date().getFullYear());
+export const PrevisionTimeline: React.FC<Props> = ({ items, setItems, onError, year, setYear }) => {
     const [live, setLive] = useState<LiveEdit | null>(null);
 
     // Mirrors `live` so the pointerup handler always reads the latest value

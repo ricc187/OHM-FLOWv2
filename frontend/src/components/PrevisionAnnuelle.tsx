@@ -5,10 +5,12 @@ import { api } from '../api';
 import { StatusBadge } from './StatusBadge';
 import { AwesomeSelect } from './ui/AwesomeSelect';
 import { PrevisionTimeline } from './PrevisionTimeline';
+import { PrevisionDashboard } from './PrevisionDashboard';
 
 // Module de prévision annuelle — TOTALEMENT INDÉPENDANT de l'Agenda et des
-// chantier_assignments : ne lit/écrit que /api/prevision*. Isolé de toute
-// nav pour l'instant (voir consigne étape 2) — composant testable seul.
+// chantier_assignments : ne lit/écrit que /api/prevision*. Écran complet
+// (dashboard + calendrier + liste), câblé dans la nav (Layout.tsx,
+// ADMIN_NAV_ITEMS) sous "Prévision annuelle" depuis l'étape 4.
 
 const formatCHF = (v: number | null | undefined) =>
     v == null ? '—' : `${v.toLocaleString('fr-CH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} CHF`;
@@ -27,6 +29,9 @@ const emptyForm = {
 export const PrevisionAnnuelle: React.FC = () => {
     const [items, setItems] = useState<ChantierPrevision[]>([]);
     const [users, setUsers] = useState<User[]>([]);
+    // Shared with PrevisionTimeline (year nav lives there) so the dashboard
+    // recomputes for the exact same displayed year.
+    const [year, setYear] = useState(new Date().getFullYear());
     const [loading, setLoading] = useState(true);
     const [importing, setImporting] = useState(false);
     const [message, setMessage] = useState<{ kind: 'success' | 'error'; text: string } | null>(null);
@@ -158,7 +163,15 @@ export const PrevisionAnnuelle: React.FC = () => {
                 </div>
             )}
 
-            <PrevisionTimeline items={items} setItems={setItems} onError={text => setMessage({ kind: 'error', text })} />
+            <PrevisionDashboard items={items} year={year} />
+
+            <PrevisionTimeline
+                items={items}
+                setItems={setItems}
+                onError={text => setMessage({ kind: 'error', text })}
+                year={year}
+                setYear={setYear}
+            />
 
             <div className="bg-ohm-surface border border-slate-200 rounded-2xl shadow-xl overflow-hidden">
                 <div className="overflow-x-auto">

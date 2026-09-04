@@ -23,6 +23,7 @@ const MesConges = lazy(() => import('./components/MesConges').then(m => ({ defau
 const PotAChantier = lazy(() => import('./components/PotAChantier').then(m => ({ default: m.PotAChantier })));
 const GlobalStats = lazy(() => import('./components/GlobalStats').then(m => ({ default: m.GlobalStats })));
 const AdminNotices = lazy(() => import('./components/AdminNotices').then(m => ({ default: m.AdminNotices })));
+const PrevisionAnnuelle = lazy(() => import('./components/PrevisionAnnuelle').then(m => ({ default: m.PrevisionAnnuelle })));
 
 const PageLoader = () => (
     <div className="flex items-center justify-center h-full min-h-[50vh]">
@@ -30,8 +31,8 @@ const PageLoader = () => (
     </div>
 );
 
-type View = 'dashboard' | 'admin' | 'admin-entries' | 'missing-entries' | 'admin-leaves' | 'planning' | 'agenda' | 'mes-conges' | 'pot-a-chantier' | 'stats' | 'notices';
-const VALID_VIEWS: View[] = ['dashboard', 'admin', 'admin-entries', 'missing-entries', 'admin-leaves', 'planning', 'agenda', 'mes-conges', 'pot-a-chantier', 'stats', 'notices'];
+type View = 'dashboard' | 'admin' | 'admin-entries' | 'missing-entries' | 'admin-leaves' | 'planning' | 'agenda' | 'mes-conges' | 'pot-a-chantier' | 'stats' | 'notices' | 'prevision';
+const VALID_VIEWS: View[] = ['dashboard', 'admin', 'admin-entries', 'missing-entries', 'admin-leaves', 'planning', 'agenda', 'mes-conges', 'pot-a-chantier', 'stats', 'notices', 'prevision'];
 
 // Reads the current view/selected-chantier out of the URL — used both on
 // first load and whenever the user hits browser back/forward.
@@ -161,6 +162,7 @@ function App() {
         else if (path === 'pot-a-chantier') next = 'pot-a-chantier';
         else if (path === 'stats') next = 'stats';
         else if (path === 'notices') next = 'notices';
+        else if (path === 'prevision') next = 'prevision';
         setView(next);
         pushUrl(next, null);
     };
@@ -230,6 +232,8 @@ function App() {
                     <AdminLeaves />
                 ) : view === 'notices' ? (
                     <AdminNotices />
+                ) : view === 'prevision' ? (
+                    <PrevisionAnnuelle />
                 ) : selectedChantierId ? (
                     null // fetching the chantier for a refreshed/direct link — avoid a dashboard flash
                 ) : (
