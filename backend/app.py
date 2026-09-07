@@ -2607,7 +2607,17 @@ def acknowledge_missing_entry(current_user):
         reason=(data.get('reason') or '').strip() or None,
     )
     db.session.add(ack)
-    db.session.commit()
+    try:
+        db.session.commit()
+    except IntegrityError:
+        # Two concurrent acknowledgements of the same (user_id, date) both
+        # pass the pre-check above before either commits — the loser hits
+        # the unique constraint here. Without this, it'd fall through to
+        # the generic IntegrityError handler ("Invalid or inconsistent
+        # data", a 400) instead of the same clean 409 the pre-check gives
+        # the common sequential case.
+        db.session.rollback()
+        return jsonify({'error': 'Already acknowledged'}), 409
     audit_log('missing_entries', current_user,
                f"acknowledged missing entry: {target_user.username} on {date}" + (f" — {ack.reason}" if ack.reason else ""))
     return jsonify(ack.to_dict()), 201
@@ -2777,14 +2787,54 @@ def _chantier_color(chantier_id):
 def _approve_leave(leave):
     """Marks a leave APPROVED and deducts the vacation balance for CONGE —
     the one piece of business logic behind "approving a leave", shared by
-    the manual admin validation route (PUT /api/leaves/<id>/status) and the
-    calendar auto-approve-on-create rule for admin-authored entries (POST
-    /api/calendar/leaves). Do not duplicate this elsewhere."""
+    the calendar auto-approve-on-create rule for admin-authored entries
+    (POST /api/calendar/leaves) and, indirectly, the manual admin validation
+    route (PUT /api/leaves/<id>/status — see _approve_leave_if_pending,
+    which wraps this for that case). Only safe to call on a leave that has
+    never been approved before — e.g. a brand-new in-memory Leave, not yet
+    committed, as at the calendar call site above. Do not duplicate this
+    elsewhere."""
     leave.status = 'APPROVED'
     if leave.type == 'CONGE':
         user = db.session.get(User, leave.user_id)
         if user:
             user.vacation_balance -= leave.days_count
+
+
+def _approve_leave_if_pending(leave):
+    """Same effect as _approve_leave, but idempotent/race-safe for approving
+    an EXISTING leave (PUT /api/leaves/<id>/status) — calling this twice, in
+    a row or from two concurrent requests, must deduct vacation_balance at
+    most once.
+
+    _approve_leave itself can't guard against this by re-reading
+    leave.status: two concurrent requests can both load the row while it's
+    still PENDING and both decide to approve it before either commits. The
+    fix is a single atomic conditional UPDATE instead of "read status, then
+    decide" — `WHERE status != 'APPROVED'` only matches (and only lets this
+    request deduct the balance) if the row hasn't already been flipped.
+    SQLite allows only one writer at a time (see WAL/busy_timeout config),
+    so if two requests race, whichever commits first wins the update; the
+    other's UPDATE runs afterwards against the now-committed row, matches 0
+    rows, and returns False here — no re-deduction, no lost update.
+
+    Returns True if this call actually approved it, False if it was already
+    APPROVED (caller should report that as a 409, not silently no-op)."""
+    rowcount = Leave.query.filter(
+        Leave.id == leave.id, Leave.status != 'APPROVED'
+    ).update({'status': 'APPROVED'}, synchronize_session=False)
+    if rowcount == 0:
+        db.session.rollback()
+        return False
+    # Mirror the change onto the already-loaded object (the UPDATE above
+    # bypassed the ORM's normal attribute-setting) so leave.to_dict() below
+    # reflects it without an extra round-trip.
+    leave.status = 'APPROVED'
+    if leave.type == 'CONGE':
+        user = db.session.get(User, leave.user_id)
+        if user:
+            user.vacation_balance -= leave.days_count
+    return True
 
 
 def _validate_period(payload):
@@ -2881,7 +2931,8 @@ def update_leave_status(current_user, leave_id):
         return jsonify({'error': 'Invalid status'}), 400
 
     if status == 'APPROVED':
-        _approve_leave(leave)
+        if not _approve_leave_if_pending(leave):
+            return jsonify({'error': 'Ce congé est déjà approuvé'}), 409
     else:
         leave.status = status
 
@@ -3116,12 +3167,26 @@ def valider_chantier_assignment(current_user, assignment_id):
     the SAME winning date — bug, reported after real use).
     Only meaningful on a statut='proposition' row — confirming an
     already-confirme entry (no group) is a no-op error, not a silent
-    success, since there'd be nothing to actually resolve."""
+    success, since there'd be nothing to actually resolve.
+
+    Concurrency: two different candidate dates of the SAME group can be
+    validated at (almost) the same instant — e.g. two admins racing to pick
+    the winner. Each request initially sees every row (including the OTHER
+    request's target) as still statut='proposition', and each one deletes
+    the other's target as a "losing sibling". Whichever commits first wins
+    cleanly; the loser must not crash trying to confirm a row that no longer
+    exists. Every write below is therefore a conditional bulk statement
+    (WHERE statut='proposition', synchronize_session=False) rather than
+    "mutate the loaded ORM object and let flush() figure it out" — a 0-row
+    match is a normal outcome here (someone else got there first), not an
+    error, and never raises SQLAlchemy's StaleDataError."""
     a = db.session.get(ChantierAssignment, assignment_id)
     if not a:
         return jsonify({'error': 'Assignment not found'}), 404
     if a.statut != 'proposition':
         return jsonify({'error': 'Cette entrée n\'est pas une proposition à valider'}), 400
+
+    now = datetime.datetime.utcnow()
 
     if a.proposal_group_id:
         winning_period = (a.date_debut, a.date_fin, a.heure_debut, a.heure_fin, bool(a.toute_la_journee))
@@ -3129,22 +3194,49 @@ def valider_chantier_assignment(current_user, assignment_id):
             ChantierAssignment.proposal_group_id == a.proposal_group_id,
             ChantierAssignment.id != a.id,
         ).all()
+        co_winner_ids = []
+        loser_ids = []
         for sibling in siblings:
             sibling_period = (sibling.date_debut, sibling.date_fin, sibling.heure_debut, sibling.heure_fin, bool(sibling.toute_la_journee))
-            if sibling_period == winning_period:
-                # Same candidate date, different employee — this date won
-                # for everyone assigned to it, confirm them too.
-                sibling.statut = 'confirme'
-                sibling.proposal_group_id = None
-                sibling.updated_by_id = current_user.id
-                sibling.updated_at = datetime.datetime.utcnow()
-            else:
-                db.session.delete(sibling)
+            # Same candidate date, different employee — this date won for
+            # everyone assigned to it, confirm them too. Otherwise it's a
+            # losing candidate date, delete it.
+            (co_winner_ids if sibling_period == winning_period else loser_ids).append(sibling.id)
 
+        if co_winner_ids:
+            ChantierAssignment.query.filter(
+                ChantierAssignment.id.in_(co_winner_ids), ChantierAssignment.statut == 'proposition',
+            ).update({
+                'statut': 'confirme', 'proposal_group_id': None,
+                'updated_by_id': current_user.id, 'updated_at': now,
+            }, synchronize_session=False)
+        if loser_ids:
+            ChantierAssignment.query.filter(
+                ChantierAssignment.id.in_(loser_ids), ChantierAssignment.statut == 'proposition',
+            ).delete(synchronize_session=False)
+
+    # Confirm the target itself — conditional on it still being a proposal.
+    # If a concurrent request already resolved this exact row in the
+    # meantime (double-click, or it turned out to be someone else's
+    # "losing sibling" above), this matches 0 rows: report a clean conflict
+    # instead of the StaleDataError a plain ORM update would raise here.
+    rowcount = ChantierAssignment.query.filter(
+        ChantierAssignment.id == a.id, ChantierAssignment.statut == 'proposition',
+    ).update({
+        'statut': 'confirme', 'proposal_group_id': None,
+        'updated_by_id': current_user.id, 'updated_at': now,
+    }, synchronize_session=False)
+    if rowcount == 0:
+        db.session.rollback()
+        return jsonify({'error': 'Cette proposition a déjà été traitée (validée ou écartée) entre-temps'}), 409
+
+    # The bulk update above bypassed the ORM, so the already-loaded `a`
+    # still shows its pre-update values — mirror them for the response
+    # instead of an extra round-trip to re-fetch.
     a.statut = 'confirme'
-    a.proposal_group_id = None  # no longer part of a group of one
+    a.proposal_group_id = None
     a.updated_by_id = current_user.id
-    a.updated_at = datetime.datetime.utcnow()
+    a.updated_at = now
     db.session.commit()
     return jsonify(a.to_dict())
 

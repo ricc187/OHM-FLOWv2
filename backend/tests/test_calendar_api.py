@@ -12,6 +12,7 @@ import os
 import sys
 import shutil
 import tempfile
+import threading
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # backend/
@@ -161,6 +162,34 @@ class CalendarApiTestCase(unittest.TestCase):
         with ohmapp.app.app_context():
             worker = ohmapp.User.query.get(self.worker_a_id)
             self.assertEqual(worker.vacation_balance, 8.0)  # 10 - 2 days
+
+    def test_approving_an_already_approved_leave_does_not_double_deduct(self):
+        """PUT /api/leaves/<id>/status APPROVED must be idempotent — calling
+        it twice (sequentially here; concurrency is covered separately) must
+        deduct vacation_balance exactly once, and the second call must
+        report a clean conflict rather than silently re-approving."""
+        create = self.worker_a_client.post('/api/calendar/leaves', json={
+            'user_ids': [self.worker_a_id], 'type': 'ABSENCE',
+            'date_debut': '2026-12-01', 'date_fin': '2026-12-02', 'toute_la_journee': True,
+        })
+        leave_id = create.get_json()[0]['id']
+        # Non-admin creation above stays PENDING; give it a CONGE type so
+        # approval actually touches vacation_balance.
+        with ohmapp.app.app_context():
+            leave = ohmapp.db.session.get(ohmapp.Leave, leave_id)
+            leave.type = 'CONGE'
+            ohmapp.db.session.commit()
+
+        first = self.admin_client.put(f'/api/leaves/{leave_id}/status', json={'status': 'APPROVED'})
+        self.assertEqual(first.status_code, 200, first.get_json())
+        self.assertEqual(first.get_json()['status'], 'APPROVED')
+
+        second = self.admin_client.put(f'/api/leaves/{leave_id}/status', json={'status': 'APPROVED'})
+        self.assertEqual(second.status_code, 409, second.get_json())
+
+        with ohmapp.app.app_context():
+            worker = ohmapp.User.query.get(self.worker_a_id)
+            self.assertEqual(worker.vacation_balance, 8.0)  # 10 - 2 days, deducted ONCE
 
     def test_non_admin_leave_creation_stays_pending_no_deduction(self):
         res = self.worker_a_client.post('/api/calendar/leaves', json={
@@ -390,6 +419,56 @@ class CalendarApiTestCase(unittest.TestCase):
         # Both employees' rows on the LOSING date: gone.
         self.assertNotIn(other_date_same_employee['id'], remaining_by_id)
         self.assertNotIn(other_date_other_employee['id'], remaining_by_id)
+
+    def test_valider_two_different_candidates_same_group_at_once_no_crash(self):
+        """Regression: two admins racing to confirm two DIFFERENT candidate
+        dates of the same group used to crash the loser with a raw 500
+        (StaleDataError) — each request sees the other's target as a
+        "losing sibling" and deletes it, so whichever commits second tries
+        to confirm a row that's already gone. Must now resolve to exactly
+        one confirmed row and a clean response either way, never a 500."""
+        create = self.admin_client.post('/api/calendar/chantier-assignments', json={
+            'chantier_id': self.chantier_id, 'user_ids': [self.worker_a_id],
+            'a_planifier': True,
+            'candidates': [
+                {'date_debut': '2026-11-01', 'date_fin': '2026-11-01', 'toute_la_journee': True},
+                {'date_debut': '2026-11-02', 'date_fin': '2026-11-02', 'toute_la_journee': True},
+            ],
+        })
+        rows = create.get_json()
+        id_a = next(r['id'] for r in rows if r['date_debut'] == '2026-11-01')
+        id_b = next(r['id'] for r in rows if r['date_debut'] == '2026-11-02')
+
+        with ohmapp.app.app_context():
+            admin_token = ohmapp.serializer.dumps({'user_id': self.admin_id})
+        client_a = ohmapp.app.test_client()
+        client_a.set_cookie(ohmapp.COOKIE_NAME, admin_token)
+        client_b = ohmapp.app.test_client()
+        client_b.set_cookie(ohmapp.COOKIE_NAME, admin_token)
+
+        barrier = threading.Barrier(2)
+        results = [None, None]
+
+        def call(i, client, assignment_id):
+            barrier.wait()
+            results[i] = client.put(f'/api/calendar/chantier-assignments/{assignment_id}/valider')
+
+        t1 = threading.Thread(target=call, args=(0, client_a, id_a))
+        t2 = threading.Thread(target=call, args=(1, client_b, id_b))
+        t1.start(); t2.start()
+        t1.join(); t2.join()
+
+        codes = sorted(r.status_code for r in results)
+        # Never a 500 — the loser gets a clean 409, the winner a 200.
+        self.assertEqual(codes, [200, 409], [r.get_json() for r in results])
+
+        with ohmapp.app.app_context():
+            remaining = ohmapp.ChantierAssignment.query.filter(
+                ohmapp.ChantierAssignment.id.in_([id_a, id_b])
+            ).all()
+            confirmed = [a for a in remaining if a.statut == 'confirme']
+            self.assertEqual(len(confirmed), 1)
+            self.assertEqual(len(remaining), 1)  # the loser's row was deleted, not left dangling
 
     def test_valider_rejects_already_confirmed_entry(self):
         create = self.admin_client.post('/api/calendar/chantier-assignments', json={
