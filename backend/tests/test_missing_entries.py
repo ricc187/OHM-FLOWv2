@@ -49,6 +49,13 @@ class MissingEntriesTestCase(unittest.TestCase):
         cls.client = ohmapp.app.test_client()
         with ohmapp.app.app_context():
             admin = ohmapp.User.query.filter_by(username='Admin').first()
+            # Admin role now requires 2FA (MFA_REQUIRED_ROLES) and starts
+            # must_change_password=True — mark this bootstrap Admin as
+            # already onboarded so its raw session token isn't blocked by
+            # token_required's onboarding check (see app.py).
+            admin.must_change_password = False
+            admin.mfa_enabled = True
+            ohmapp.db.session.commit()
             cls.admin_id = admin.id
             cls.token = ohmapp.serializer.dumps({'user_id': admin.id})
         cls.client.set_cookie(ohmapp.COOKIE_NAME, cls.token)
@@ -56,7 +63,7 @@ class MissingEntriesTestCase(unittest.TestCase):
     def setUp(self):
         with ohmapp.app.app_context():
             tag = self._testMethodName
-            worker = ohmapp.User(username=f'MW_{tag}'[:40], role='user')
+            worker = ohmapp.User(username=f'MW_{tag}'[:40], role='user', must_change_password=False)
             worker.set_pin('1234')
             ohmapp.db.session.add(worker)
             ohmapp.db.session.commit()

@@ -35,6 +35,13 @@ class EntriesApiTestCase(unittest.TestCase):
         cls.client = ohmapp.app.test_client()
         with ohmapp.app.app_context():
             admin = ohmapp.User.query.filter_by(username='Admin').first()
+            # Admin role now requires 2FA (MFA_REQUIRED_ROLES) and starts
+            # must_change_password=True — mark this bootstrap Admin as
+            # already onboarded so its raw session token isn't blocked by
+            # token_required's onboarding check (see app.py).
+            admin.must_change_password = False
+            admin.mfa_enabled = True
+            ohmapp.db.session.commit()
             cls.token = ohmapp.serializer.dumps({'user_id': admin.id})
             cls.admin_id = admin.id
 

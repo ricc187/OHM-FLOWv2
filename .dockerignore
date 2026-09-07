@@ -1,0 +1,24 @@
+# Secrets — never let these end up in a build context/image layer, even if
+# a future Dockerfile change ever does something broader than today's
+# targeted `COPY backend/ ./backend/` + `COPY frontend/ .` (neither touches
+# root .env today, but this is the explicit guarantee, not an accident of
+# directory layout).
+.env
+.env.*
+!.env.example
+
+# Runtime data / secrets-adjacent — never baked into the image, always
+# mounted as volumes (see docker-compose.yml).
+data/
+backups/
+backup/**/*.zip
+logs/
+*.log
+
+# Dev/VCS noise irrelevant to the image.
+.git/
+node_modules/
+__pycache__/
+*.pyc
+.pytest_cache/
+dist/

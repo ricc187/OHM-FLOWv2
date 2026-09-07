@@ -111,6 +111,22 @@ def set_auth_cookie(response, token):
 def clear_auth_cookie(response):
     response.set_cookie(COOKIE_NAME, '', max_age=0, httponly=True, samesite='Lax', path='/')
 
+# A session that hasn't finished onboarding may only reach these two routes
+# until it has. Two gates, checked in this order (see token_required):
+#   1. must_change_password (every role) — a temp/admin-reset password only
+#      ever proves identity for these two routes until it's changed.
+#   2. MFA_REQUIRED_ROLES enrollment (admin only) — checked second, so an
+#      admin can't reach mfa/enroll/* before changing their password either
+#      (mfa_enroll_start/confirm re-check this themselves too, since they
+#      aren't wrapped in token_required — see _resolve_mfa_enroll_actor).
+# Enforced here, not just hidden by the frontend (App.tsx renders the same
+# two gates, in the same order, purely for UX) — a valid but
+# not-yet-onboarded session cookie must not be usable to reach anything
+# else. Previously this only covered the MFA gate — must_change_password
+# was frontend-only, so a stolen/known temp-password session could hit any
+# endpoint directly, bypassing the "change it first" requirement entirely.
+_ONBOARDING_SAFE_ENDPOINTS = {'get_me', 'change_password'}
+
 def token_required(f):
     @functools.wraps(f)
     def decorated(*args, **kwargs):
@@ -142,6 +158,15 @@ def token_required(f):
         except Exception as e:
             return jsonify({'error': 'Token is invalid or expired'}), 401
 
+        if f.__name__ not in _ONBOARDING_SAFE_ENDPOINTS:
+            # Password first, then 2FA — checked in that order so an admin
+            # with both pending can't skip straight to MFA enrollment.
+            if current_user.must_change_password:
+                return jsonify({'error': 'Changez votre mot de passe avant de continuer'}), 403
+            mfa_enroll_pending = current_user.role in MFA_REQUIRED_ROLES and not current_user.mfa_enabled
+            if mfa_enroll_pending:
+                return jsonify({'error': 'Configurez la 2FA avant de continuer'}), 403
+
         return f(current_user, *args, **kwargs)
     return decorated
 
@@ -149,10 +174,19 @@ def token_required(f):
 # --- Auth: password login + role-gated 2FA -----------------------------
 # Only roles listed here are required to set up/use TOTP 2FA at login.
 # 'user' and 'depanneur' log in with password only.
-# TODO: remettre ('admin',) une fois la 2FA reconfiguree cote client
-# (desactivee temporairement le 2026-08-30 — admin verrouille par un
-# enrolement TOTP jamais transmis au client).
-MFA_REQUIRED_ROLES = ()
+# Re-enabled 2026-09-07. The 2026-08-30 lockout (admin verrouille par un
+# enrolement TOTP jamais transmis au client) came from enrollment being
+# gated BEFORE a session existed: if the client lost the QR/secret mid-
+# enrollment, there was no session to log back into and retry from. Fixed
+# by moving enrollment to a post-session, onboarding-gated step instead of
+# a pre-session one (see login() and token_required()'s onboarding check
+# below) — a session is always issued once the password is correct, and
+# an admin who hasn't finished enrolling can only reach /api/me and
+# /api/change-password (still enforced server-side, not just hidden by the
+# frontend) until they do. Real 2FA *verification* (an already-enrolled
+# admin's TOTP code) still happens pre-session, unchanged — only
+# enrollment moved.
+MFA_REQUIRED_ROLES = ('admin',)
 
 # Account lockout after repeated bad password/2FA-code attempts (mirrors a
 # sliding-window count over LoginAttempt, not a live counter — see
@@ -1532,10 +1566,14 @@ def not_found(e):
 # API Routes
 
 # --- Auth: username + password, then role-gated 2FA (see MFA_REQUIRED_ROLES) ---
-# Three-state contract every step below funnels into, mirrored exactly by
-# the frontend's Login.tsx: status is 'ok' (session issued), 'mfa_required'
-# (password OK, enter the 6-digit code) or 'mfa_enroll_required' (password
-# OK, this account needs 2FA set up before it can get a session).
+# Two-state contract, mirrored exactly by the frontend's Login.tsx: status is
+# 'ok' (session issued) or 'mfa_required' (password OK, an already-enrolled
+# admin must enter their 6-digit code before a session is issued — real 2FA
+# *verification*, which must stay pre-session). An admin who hasn't enrolled
+# 2FA yet also gets 'ok' here — enrollment is enforced post-session instead
+# (see token_required's onboarding check + App.tsx), not at login, so a lost
+# QR/secret mid-enrollment can never lock the account out (see MFA_REQUIRED_ROLES
+# comment above for why this changed).
 
 @app.route('/api/login', methods=['POST'])
 @limiter.limit("5 per minute")
@@ -1562,11 +1600,14 @@ def login():
     _reset_lockout(user)
     db.session.commit()
 
-    if user.role in MFA_REQUIRED_ROLES:
-        purpose = 'mfa_verify' if user.mfa_enabled else 'mfa_enroll'
+    # Only an already-enrolled admin is gated here (real 2FA verification).
+    # An admin who still needs to enroll gets a session like anyone else —
+    # see token_required's onboarding check for how that session is
+    # restricted until enrollment is actually done.
+    if user.role in MFA_REQUIRED_ROLES and user.mfa_enabled:
         return jsonify({
-            'status': 'mfa_required' if user.mfa_enabled else 'mfa_enroll_required',
-            'mfa_token': issue_mfa_pending_token(user, purpose),
+            'status': 'mfa_required',
+            'mfa_token': issue_mfa_pending_token(user, 'mfa_verify'),
         })
 
     return _issue_session(user)
@@ -1627,9 +1668,15 @@ def mfa_verify_backup():
 @app.route('/api/mfa/enroll/start', methods=['POST'])
 @limiter.limit("10 per minute")
 def mfa_enroll_start():
-    user, _via_session = _resolve_mfa_enroll_actor(request.json or {})
+    user, via_session = _resolve_mfa_enroll_actor(request.json or {})
     if not user:
         return jsonify({'error': 'Session expirée — reconnectez-vous'}), 401
+    # Onboarding order, enforced here too (not just by App.tsx's render
+    # order) — the session-cookie path is reachable directly, bypassing
+    # token_required's own onboarding check since this route isn't wrapped
+    # in it (see _resolve_mfa_enroll_actor's docstring for why).
+    if via_session and user.must_change_password:
+        return jsonify({'error': 'Changez votre mot de passe avant de configurer la 2FA'}), 400
 
     secret = mfa_service.generate_secret()
     user.mfa_pending_secret_enc = mfa_service.encrypt_secret(secret)
@@ -1649,6 +1696,8 @@ def mfa_enroll_confirm():
     user, via_session = _resolve_mfa_enroll_actor(data)
     if not user:
         return jsonify({'error': 'Session expirée — reconnectez-vous'}), 401
+    if via_session and user.must_change_password:
+        return jsonify({'error': 'Changez votre mot de passe avant de configurer la 2FA'}), 400
     if not user.mfa_pending_secret_enc:
         return jsonify({'error': 'Aucun enrôlement 2FA en cours — recommencez'}), 400
 

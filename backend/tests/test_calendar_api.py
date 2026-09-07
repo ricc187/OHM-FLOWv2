@@ -36,11 +36,18 @@ class CalendarApiTestCase(unittest.TestCase):
     def setUpClass(cls):
         with ohmapp.app.app_context():
             admin = ohmapp.User.query.filter_by(username='Admin').first()
+            # Admin role now requires 2FA (MFA_REQUIRED_ROLES) and starts
+            # must_change_password=True — mark this bootstrap Admin as
+            # already onboarded so its raw session token isn't blocked by
+            # token_required's onboarding check (see app.py).
+            admin.must_change_password = False
+            admin.mfa_enabled = True
+            ohmapp.db.session.commit()
             cls.admin_id = admin.id
 
-            worker_a = ohmapp.User(username='WorkerA', role='user', vacation_balance=10.0)
+            worker_a = ohmapp.User(username='WorkerA', role='user', vacation_balance=10.0, must_change_password=False)
             worker_a.set_pin('1234')
-            worker_b = ohmapp.User(username='WorkerB', role='user', vacation_balance=10.0)
+            worker_b = ohmapp.User(username='WorkerB', role='user', vacation_balance=10.0, must_change_password=False)
             worker_b.set_pin('1234')
             ohmapp.db.session.add_all([worker_a, worker_b])
             ohmapp.db.session.commit()

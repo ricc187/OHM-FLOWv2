@@ -90,6 +90,13 @@ class VoltaSyncTestCase(unittest.TestCase):
         cls.client = ohmapp.app.test_client()
         with ohmapp.app.app_context():
             admin = ohmapp.User.query.filter_by(username='Admin').first()
+            # Admin role now requires 2FA (MFA_REQUIRED_ROLES) and starts
+            # must_change_password=True — mark this bootstrap Admin as
+            # already onboarded so its raw session token isn't blocked by
+            # token_required's onboarding check (see app.py).
+            admin.must_change_password = False
+            admin.mfa_enabled = True
+            ohmapp.db.session.commit()
             cls.token = ohmapp.serializer.dumps({'user_id': admin.id})
             cls.admin_id = admin.id
         cls.client.set_cookie(ohmapp.COOKIE_NAME, cls.token)
@@ -429,7 +436,7 @@ class VoltaSyncTestCase(unittest.TestCase):
 
     def test_endpoint_requires_admin(self):
         with ohmapp.app.app_context():
-            user = ohmapp.User(username=f'plain_{self._testMethodName}', pin_hash='x', role='user', password_hash=None)
+            user = ohmapp.User(username=f'plain_{self._testMethodName}', pin_hash='x', role='user', password_hash=None, must_change_password=False)
             user.set_password('irrelevant-but-valid-Passw0rd!')
             ohmapp.db.session.add(user)
             ohmapp.db.session.commit()
@@ -540,7 +547,7 @@ class VoltaSyncTestCase(unittest.TestCase):
     def test_volta_links_requires_admin(self):
         chantier_id = self._create_chantier('Links admin only')
         with ohmapp.app.app_context():
-            user = ohmapp.User(username=f'plain_{self._testMethodName}', pin_hash='x', role='user', password_hash=None)
+            user = ohmapp.User(username=f'plain_{self._testMethodName}', pin_hash='x', role='user', password_hash=None, must_change_password=False)
             user.set_password('irrelevant-but-valid-Passw0rd!')
             ohmapp.db.session.add(user)
             ohmapp.db.session.commit()
@@ -579,7 +586,7 @@ class VoltaSyncTestCase(unittest.TestCase):
 
     def test_volta_sync_status_requires_admin(self):
         with ohmapp.app.app_context():
-            user = ohmapp.User(username=f'plain_{self._testMethodName}', pin_hash='x', role='user', password_hash=None)
+            user = ohmapp.User(username=f'plain_{self._testMethodName}', pin_hash='x', role='user', password_hash=None, must_change_password=False)
             user.set_password('irrelevant-but-valid-Passw0rd!')
             ohmapp.db.session.add(user)
             ohmapp.db.session.commit()

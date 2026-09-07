@@ -3,6 +3,7 @@ import { User, Chantier } from './types.ts';
 import { Dashboard } from './components/Dashboard';
 import { Login } from './components/Login';
 import { ChangePasswordGate } from './components/ChangePasswordGate';
+import { MfaEnrollFlow } from './components/MfaEnrollFlow';
 import { Layout } from './components/Layout';
 import { NoticeBanner } from './components/NoticeBanner';
 import { api, UNAUTHORIZED_EVENT } from './api';
@@ -187,8 +188,25 @@ function App() {
         return <Login onLoginSuccess={handleLoginSuccess} />;
     }
 
+    // Onboarding order enforced here AND server-side (token_required's
+    // onboarding check in app.py) — password first, then 2FA. A temp
+    // password only ever proves identity for these two steps until both
+    // are done (see MFA_REQUIRED_ROLES comment in app.py for why).
     if (user.must_change_password) {
         return <ChangePasswordGate user={user} onChanged={setUser} />;
+    }
+
+    if (user.mfa_required && !user.mfa_enabled) {
+        return (
+            <div className="h-[100dvh] flex items-center justify-center p-4 bg-ohm-bg safe-top safe-bottom safe-left safe-right">
+                <div className="w-full max-w-sm">
+                    <p className="text-slate-400 text-sm text-center mb-4">
+                        La double authentification est obligatoire sur ce compte — dernière étape avant de continuer.
+                    </p>
+                    <MfaEnrollFlow onComplete={setUser} />
+                </div>
+            </div>
+        );
     }
 
     return (
