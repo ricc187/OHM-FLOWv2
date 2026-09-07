@@ -126,6 +126,10 @@ class AuthTestCase(unittest.TestCase):
         # ...but any real business endpoint is blocked until enrolled.
         blocked = self.client.get('/api/users')
         self.assertEqual(blocked.status_code, 403)
+        # `code` (not just the French `error` text) is what the frontend's
+        # api.ts keys off of to refresh stale user state and redirect —
+        # regression coverage for that contract, not just the status code.
+        self.assertEqual(blocked.get_json()['code'], 'mfa_enroll_required')
 
     def test_must_change_password_session_is_restricted_to_onboarding_routes(self):
         """Regression: must_change_password was only ever enforced by the
@@ -149,6 +153,7 @@ class AuthTestCase(unittest.TestCase):
         blocked = c.get('/api/entries/pending')  # admin-only anyway, but proves the gate fires before the role check
         self.assertEqual(blocked.status_code, 403)
         self.assertIn('mot de passe', blocked.get_json()['error'])
+        self.assertEqual(blocked.get_json()['code'], 'must_change_password')
 
     def test_must_change_password_checked_before_mfa_enrollment(self):
         """An admin with BOTH a temp password and no 2FA enrolled must be

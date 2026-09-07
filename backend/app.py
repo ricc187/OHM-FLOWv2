@@ -127,6 +127,39 @@ def clear_auth_cookie(response):
 # endpoint directly, bypassing the "change it first" requirement entirely.
 _ONBOARDING_SAFE_ENDPOINTS = {'get_me', 'change_password'}
 
+def _resolve_session_cookie(token):
+    """Decodes and validates a session-cookie token: not an MFA pending
+    ticket (see issue_mfa_pending_token — a stolen in-flight login-step
+    ticket must not be usable to reach an authed route even though it's
+    signed with the same key), names a real user, and wasn't issued before
+    that user's sessions were force-invalidated (see
+    /api/users/<id>/force-logout — itsdangerous timestamps only have
+    1-second resolution, so <= not < is the safe default for the
+    same-second edge case). Returns the User on success, None on any
+    failure (missing/malformed/expired/revoked) — callers decide how to
+    report that.
+
+    Shared by token_required and _resolve_mfa_enroll_actor's session-cookie
+    branch, which used to duplicate this same logic — a security fix
+    applied to only one of them could otherwise leave the other silently
+    out of lockstep (e.g. a cookie an admin just force-revoked still usable
+    to overwrite the victim's TOTP secret via mfa_enroll_start/confirm)."""
+    if not token:
+        return None
+    try:
+        data, issued_at = serializer.loads(token, max_age=COOKIE_MAX_AGE, return_timestamp=True)
+        if 'purpose' in data:
+            return None
+        user = db.session.get(User, data['user_id'])
+        if not user:
+            return None
+        if user.sessions_invalidated_at and issued_at.replace(tzinfo=None) <= user.sessions_invalidated_at:
+            return None
+        return user
+    except Exception:
+        return None
+
+
 def token_required(f):
     @functools.wraps(f)
     def decorated(*args, **kwargs):
@@ -134,38 +167,32 @@ def token_required(f):
         if not token:
             return jsonify({'error': 'Token is missing'}), 401
 
-        try:
-            data, issued_at = serializer.loads(token, max_age=COOKIE_MAX_AGE, return_timestamp=True)
-            # MFA pending tickets (see issue_mfa_pending_token) carry a
-            # 'purpose' claim and must never work as a real session, even
-            # though they're signed with the same key — a stolen in-flight
-            # login-step ticket must not be usable to reach an authed route.
-            if 'purpose' in data:
-                raise Exception('Not a session token')
-            current_user = User.query.get(data['user_id'])
-            if not current_user:
-                raise Exception('User not found')
-            # Admin-triggered force-logout (see /api/users/<id>/force-logout) —
-            # any cookie signed at or before that action is dead, everywhere,
-            # even though its own max_age hasn't elapsed yet. itsdangerous
-            # timestamps only have 1-second resolution, so <= (not <) is the
-            # safe default for the same-second edge case: an admin force-
-            # logging someone out and that person logging back in within the
-            # same wall-clock second is vanishingly rare, and "make them log
-            # in again" is the safe failure mode there, not "let it slide".
-            if current_user.sessions_invalidated_at and issued_at.replace(tzinfo=None) <= current_user.sessions_invalidated_at:
-                raise Exception('Session revoked')
-        except Exception as e:
+        current_user = _resolve_session_cookie(token)
+        if not current_user:
             return jsonify({'error': 'Token is invalid or expired'}), 401
 
         if f.__name__ not in _ONBOARDING_SAFE_ENDPOINTS:
             # Password first, then 2FA — checked in that order so an admin
             # with both pending can't skip straight to MFA enrollment.
+            # `code` is a stable, locale-independent marker (unlike `error`,
+            # a French sentence meant for display) — the frontend's api.ts
+            # keys off it to refresh stale client-side `user` state and
+            # redirect to the right onboarding gate, the same way a 401
+            # already triggers a redirect to the login screen. Without it,
+            # an account onboarded mid-session by an admin action elsewhere
+            # (e.g. their password/2FA reset while they're still browsing)
+            # only sees generic errors until they happen to reload the page.
             if current_user.must_change_password:
-                return jsonify({'error': 'Changez votre mot de passe avant de continuer'}), 403
+                return jsonify({
+                    'error': 'Changez votre mot de passe avant de continuer',
+                    'code': 'must_change_password',
+                }), 403
             mfa_enroll_pending = current_user.role in MFA_REQUIRED_ROLES and not current_user.mfa_enabled
             if mfa_enroll_pending:
-                return jsonify({'error': 'Configurez la 2FA avant de continuer'}), 403
+                return jsonify({
+                    'error': 'Configurez la 2FA avant de continuer',
+                    'code': 'mfa_enroll_required',
+                }), 403
 
         return f(current_user, *args, **kwargs)
     return decorated
@@ -269,32 +296,19 @@ def _issue_session(user):
     return response
 
 
-def _resolve_mfa_enroll_actor(data):
-    """Mid-login mandatory enrollment identifies the user via a short-lived
-    mfa_token (no session exists yet); voluntary re-enrollment identifies
-    them via their existing session cookie instead. Returns (user, via_session).
+def _resolve_mfa_enroll_actor():
+    """Identifies who's enrolling 2FA, via their existing session cookie.
+    Returns the User, or None if there isn't a valid one.
 
-    The session-cookie branch duplicates token_required's own checks
-    (purpose rejection, force-logout revocation) rather than calling it,
-    since this isn't wrapped in @token_required (it also has to accept an
-    mfa_token with no session at all) — those checks must stay in lockstep
-    with token_required's, or a cookie an admin just force-revoked could
-    still be used here to overwrite the victim's TOTP secret."""
-    mfa_token = (data or {}).get('mfa_token')
-    if mfa_token:
-        return decode_mfa_pending_token(mfa_token, 'mfa_enroll'), False
-
-    token = request.cookies.get(COOKIE_NAME)
-    if token:
-        try:
-            sess, issued_at = serializer.loads(token, max_age=COOKIE_MAX_AGE, return_timestamp=True)
-            if 'purpose' not in sess:
-                user = db.session.get(User, sess.get('user_id'))
-                if user and not (user.sessions_invalidated_at and issued_at.replace(tzinfo=None) <= user.sessions_invalidated_at):
-                    return user, True
-        except Exception:
-            pass
-    return None, False
+    Historical note: this used to also accept a short-lived mfa_token, for
+    mandatory mid-login enrollment back when a session didn't exist yet at
+    that point in the flow — removed together with that flow (see
+    MFA_REQUIRED_ROLES comment for why pre-session enrollment was the
+    actual cause of the 2026-08-30 lockout). Not wrapped in @token_required
+    itself — mfa_enroll_start/confirm apply their own must_change_password
+    check on the result, since that ordering matters here specifically
+    (password before 2FA) the same way it does in token_required."""
+    return _resolve_session_cookie(request.cookies.get(COOKIE_NAME))
 
 # Enable WAL mode for SQLite (Better concurrency)
 with app.app_context():
@@ -1680,14 +1694,14 @@ def mfa_verify_backup():
 @app.route('/api/mfa/enroll/start', methods=['POST'])
 @limiter.limit("10 per minute")
 def mfa_enroll_start():
-    user, via_session = _resolve_mfa_enroll_actor(request.json or {})
+    user = _resolve_mfa_enroll_actor()
     if not user:
         return jsonify({'error': 'Session expirée — reconnectez-vous'}), 401
     # Onboarding order, enforced here too (not just by App.tsx's render
-    # order) — the session-cookie path is reachable directly, bypassing
-    # token_required's own onboarding check since this route isn't wrapped
-    # in it (see _resolve_mfa_enroll_actor's docstring for why).
-    if via_session and user.must_change_password:
+    # order) — this route isn't wrapped in @token_required (see
+    # _resolve_mfa_enroll_actor's docstring for why), so it doesn't get
+    # token_required's own onboarding check for free.
+    if user.must_change_password:
         return jsonify({'error': 'Changez votre mot de passe avant de configurer la 2FA'}), 400
 
     secret = mfa_service.generate_secret()
@@ -1705,10 +1719,10 @@ def mfa_enroll_start():
 @limiter.limit("10 per minute")
 def mfa_enroll_confirm():
     data = request.json or {}
-    user, via_session = _resolve_mfa_enroll_actor(data)
+    user = _resolve_mfa_enroll_actor()
     if not user:
         return jsonify({'error': 'Session expirée — reconnectez-vous'}), 401
-    if via_session and user.must_change_password:
+    if user.must_change_password:
         return jsonify({'error': 'Changez votre mot de passe avant de configurer la 2FA'}), 400
     if not user.mfa_pending_secret_enc:
         return jsonify({'error': 'Aucun enrôlement 2FA en cours — recommencez'}), 400
@@ -1730,18 +1744,13 @@ def mfa_enroll_confirm():
         db.session.add(MfaBackupCode(user_id=user.id, code_hash=mfa_service.hash_backup_code(code_plain)))
     db.session.commit()
 
-    if via_session:
-        return jsonify({'backup_codes': plaintext_codes, 'session_issued': False, **user.to_dict()})
-
-    # Mandatory mid-login enrollment — completes the login in the same call.
-    _record_login_attempt(user.username, True)
-    _reset_lockout(user)
-    db.session.commit()
-    response_body = {'backup_codes': plaintext_codes, 'session_issued': True, 'status': 'ok', **user.to_dict()}
-    response = jsonify(response_body)
-    token = serializer.dumps({'user_id': user.id})
-    set_auth_cookie(response, token)
-    return response
+    # session_issued is always False now — a session already exists by the
+    # time this runs (enrollment is post-session only, see
+    # _resolve_mfa_enroll_actor). Kept in the response shape since nothing
+    # currently reads it, but removing it outright isn't worth a frontend
+    # contract change for a field that was never wrong, just always the
+    # same value now.
+    return jsonify({'backup_codes': plaintext_codes, 'session_issued': False, **user.to_dict()})
 
 
 @app.route('/api/mfa/status', methods=['GET'])
