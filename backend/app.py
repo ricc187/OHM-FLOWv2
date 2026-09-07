@@ -1597,7 +1597,6 @@ def login():
         return jsonify({'error': "Nom d'utilisateur ou mot de passe incorrect"}), 401
 
     _record_login_attempt(username, True)
-    _reset_lockout(user)
     db.session.commit()
 
     # Only an already-enrolled admin is gated here (real 2FA verification).
@@ -1610,6 +1609,19 @@ def login():
             'mfa_token': issue_mfa_pending_token(user, 'mfa_verify'),
         })
 
+    # _reset_lockout only here — not right after the password check above —
+    # because a correct password alone doesn't finish authenticating this
+    # account when a TOTP code is still required. Resetting it earlier let
+    # an attacker who already has the password wipe the escalating lockout
+    # (see LOCKOUT_DURATIONS_MIN) back to its lowest 15-minute tier before
+    # every burst of 2FA guesses, by simply resubmitting the password first
+    # — defeating the 60-minute/24-hour escalation entirely. mfa_verify and
+    # mfa_verify_backup already reset it correctly, right before issuing a
+    # session on the TOTP/backup-code path (see _issue_session there) — this
+    # is the equivalent for the path that reaches _issue_session from here
+    # directly (no MFA required, or an admin still mid-enrollment).
+    _reset_lockout(user)
+    db.session.commit()
     return _issue_session(user)
 
 
@@ -2837,12 +2849,12 @@ def _approve_leave(leave):
     """Marks a leave APPROVED and deducts the vacation balance for CONGE —
     the one piece of business logic behind "approving a leave", shared by
     the calendar auto-approve-on-create rule for admin-authored entries
-    (POST /api/calendar/leaves) and, indirectly, the manual admin validation
-    route (PUT /api/leaves/<id>/status — see _approve_leave_if_pending,
-    which wraps this for that case). Only safe to call on a leave that has
-    never been approved before — e.g. a brand-new in-memory Leave, not yet
-    committed, as at the calendar call site above. Do not duplicate this
-    elsewhere."""
+    (POST /api/calendar/leaves) and, indirectly, both admin routes that can
+    approve an EXISTING leave — PUT /api/leaves/<id>/status and PUT
+    /api/leaves/<id> — via _approve_leave_if_pending, which wraps this for
+    that case. Only safe to call on a leave that has never been approved
+    before — e.g. a brand-new in-memory Leave, not yet committed, as at the
+    calendar call site above. Do not duplicate this elsewhere."""
     leave.status = 'APPROVED'
     if leave.type == 'CONGE':
         user = db.session.get(User, leave.user_id)
@@ -2852,9 +2864,12 @@ def _approve_leave(leave):
 
 def _approve_leave_if_pending(leave):
     """Same effect as _approve_leave, but idempotent/race-safe for approving
-    an EXISTING leave (PUT /api/leaves/<id>/status) — calling this twice, in
-    a row or from two concurrent requests, must deduct vacation_balance at
-    most once.
+    an EXISTING leave — the single path both admin routes that can do that
+    (PUT /api/leaves/<id>/status and PUT /api/leaves/<id>) go through, so
+    there is exactly one way to approve a leave in the whole app, not two
+    with different guarantees. Calling this twice, in a row, from two
+    concurrent requests, or from either route, must deduct vacation_balance
+    at most once.
 
     _approve_leave itself can't guard against this by re-reading
     leave.status: two concurrent requests can both load the row while it's
@@ -2999,7 +3014,9 @@ def manage_single_leave(current_user, leave_id):
     is_owner = leave.user_id == current_user.id
 
     # Only admin, or the owner while the request is still PENDING, may touch it.
-    # Approving/rejecting stays exclusive to PUT /api/leaves/<id>/status.
+    # An admin can change status from here too (see below) — approving
+    # either way goes through the same _approve_leave_if_pending guard, so
+    # it doesn't matter which of the two routes is used.
     if not is_admin and not (is_owner and leave.status == 'PENDING'):
         return jsonify({'error': 'Admin access required'}), 403
 
@@ -3040,20 +3057,35 @@ def manage_single_leave(current_user, leave_id):
             leave.heure_fin = period['heure_fin']
             leave.toute_la_journee = period['toute_la_journee']
 
-        # Only admin can attach an admin note or change status from here.
-        if is_admin and 'admin_note' in data:
-            leave.admin_note = data['admin_note']
-        if is_admin and 'status' in data:
-            leave.status = data['status']
-
         leave.updated_by_id = current_user.id
         leave.updated_at = datetime.datetime.utcnow()
         # days_count is always recomputed server-side from the (possibly just
-        # updated) dates — never trust a client-supplied value here.
+        # updated) dates — never trust a client-supplied value here. Done
+        # before the status/approval handling below, not after: an approval
+        # arriving in the same PUT as a date change must deduct
+        # vacation_balance using the up-to-date day count, not a stale one
+        # left over from before this edit.
         try:
             leave.days_count = compute_days_count(leave.date_start, leave.date_end)
         except ValueError as e:
             return jsonify({'error': f'Invalid dates: {e}'}), 400
+
+        # Only admin can attach an admin note or change status from here.
+        # Approving is never a direct status assignment — it always goes
+        # through _approve_leave_if_pending, the one place that deducts
+        # vacation_balance and guards against double-approval. This used to
+        # set leave.status = 'APPROVED' directly, a second, unguarded path
+        # to "approved" that bypassed the deduction entirely and left no way
+        # to fix it afterwards (the other route would just see it already
+        # APPROVED and refuse with 409, deducting nothing either).
+        if is_admin and 'admin_note' in data:
+            leave.admin_note = data['admin_note']
+        if is_admin and 'status' in data:
+            if data['status'] == 'APPROVED':
+                if not _approve_leave_if_pending(leave):
+                    return jsonify({'error': 'Ce congé est déjà approuvé'}), 409
+            else:
+                leave.status = data['status']
 
         db.session.commit()
         return jsonify(leave.to_dict())

@@ -286,6 +286,52 @@ class AuthTestCase(unittest.TestCase):
         still_locked = self._login('lockout_target', STRONG_PASSWORD)
         self.assertEqual(still_locked.status_code, 423)
 
+    def test_lockout_escalates_across_mfa_cycles_password_alone_does_not_reset_it(self):
+        """Regression: login() used to call _reset_lockout(user) right after
+        the password check, before the MFA gate — so an attacker who knows
+        an admin's password (but not their TOTP code) could wipe the
+        escalating lockout back to its lowest 15-minute tier before every
+        burst of 2FA guesses, just by resubmitting the correct password
+        first. _reset_lockout must only fire once a session is actually
+        about to be issued (see the comment in login())."""
+        user_id = self._create_user('admin_escalation', 'admin')
+        secret = pyotp.random_base32()
+        with ohmapp.app.app_context():
+            user = ohmapp.db.session.get(ohmapp.User, user_id)
+            user.mfa_enabled = True
+            user.mfa_secret_enc = ohmapp.mfa_service.encrypt_secret(secret)
+            ohmapp.db.session.commit()
+
+        def burn_mfa_attempts():
+            mfa_token = self._login('admin_escalation', STRONG_PASSWORD).get_json()['mfa_token']
+            for _ in range(ohmapp.LOCKOUT_MAX_ATTEMPTS):
+                self.client.post('/api/mfa/verify', json={'mfa_token': mfa_token, 'code': '000000'})
+
+        # Cycle 1: password correct, then exhaust 5 bad TOTP codes -> locked
+        # at the first, 15-minute tier.
+        burn_mfa_attempts()
+        with ohmapp.app.app_context():
+            user = ohmapp.db.session.get(ohmapp.User, user_id)
+            self.assertEqual(user.lockout_stage, 1)
+            first_lock_minutes = (user.locked_until - datetime.datetime.utcnow()).total_seconds() / 60
+            self.assertAlmostEqual(first_lock_minutes, 15, delta=1)
+            # Simulate the 15 minutes having passed (the lock itself
+            # expiring) without touching lockout_stage — is_account_locked
+            # only looks at locked_until.
+            user.locked_until = datetime.datetime.utcnow() - datetime.timedelta(seconds=1)
+            ohmapp.db.session.commit()
+
+        # Cycle 2: password correct again, then exhaust 5 more bad TOTP
+        # codes. If login() still reset lockout_stage on the password step,
+        # this would re-lock at the 15-minute tier again instead of
+        # escalating to the second, 60-minute one.
+        burn_mfa_attempts()
+        with ohmapp.app.app_context():
+            user = ohmapp.db.session.get(ohmapp.User, user_id)
+            self.assertEqual(user.lockout_stage, 2)
+            second_lock_minutes = (user.locked_until - datetime.datetime.utcnow()).total_seconds() / 60
+            self.assertAlmostEqual(second_lock_minutes, 60, delta=1)
+
     # --- Change password ---
 
     def test_change_password_requires_current_password(self):

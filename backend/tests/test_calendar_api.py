@@ -194,9 +194,60 @@ class CalendarApiTestCase(unittest.TestCase):
         second = self.admin_client.put(f'/api/leaves/{leave_id}/status', json={'status': 'APPROVED'})
         self.assertEqual(second.status_code, 409, second.get_json())
 
+    def test_manage_single_leave_put_approval_deducts_balance(self):
+        """Regression: PUT /api/leaves/<id> (manage_single_leave) used to
+        let an admin set status='APPROVED' directly, bypassing
+        _approve_leave_if_pending entirely — vacation_balance was never
+        touched. This route must deduct exactly like PUT
+        /api/leaves/<id>/status does."""
+        create = self.worker_a_client.post('/api/calendar/leaves', json={
+            'user_ids': [self.worker_a_id], 'type': 'ABSENCE',
+            'date_debut': '2026-01-05', 'date_fin': '2026-01-06', 'toute_la_journee': True,
+        })
+        leave_id = create.get_json()[0]['id']
+        with ohmapp.app.app_context():
+            leave = ohmapp.db.session.get(ohmapp.Leave, leave_id)
+            leave.type = 'CONGE'
+            ohmapp.db.session.commit()
+
+        res = self.admin_client.put(f'/api/leaves/{leave_id}', json={'status': 'APPROVED'})
+        self.assertEqual(res.status_code, 200, res.get_json())
+        self.assertEqual(res.get_json()['status'], 'APPROVED')
+
         with ohmapp.app.app_context():
             worker = ohmapp.User.query.get(self.worker_a_id)
-            self.assertEqual(worker.vacation_balance, 8.0)  # 10 - 2 days, deducted ONCE
+            self.assertEqual(worker.vacation_balance, 8.0)  # 10 - 2 days, deducted
+
+    def test_manage_single_leave_rejects_reapproving_already_approved_leave(self):
+        """Same idempotency guard applies here as on PUT
+        /api/leaves/<id>/status — no free re-approval through this route
+        either, and the 409 must stay consistent no matter which of the two
+        routes was used to approve it first."""
+        create = self.worker_a_client.post('/api/calendar/leaves', json={
+            'user_ids': [self.worker_a_id], 'type': 'ABSENCE',
+            'date_debut': '2026-01-08', 'date_fin': '2026-01-08', 'toute_la_journee': True,
+        })
+        leave_id = create.get_json()[0]['id']
+        with ohmapp.app.app_context():
+            leave = ohmapp.db.session.get(ohmapp.Leave, leave_id)
+            leave.type = 'CONGE'
+            ohmapp.db.session.commit()
+
+        first = self.admin_client.put(f'/api/leaves/{leave_id}', json={'status': 'APPROVED'})
+        self.assertEqual(first.status_code, 200, first.get_json())
+
+        # Re-approving through THIS route again: still refused, still 409.
+        second = self.admin_client.put(f'/api/leaves/{leave_id}', json={'status': 'APPROVED'})
+        self.assertEqual(second.status_code, 409, second.get_json())
+
+        # And the OTHER route agrees it's already approved too — consistent
+        # 409 regardless of which endpoint is asked.
+        third = self.admin_client.put(f'/api/leaves/{leave_id}/status', json={'status': 'APPROVED'})
+        self.assertEqual(third.status_code, 409, third.get_json())
+
+        with ohmapp.app.app_context():
+            worker = ohmapp.User.query.get(self.worker_a_id)
+            self.assertEqual(worker.vacation_balance, 9.0)  # 10 - 1 day, deducted exactly once
 
     def test_non_admin_leave_creation_stays_pending_no_deduction(self):
         res = self.worker_a_client.post('/api/calendar/leaves', json={

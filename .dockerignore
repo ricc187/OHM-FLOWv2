@@ -8,17 +8,40 @@
 !.env.example
 
 # Runtime data / secrets-adjacent — never baked into the image, always
-# mounted as volumes (see docker-compose.yml).
+# mounted as volumes (see docker-compose.yml) or written at runtime.
+# Every path below is checked against what actually writes it, not
+# guessed from the docker-compose mount alone — the file the code writes
+# and the path the mount targets aren't always the same:
+#   - data/          SQLALCHEMY_DATABASE_URI + uploads (app.py), ./data mount.
+#   - backend/logs/  audit_log()'s AUDIT_LOG_DIR (app.py) is backend/logs/,
+#                    not the top-level logs/ the web container bind-mounts
+#                    it to (docker-compose.yml) — both are real, on-disk
+#                    paths; excluding only one leaves the other exposed.
+#   - backup/*.db    POST /api/backup (trigger_backup, app.py) writes
+#                    backup/chantier_<timestamp>.db directly — flat, .db.
+#                    NOT backup/**/*.zip (the pattern this used to be):
+#                    wrong extension, and implies nesting that isn't there
+#                    — it never matched an actual file.
+#   - backups/       the separate "backup" cron service's monthly dump
+#                    (backup/backup.sh -> *.zip), host-mounted at
+#                    ./backups — a different directory than backup/ above,
+#                    easy to conflate by name alone.
 data/
-backups/
-backup/**/*.zip
 logs/
+backend/logs/
+backup/*.db
+backups/
 *.log
 
-# Dev/VCS noise irrelevant to the image.
-.git/
-node_modules/
-__pycache__/
+# Dev/VCS noise irrelevant to the image. .git with no trailing slash (not
+# .git/) matches both a real .git/ directory (a normal clone) AND the
+# single-file gitdir pointer a git worktree checkout has instead (this repo
+# is checked out as a worktree, confirmed on disk: .git here is a 95-byte
+# text file, not a directory) — a directory-only pattern silently misses
+# the file case.
+.git
+**/node_modules/
+**/__pycache__/
 *.pyc
 .pytest_cache/
 dist/
