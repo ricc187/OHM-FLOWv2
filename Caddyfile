@@ -1,0 +1,7 @@
+# Replace with the real domain before deploying — see DEPLOY.md.
+your-domain.example {
+	# Single upstream: `web` (Flask/Gunicorn) serves both the API (/api/*)
+	# and the built React frontend as static files from the same process,
+	# so there's no separate frontend/backend split to route here.
+	reverse_proxy web:5000
+}
