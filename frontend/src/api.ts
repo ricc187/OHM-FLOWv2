@@ -11,6 +11,14 @@
 
 export const UNAUTHORIZED_EVENT = 'ohm:unauthorized';
 
+// token_required's onboarding gate (see app.py) also fires from anywhere —
+// e.g. an admin resets another logged-in admin's password/2FA while they're
+// still browsing: their cookie stays valid (no force-logout), so their next
+// call gets this 403 instead of a 401. Same idea as UNAUTHORIZED_EVENT: one
+// global event so App.tsx can refresh its stale `user` state and land on
+// the right onboarding gate, without every component handling it itself.
+export const ONBOARDING_REQUIRED_EVENT = 'ohm:onboarding-required';
+
 // A 401 on these paths is a normal, expected step of the login/2FA flow
 // itself (bad password, bad code, expired mfa_token) — never "your existing
 // session expired", so it must not fire UNAUTHORIZED_EVENT (which drops
@@ -22,6 +30,12 @@ const AUTH_FLOW_PATHS = [
     '/api/mfa/enroll/start',
     '/api/mfa/enroll/confirm',
 ];
+
+// Bodies shaped { error, code: 'must_change_password' | 'mfa_enroll_required' }
+// mark token_required's onboarding 403 specifically — `code` is a stable,
+// locale-independent marker (unlike `error`, a French sentence meant for
+// display), so this never has to match error text.
+const ONBOARDING_CODES = ['must_change_password', 'mfa_enroll_required'];
 
 async function request(path: string, options: RequestInit = {}): Promise<Response> {
     const isFormData = options.body instanceof FormData;
@@ -35,6 +49,18 @@ async function request(path: string, options: RequestInit = {}): Promise<Respons
     });
     if (res.status === 401 && !AUTH_FLOW_PATHS.some(p => path.startsWith(p))) {
         window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+    } else if (res.status === 403) {
+        // .clone() — the caller still needs to read this same response's
+        // body (res.json()) themselves; a Response body can only be
+        // consumed once, so peeking at it here would break every caller
+        // otherwise. Fire-and-forget: never awaited, never throws past
+        // this function, and the original (uncloned) res is returned to
+        // the caller immediately regardless of what this finds.
+        res.clone().json().then(body => {
+            if (body && ONBOARDING_CODES.includes(body.code)) {
+                window.dispatchEvent(new Event(ONBOARDING_REQUIRED_EVENT));
+            }
+        }).catch(() => {}); // not JSON, or no body — not an onboarding 403 either way
     }
     return res;
 }

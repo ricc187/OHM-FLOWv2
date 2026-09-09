@@ -4,19 +4,22 @@ import { User } from '../types';
 import { api } from '../api';
 
 interface Props {
-    // Mid-login mandatory enrollment: identifies the user via this short-lived
-    // ticket (no session exists yet). Omit for voluntary re-enrollment from an
-    // already-logged-in admin's own account settings — the request then relies
-    // on the session cookie instead.
-    mfaToken?: string;
     onComplete: (user: User) => void;
 }
 
-// Reusable in both contexts above. Flow: start (fetch QR + manual key) ->
-// scan (user enters the 6-digit code from their app) -> confirm (shows the
-// one-time backup codes, requires explicit acknowledgement before finishing —
-// they are never shown again after this).
-export const MfaEnrollFlow: React.FC<Props> = ({ mfaToken, onComplete }) => {
+// Always identifies the caller via the session cookie — used both for
+// mandatory onboarding (App.tsx, a fresh/reset account with 2FA pending)
+// and voluntary re-enrollment (an already-logged-in admin's own account
+// settings). There used to be a second, sessionless mode here (a
+// short-lived mfa_token, for mandatory enrollment mid-login before a
+// session existed) — removed together with that flow, see
+// MFA_REQUIRED_ROLES comment in app.py for why pre-session enrollment was
+// the actual cause of the 2026-08-30 lockout.
+// Flow: start (fetch QR + manual key) -> scan (user enters the 6-digit
+// code from their app) -> confirm (shows the one-time backup codes,
+// requires explicit acknowledgement before finishing — they are never
+// shown again after this).
+export const MfaEnrollFlow: React.FC<Props> = ({ onComplete }) => {
     const [stage, setStage] = useState<'loading' | 'scan' | 'backup_codes' | 'error'>('loading');
     const [qr, setQr] = useState('');
     const [manualKey, setManualKey] = useState('');
@@ -32,7 +35,7 @@ export const MfaEnrollFlow: React.FC<Props> = ({ mfaToken, onComplete }) => {
         startedRef.current = true;
         (async () => {
             try {
-                const res = await api.post('/api/mfa/enroll/start', mfaToken ? { mfa_token: mfaToken } : {});
+                const res = await api.post('/api/mfa/enroll/start', {});
                 const data = await res.json();
                 if (!res.ok) throw new Error(data.error || 'Erreur lors de l\'enrôlement');
                 setQr(data.qr_code_data_uri);
@@ -43,14 +46,14 @@ export const MfaEnrollFlow: React.FC<Props> = ({ mfaToken, onComplete }) => {
                 setStage('error');
             }
         })();
-    }, [mfaToken]);
+    }, []);
 
     const submitCode = async (e: React.FormEvent) => {
         e.preventDefault();
         setError('');
         setBusy(true);
         try {
-            const res = await api.post('/api/mfa/enroll/confirm', mfaToken ? { mfa_token: mfaToken, code } : { code });
+            const res = await api.post('/api/mfa/enroll/confirm', { code });
             const data = await res.json();
             if (!res.ok) throw new Error(data.error || 'Code invalide');
             setBackupCodes(data.backup_codes || []);

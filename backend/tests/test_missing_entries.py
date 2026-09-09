@@ -10,6 +10,7 @@ import os
 import sys
 import shutil
 import tempfile
+import threading
 import unittest
 import datetime
 
@@ -48,6 +49,13 @@ class MissingEntriesTestCase(unittest.TestCase):
         cls.client = ohmapp.app.test_client()
         with ohmapp.app.app_context():
             admin = ohmapp.User.query.filter_by(username='Admin').first()
+            # Admin role now requires 2FA (MFA_REQUIRED_ROLES) and starts
+            # must_change_password=True — mark this bootstrap Admin as
+            # already onboarded so its raw session token isn't blocked by
+            # token_required's onboarding check (see app.py).
+            admin.must_change_password = False
+            admin.mfa_enabled = True
+            ohmapp.db.session.commit()
             cls.admin_id = admin.id
             cls.token = ohmapp.serializer.dumps({'user_id': admin.id})
         cls.client.set_cookie(ohmapp.COOKIE_NAME, cls.token)
@@ -55,7 +63,7 @@ class MissingEntriesTestCase(unittest.TestCase):
     def setUp(self):
         with ohmapp.app.app_context():
             tag = self._testMethodName
-            worker = ohmapp.User(username=f'MW_{tag}'[:40], role='user')
+            worker = ohmapp.User(username=f'MW_{tag}'[:40], role='user', must_change_password=False)
             worker.set_pin('1234')
             ohmapp.db.session.add(worker)
             ohmapp.db.session.commit()
@@ -194,6 +202,43 @@ class MissingEntriesTestCase(unittest.TestCase):
             'user_id': self.worker_id, 'date': TUESDAY.isoformat()
         })
         self.assertEqual(res3.status_code, 409)
+
+    def test_concurrent_acknowledge_same_user_date_no_duplicate_no_crash(self):
+        """Regression: two admins acknowledging the same (user_id, date) at
+        the same instant both pass the pre-check before either commits — the
+        loser used to fall through to the generic IntegrityError handler
+        (400 "Invalid or inconsistent data") instead of the same clean 409
+        the sequential case gets. Must resolve to exactly one row, and the
+        loser must get the same 409, never a 400 or a crash."""
+        self._assign(TUESDAY.isoformat())
+        with ohmapp.app.app_context():
+            admin_token = ohmapp.serializer.dumps({'user_id': self.admin_id})
+        client_a = ohmapp.app.test_client()
+        client_a.set_cookie(ohmapp.COOKIE_NAME, admin_token)
+        client_b = ohmapp.app.test_client()
+        client_b.set_cookie(ohmapp.COOKIE_NAME, admin_token)
+
+        payload = {'user_id': self.worker_id, 'date': TUESDAY.isoformat()}
+        barrier = threading.Barrier(2)
+        results = [None, None]
+
+        def call(i, client):
+            barrier.wait()
+            results[i] = client.post('/api/admin/missing-entries/acknowledge', json=payload)
+
+        t1 = threading.Thread(target=call, args=(0, client_a))
+        t2 = threading.Thread(target=call, args=(1, client_b))
+        t1.start(); t2.start()
+        t1.join(); t2.join()
+
+        codes = sorted(r.status_code for r in results)
+        self.assertEqual(codes, [201, 409], [r.get_json() for r in results])
+
+        with ohmapp.app.app_context():
+            count = ohmapp.MissingEntryAcknowledgement.query.filter_by(
+                user_id=self.worker_id, date=TUESDAY.isoformat()
+            ).count()
+            self.assertEqual(count, 1)
 
     def test_acknowledge_reason_optional(self):
         self._assign(TUESDAY.isoformat())

@@ -3,9 +3,10 @@ import { User, Chantier } from './types.ts';
 import { Dashboard } from './components/Dashboard';
 import { Login } from './components/Login';
 import { ChangePasswordGate } from './components/ChangePasswordGate';
+import { MfaEnrollFlow } from './components/MfaEnrollFlow';
 import { Layout } from './components/Layout';
 import { NoticeBanner } from './components/NoticeBanner';
-import { api, UNAUTHORIZED_EVENT } from './api';
+import { api, UNAUTHORIZED_EVENT, ONBOARDING_REQUIRED_EVENT } from './api';
 import { trySyncQueue } from './offlineQueue';
 import { useInactivityLogout } from './hooks/useInactivityLogout';
 
@@ -91,6 +92,24 @@ function App() {
         return () => window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
     }, []);
 
+    // Any onboarding 403 from anywhere in the app (see api.ts) means our
+    // local `user` is stale — e.g. an admin reset this account's
+    // password/2FA while it was still browsing, so the cookie is still
+    // valid but token_required now blocks it. Re-fetch /api/me so the
+    // must_change_password/mfa_required gates below pick up the real
+    // state and redirect on their own, instead of the user seeing generic
+    // errors on every action until they happen to reload the page.
+    useEffect(() => {
+        const onOnboardingRequired = () => {
+            (async () => {
+                const res = await api.get('/api/me');
+                if (res.ok) setUser(await res.json());
+            })();
+        };
+        window.addEventListener(ONBOARDING_REQUIRED_EVENT, onOnboardingRequired);
+        return () => window.removeEventListener(ONBOARDING_REQUIRED_EVENT, onOnboardingRequired);
+    }, []);
+
     // Auto-logout after 20 minutes with no interaction anywhere in the app
     // (mouse/keyboard/touch/scroll) — an unattended unlocked device stops
     // being a live session on its own, without waiting for the cookie's
@@ -130,6 +149,15 @@ function App() {
     useEffect(() => {
         if (!user || !selectedChantierId) return;
         if (selectedChantier?.id === selectedChantierId) return;
+        // Onboarding not finished yet (see the gates below, right after
+        // this component's other hooks) — this fetch would 403, and
+        // previously the else branch below treated that identically to
+        // "chantier gone", discarding selectedChantierId for good. Wait
+        // instead: this effect re-runs on every `user` change, including
+        // the one ChangePasswordGate/MfaEnrollFlow's onChanged/onComplete
+        // triggers once onboarding actually finishes — the deep link
+        // resolves then instead of being lost.
+        if (user.must_change_password || (user.mfa_required && !user.mfa_enabled)) return;
         (async () => {
             const res = await api.get(`/api/chantiers/${selectedChantierId}`);
             if (res.ok) {
@@ -187,8 +215,25 @@ function App() {
         return <Login onLoginSuccess={handleLoginSuccess} />;
     }
 
+    // Onboarding order enforced here AND server-side (token_required's
+    // onboarding check in app.py) — password first, then 2FA. A temp
+    // password only ever proves identity for these two steps until both
+    // are done (see MFA_REQUIRED_ROLES comment in app.py for why).
     if (user.must_change_password) {
         return <ChangePasswordGate user={user} onChanged={setUser} />;
+    }
+
+    if (user.mfa_required && !user.mfa_enabled) {
+        return (
+            <div className="h-[100dvh] flex items-center justify-center p-4 bg-ohm-bg safe-top safe-bottom safe-left safe-right">
+                <div className="w-full max-w-sm">
+                    <p className="text-slate-400 text-sm text-center mb-4">
+                        La double authentification est obligatoire sur ce compte — dernière étape avant de continuer.
+                    </p>
+                    <MfaEnrollFlow onComplete={setUser} />
+                </div>
+            </div>
+        );
     }
 
     return (

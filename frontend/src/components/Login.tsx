@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import { Logo, OhmIcon } from './Icons';
-import { MfaEnrollFlow } from './MfaEnrollFlow';
 import { LoginResult, User } from '../types';
 import { api } from '../api';
 import { Zap } from 'lucide-react';
@@ -116,7 +115,12 @@ export const Login: React.FC<Props> = ({ onLoginSuccess }) => {
     const [password, setPassword] = useState('');
     const [error, setError] = useState('');
     const [busy, setBusy] = useState(false);
-    const [step, setStep] = useState<'password' | 'mfa_code' | 'mfa_enroll'>('password');
+    // 'mfa_enroll_required' no longer comes back from /api/login — an admin
+    // who hasn't set up 2FA yet gets a normal session ('ok') and is walked
+    // through enrollment post-session by App.tsx instead (see MFA_REQUIRED_ROLES
+    // comment in app.py for why). Only 'mfa_required' (an already-enrolled
+    // admin's TOTP code) is still a pre-session step here.
+    const [step, setStep] = useState<'password' | 'mfa_code'>('password');
     const [mfaToken, setMfaToken] = useState('');
 
     const submit = async (e: React.FormEvent) => {
@@ -130,7 +134,6 @@ export const Login: React.FC<Props> = ({ onLoginSuccess }) => {
 
             if (data.status === 'ok') { onLoginSuccess(data); return; }
             if (data.status === 'mfa_required') { setMfaToken(data.mfa_token); setStep('mfa_code'); return; }
-            if (data.status === 'mfa_enroll_required') { setMfaToken(data.mfa_token); setStep('mfa_enroll'); return; }
         } catch (err: any) {
             setError(err.message || 'Erreur réseau');
             setBusy(false);
@@ -143,22 +146,6 @@ export const Login: React.FC<Props> = ({ onLoginSuccess }) => {
                 <LoginVisual />
                 <div className="flex items-center justify-center p-4 bg-ohm-bg overflow-y-auto">
                     <MfaCodeStep mfaToken={mfaToken} onDone={onLoginSuccess} />
-                </div>
-            </div>
-        );
-    }
-
-    if (step === 'mfa_enroll') {
-        return (
-            <div className="h-[100dvh] grid lg:grid-cols-2 safe-top safe-bottom safe-left safe-right">
-                <LoginVisual />
-                <div className="flex items-center justify-center p-4 bg-ohm-bg overflow-y-auto">
-                    <div className="w-full max-w-sm">
-                        <p className="text-slate-400 text-sm text-center mb-4">
-                            La double authentification est obligatoire sur ce compte — dernière étape avant de continuer.
-                        </p>
-                        <MfaEnrollFlow mfaToken={mfaToken} onComplete={onLoginSuccess} />
-                    </div>
                 </div>
             </div>
         );

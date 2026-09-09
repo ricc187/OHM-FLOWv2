@@ -111,6 +111,55 @@ def set_auth_cookie(response, token):
 def clear_auth_cookie(response):
     response.set_cookie(COOKIE_NAME, '', max_age=0, httponly=True, samesite='Lax', path='/')
 
+# A session that hasn't finished onboarding may only reach these two routes
+# until it has. Two gates, checked in this order (see token_required):
+#   1. must_change_password (every role) — a temp/admin-reset password only
+#      ever proves identity for these two routes until it's changed.
+#   2. MFA_REQUIRED_ROLES enrollment (admin only) — checked second, so an
+#      admin can't reach mfa/enroll/* before changing their password either
+#      (mfa_enroll_start/confirm re-check this themselves too, since they
+#      aren't wrapped in token_required — see _resolve_mfa_enroll_actor).
+# Enforced here, not just hidden by the frontend (App.tsx renders the same
+# two gates, in the same order, purely for UX) — a valid but
+# not-yet-onboarded session cookie must not be usable to reach anything
+# else. Previously this only covered the MFA gate — must_change_password
+# was frontend-only, so a stolen/known temp-password session could hit any
+# endpoint directly, bypassing the "change it first" requirement entirely.
+_ONBOARDING_SAFE_ENDPOINTS = {'get_me', 'change_password'}
+
+def _resolve_session_cookie(token):
+    """Decodes and validates a session-cookie token: not an MFA pending
+    ticket (see issue_mfa_pending_token — a stolen in-flight login-step
+    ticket must not be usable to reach an authed route even though it's
+    signed with the same key), names a real user, and wasn't issued before
+    that user's sessions were force-invalidated (see
+    /api/users/<id>/force-logout — itsdangerous timestamps only have
+    1-second resolution, so <= not < is the safe default for the
+    same-second edge case). Returns the User on success, None on any
+    failure (missing/malformed/expired/revoked) — callers decide how to
+    report that.
+
+    Shared by token_required and _resolve_mfa_enroll_actor's session-cookie
+    branch, which used to duplicate this same logic — a security fix
+    applied to only one of them could otherwise leave the other silently
+    out of lockstep (e.g. a cookie an admin just force-revoked still usable
+    to overwrite the victim's TOTP secret via mfa_enroll_start/confirm)."""
+    if not token:
+        return None
+    try:
+        data, issued_at = serializer.loads(token, max_age=COOKIE_MAX_AGE, return_timestamp=True)
+        if 'purpose' in data:
+            return None
+        user = db.session.get(User, data['user_id'])
+        if not user:
+            return None
+        if user.sessions_invalidated_at and issued_at.replace(tzinfo=None) <= user.sessions_invalidated_at:
+            return None
+        return user
+    except Exception:
+        return None
+
+
 def token_required(f):
     @functools.wraps(f)
     def decorated(*args, **kwargs):
@@ -118,29 +167,32 @@ def token_required(f):
         if not token:
             return jsonify({'error': 'Token is missing'}), 401
 
-        try:
-            data, issued_at = serializer.loads(token, max_age=COOKIE_MAX_AGE, return_timestamp=True)
-            # MFA pending tickets (see issue_mfa_pending_token) carry a
-            # 'purpose' claim and must never work as a real session, even
-            # though they're signed with the same key — a stolen in-flight
-            # login-step ticket must not be usable to reach an authed route.
-            if 'purpose' in data:
-                raise Exception('Not a session token')
-            current_user = User.query.get(data['user_id'])
-            if not current_user:
-                raise Exception('User not found')
-            # Admin-triggered force-logout (see /api/users/<id>/force-logout) —
-            # any cookie signed at or before that action is dead, everywhere,
-            # even though its own max_age hasn't elapsed yet. itsdangerous
-            # timestamps only have 1-second resolution, so <= (not <) is the
-            # safe default for the same-second edge case: an admin force-
-            # logging someone out and that person logging back in within the
-            # same wall-clock second is vanishingly rare, and "make them log
-            # in again" is the safe failure mode there, not "let it slide".
-            if current_user.sessions_invalidated_at and issued_at.replace(tzinfo=None) <= current_user.sessions_invalidated_at:
-                raise Exception('Session revoked')
-        except Exception as e:
+        current_user = _resolve_session_cookie(token)
+        if not current_user:
             return jsonify({'error': 'Token is invalid or expired'}), 401
+
+        if f.__name__ not in _ONBOARDING_SAFE_ENDPOINTS:
+            # Password first, then 2FA — checked in that order so an admin
+            # with both pending can't skip straight to MFA enrollment.
+            # `code` is a stable, locale-independent marker (unlike `error`,
+            # a French sentence meant for display) — the frontend's api.ts
+            # keys off it to refresh stale client-side `user` state and
+            # redirect to the right onboarding gate, the same way a 401
+            # already triggers a redirect to the login screen. Without it,
+            # an account onboarded mid-session by an admin action elsewhere
+            # (e.g. their password/2FA reset while they're still browsing)
+            # only sees generic errors until they happen to reload the page.
+            if current_user.must_change_password:
+                return jsonify({
+                    'error': 'Changez votre mot de passe avant de continuer',
+                    'code': 'must_change_password',
+                }), 403
+            mfa_enroll_pending = current_user.role in MFA_REQUIRED_ROLES and not current_user.mfa_enabled
+            if mfa_enroll_pending:
+                return jsonify({
+                    'error': 'Configurez la 2FA avant de continuer',
+                    'code': 'mfa_enroll_required',
+                }), 403
 
         return f(current_user, *args, **kwargs)
     return decorated
@@ -149,10 +201,19 @@ def token_required(f):
 # --- Auth: password login + role-gated 2FA -----------------------------
 # Only roles listed here are required to set up/use TOTP 2FA at login.
 # 'user' and 'depanneur' log in with password only.
-# TODO: remettre ('admin',) une fois la 2FA reconfiguree cote client
-# (desactivee temporairement le 2026-08-30 — admin verrouille par un
-# enrolement TOTP jamais transmis au client).
-MFA_REQUIRED_ROLES = ()
+# Re-enabled 2026-09-07. The 2026-08-30 lockout (admin verrouille par un
+# enrolement TOTP jamais transmis au client) came from enrollment being
+# gated BEFORE a session existed: if the client lost the QR/secret mid-
+# enrollment, there was no session to log back into and retry from. Fixed
+# by moving enrollment to a post-session, onboarding-gated step instead of
+# a pre-session one (see login() and token_required()'s onboarding check
+# below) — a session is always issued once the password is correct, and
+# an admin who hasn't finished enrolling can only reach /api/me and
+# /api/change-password (still enforced server-side, not just hidden by the
+# frontend) until they do. Real 2FA *verification* (an already-enrolled
+# admin's TOTP code) still happens pre-session, unchanged — only
+# enrollment moved.
+MFA_REQUIRED_ROLES = ('admin',)
 
 # Account lockout after repeated bad password/2FA-code attempts (mirrors a
 # sliding-window count over LoginAttempt, not a live counter — see
@@ -235,32 +296,19 @@ def _issue_session(user):
     return response
 
 
-def _resolve_mfa_enroll_actor(data):
-    """Mid-login mandatory enrollment identifies the user via a short-lived
-    mfa_token (no session exists yet); voluntary re-enrollment identifies
-    them via their existing session cookie instead. Returns (user, via_session).
+def _resolve_mfa_enroll_actor():
+    """Identifies who's enrolling 2FA, via their existing session cookie.
+    Returns the User, or None if there isn't a valid one.
 
-    The session-cookie branch duplicates token_required's own checks
-    (purpose rejection, force-logout revocation) rather than calling it,
-    since this isn't wrapped in @token_required (it also has to accept an
-    mfa_token with no session at all) — those checks must stay in lockstep
-    with token_required's, or a cookie an admin just force-revoked could
-    still be used here to overwrite the victim's TOTP secret."""
-    mfa_token = (data or {}).get('mfa_token')
-    if mfa_token:
-        return decode_mfa_pending_token(mfa_token, 'mfa_enroll'), False
-
-    token = request.cookies.get(COOKIE_NAME)
-    if token:
-        try:
-            sess, issued_at = serializer.loads(token, max_age=COOKIE_MAX_AGE, return_timestamp=True)
-            if 'purpose' not in sess:
-                user = db.session.get(User, sess.get('user_id'))
-                if user and not (user.sessions_invalidated_at and issued_at.replace(tzinfo=None) <= user.sessions_invalidated_at):
-                    return user, True
-        except Exception:
-            pass
-    return None, False
+    Historical note: this used to also accept a short-lived mfa_token, for
+    mandatory mid-login enrollment back when a session didn't exist yet at
+    that point in the flow — removed together with that flow (see
+    MFA_REQUIRED_ROLES comment for why pre-session enrollment was the
+    actual cause of the 2026-08-30 lockout). Not wrapped in @token_required
+    itself — mfa_enroll_start/confirm apply their own must_change_password
+    check on the result, since that ordering matters here specifically
+    (password before 2FA) the same way it does in token_required."""
+    return _resolve_session_cookie(request.cookies.get(COOKIE_NAME))
 
 # Enable WAL mode for SQLite (Better concurrency)
 with app.app_context():
@@ -1532,10 +1580,14 @@ def not_found(e):
 # API Routes
 
 # --- Auth: username + password, then role-gated 2FA (see MFA_REQUIRED_ROLES) ---
-# Three-state contract every step below funnels into, mirrored exactly by
-# the frontend's Login.tsx: status is 'ok' (session issued), 'mfa_required'
-# (password OK, enter the 6-digit code) or 'mfa_enroll_required' (password
-# OK, this account needs 2FA set up before it can get a session).
+# Two-state contract, mirrored exactly by the frontend's Login.tsx: status is
+# 'ok' (session issued) or 'mfa_required' (password OK, an already-enrolled
+# admin must enter their 6-digit code before a session is issued — real 2FA
+# *verification*, which must stay pre-session). An admin who hasn't enrolled
+# 2FA yet also gets 'ok' here — enrollment is enforced post-session instead
+# (see token_required's onboarding check + App.tsx), not at login, so a lost
+# QR/secret mid-enrollment can never lock the account out (see MFA_REQUIRED_ROLES
+# comment above for why this changed).
 
 @app.route('/api/login', methods=['POST'])
 @limiter.limit("5 per minute")
@@ -1559,16 +1611,31 @@ def login():
         return jsonify({'error': "Nom d'utilisateur ou mot de passe incorrect"}), 401
 
     _record_login_attempt(username, True)
-    _reset_lockout(user)
     db.session.commit()
 
-    if user.role in MFA_REQUIRED_ROLES:
-        purpose = 'mfa_verify' if user.mfa_enabled else 'mfa_enroll'
+    # Only an already-enrolled admin is gated here (real 2FA verification).
+    # An admin who still needs to enroll gets a session like anyone else —
+    # see token_required's onboarding check for how that session is
+    # restricted until enrollment is actually done.
+    if user.role in MFA_REQUIRED_ROLES and user.mfa_enabled:
         return jsonify({
-            'status': 'mfa_required' if user.mfa_enabled else 'mfa_enroll_required',
-            'mfa_token': issue_mfa_pending_token(user, purpose),
+            'status': 'mfa_required',
+            'mfa_token': issue_mfa_pending_token(user, 'mfa_verify'),
         })
 
+    # _reset_lockout only here — not right after the password check above —
+    # because a correct password alone doesn't finish authenticating this
+    # account when a TOTP code is still required. Resetting it earlier let
+    # an attacker who already has the password wipe the escalating lockout
+    # (see LOCKOUT_DURATIONS_MIN) back to its lowest 15-minute tier before
+    # every burst of 2FA guesses, by simply resubmitting the password first
+    # — defeating the 60-minute/24-hour escalation entirely. mfa_verify and
+    # mfa_verify_backup already reset it correctly, right before issuing a
+    # session on the TOTP/backup-code path (see _issue_session there) — this
+    # is the equivalent for the path that reaches _issue_session from here
+    # directly (no MFA required, or an admin still mid-enrollment).
+    _reset_lockout(user)
+    db.session.commit()
     return _issue_session(user)
 
 
@@ -1627,9 +1694,15 @@ def mfa_verify_backup():
 @app.route('/api/mfa/enroll/start', methods=['POST'])
 @limiter.limit("10 per minute")
 def mfa_enroll_start():
-    user, _via_session = _resolve_mfa_enroll_actor(request.json or {})
+    user = _resolve_mfa_enroll_actor()
     if not user:
         return jsonify({'error': 'Session expirée — reconnectez-vous'}), 401
+    # Onboarding order, enforced here too (not just by App.tsx's render
+    # order) — this route isn't wrapped in @token_required (see
+    # _resolve_mfa_enroll_actor's docstring for why), so it doesn't get
+    # token_required's own onboarding check for free.
+    if user.must_change_password:
+        return jsonify({'error': 'Changez votre mot de passe avant de configurer la 2FA'}), 400
 
     secret = mfa_service.generate_secret()
     user.mfa_pending_secret_enc = mfa_service.encrypt_secret(secret)
@@ -1646,9 +1719,11 @@ def mfa_enroll_start():
 @limiter.limit("10 per minute")
 def mfa_enroll_confirm():
     data = request.json or {}
-    user, via_session = _resolve_mfa_enroll_actor(data)
+    user = _resolve_mfa_enroll_actor()
     if not user:
         return jsonify({'error': 'Session expirée — reconnectez-vous'}), 401
+    if user.must_change_password:
+        return jsonify({'error': 'Changez votre mot de passe avant de configurer la 2FA'}), 400
     if not user.mfa_pending_secret_enc:
         return jsonify({'error': 'Aucun enrôlement 2FA en cours — recommencez'}), 400
 
@@ -1669,18 +1744,13 @@ def mfa_enroll_confirm():
         db.session.add(MfaBackupCode(user_id=user.id, code_hash=mfa_service.hash_backup_code(code_plain)))
     db.session.commit()
 
-    if via_session:
-        return jsonify({'backup_codes': plaintext_codes, 'session_issued': False, **user.to_dict()})
-
-    # Mandatory mid-login enrollment — completes the login in the same call.
-    _record_login_attempt(user.username, True)
-    _reset_lockout(user)
-    db.session.commit()
-    response_body = {'backup_codes': plaintext_codes, 'session_issued': True, 'status': 'ok', **user.to_dict()}
-    response = jsonify(response_body)
-    token = serializer.dumps({'user_id': user.id})
-    set_auth_cookie(response, token)
-    return response
+    # session_issued is always False now — a session already exists by the
+    # time this runs (enrollment is post-session only, see
+    # _resolve_mfa_enroll_actor). Kept in the response shape since nothing
+    # currently reads it, but removing it outright isn't worth a frontend
+    # contract change for a field that was never wrong, just always the
+    # same value now.
+    return jsonify({'backup_codes': plaintext_codes, 'session_issued': False, **user.to_dict()})
 
 
 @app.route('/api/mfa/status', methods=['GET'])
@@ -2607,7 +2677,17 @@ def acknowledge_missing_entry(current_user):
         reason=(data.get('reason') or '').strip() or None,
     )
     db.session.add(ack)
-    db.session.commit()
+    try:
+        db.session.commit()
+    except IntegrityError:
+        # Two concurrent acknowledgements of the same (user_id, date) both
+        # pass the pre-check above before either commits — the loser hits
+        # the unique constraint here. Without this, it'd fall through to
+        # the generic IntegrityError handler ("Invalid or inconsistent
+        # data", a 400) instead of the same clean 409 the pre-check gives
+        # the common sequential case.
+        db.session.rollback()
+        return jsonify({'error': 'Already acknowledged'}), 409
     audit_log('missing_entries', current_user,
                f"acknowledged missing entry: {target_user.username} on {date}" + (f" — {ack.reason}" if ack.reason else ""))
     return jsonify(ack.to_dict()), 201
@@ -2777,14 +2857,57 @@ def _chantier_color(chantier_id):
 def _approve_leave(leave):
     """Marks a leave APPROVED and deducts the vacation balance for CONGE —
     the one piece of business logic behind "approving a leave", shared by
-    the manual admin validation route (PUT /api/leaves/<id>/status) and the
-    calendar auto-approve-on-create rule for admin-authored entries (POST
-    /api/calendar/leaves). Do not duplicate this elsewhere."""
+    the calendar auto-approve-on-create rule for admin-authored entries
+    (POST /api/calendar/leaves) and, indirectly, both admin routes that can
+    approve an EXISTING leave — PUT /api/leaves/<id>/status and PUT
+    /api/leaves/<id> — via _approve_leave_if_pending, which wraps this for
+    that case. Only safe to call on a leave that has never been approved
+    before — e.g. a brand-new in-memory Leave, not yet committed, as at the
+    calendar call site above. Do not duplicate this elsewhere."""
     leave.status = 'APPROVED'
     if leave.type == 'CONGE':
         user = db.session.get(User, leave.user_id)
         if user:
             user.vacation_balance -= leave.days_count
+
+
+def _approve_leave_if_pending(leave):
+    """Same effect as _approve_leave, but idempotent/race-safe for approving
+    an EXISTING leave — the single path both admin routes that can do that
+    (PUT /api/leaves/<id>/status and PUT /api/leaves/<id>) go through, so
+    there is exactly one way to approve a leave in the whole app, not two
+    with different guarantees. Calling this twice, in a row, from two
+    concurrent requests, or from either route, must deduct vacation_balance
+    at most once.
+
+    _approve_leave itself can't guard against this by re-reading
+    leave.status: two concurrent requests can both load the row while it's
+    still PENDING and both decide to approve it before either commits. The
+    fix is a single atomic conditional UPDATE instead of "read status, then
+    decide" — `WHERE status != 'APPROVED'` only matches (and only lets this
+    request deduct the balance) if the row hasn't already been flipped.
+    SQLite allows only one writer at a time (see WAL/busy_timeout config),
+    so if two requests race, whichever commits first wins the update; the
+    other's UPDATE runs afterwards against the now-committed row, matches 0
+    rows, and returns False here — no re-deduction, no lost update.
+
+    Returns True if this call actually approved it, False if it was already
+    APPROVED (caller should report that as a 409, not silently no-op)."""
+    rowcount = Leave.query.filter(
+        Leave.id == leave.id, Leave.status != 'APPROVED'
+    ).update({'status': 'APPROVED'}, synchronize_session=False)
+    if rowcount == 0:
+        db.session.rollback()
+        return False
+    # Mirror the change onto the already-loaded object (the UPDATE above
+    # bypassed the ORM's normal attribute-setting) so leave.to_dict() below
+    # reflects it without an extra round-trip.
+    leave.status = 'APPROVED'
+    if leave.type == 'CONGE':
+        user = db.session.get(User, leave.user_id)
+        if user:
+            user.vacation_balance -= leave.days_count
+    return True
 
 
 def _validate_period(payload):
@@ -2881,7 +3004,8 @@ def update_leave_status(current_user, leave_id):
         return jsonify({'error': 'Invalid status'}), 400
 
     if status == 'APPROVED':
-        _approve_leave(leave)
+        if not _approve_leave_if_pending(leave):
+            return jsonify({'error': 'Ce congé est déjà approuvé'}), 409
     else:
         leave.status = status
 
@@ -2899,7 +3023,9 @@ def manage_single_leave(current_user, leave_id):
     is_owner = leave.user_id == current_user.id
 
     # Only admin, or the owner while the request is still PENDING, may touch it.
-    # Approving/rejecting stays exclusive to PUT /api/leaves/<id>/status.
+    # An admin can change status from here too (see below) — approving
+    # either way goes through the same _approve_leave_if_pending guard, so
+    # it doesn't matter which of the two routes is used.
     if not is_admin and not (is_owner and leave.status == 'PENDING'):
         return jsonify({'error': 'Admin access required'}), 403
 
@@ -2940,20 +3066,35 @@ def manage_single_leave(current_user, leave_id):
             leave.heure_fin = period['heure_fin']
             leave.toute_la_journee = period['toute_la_journee']
 
-        # Only admin can attach an admin note or change status from here.
-        if is_admin and 'admin_note' in data:
-            leave.admin_note = data['admin_note']
-        if is_admin and 'status' in data:
-            leave.status = data['status']
-
         leave.updated_by_id = current_user.id
         leave.updated_at = datetime.datetime.utcnow()
         # days_count is always recomputed server-side from the (possibly just
-        # updated) dates — never trust a client-supplied value here.
+        # updated) dates — never trust a client-supplied value here. Done
+        # before the status/approval handling below, not after: an approval
+        # arriving in the same PUT as a date change must deduct
+        # vacation_balance using the up-to-date day count, not a stale one
+        # left over from before this edit.
         try:
             leave.days_count = compute_days_count(leave.date_start, leave.date_end)
         except ValueError as e:
             return jsonify({'error': f'Invalid dates: {e}'}), 400
+
+        # Only admin can attach an admin note or change status from here.
+        # Approving is never a direct status assignment — it always goes
+        # through _approve_leave_if_pending, the one place that deducts
+        # vacation_balance and guards against double-approval. This used to
+        # set leave.status = 'APPROVED' directly, a second, unguarded path
+        # to "approved" that bypassed the deduction entirely and left no way
+        # to fix it afterwards (the other route would just see it already
+        # APPROVED and refuse with 409, deducting nothing either).
+        if is_admin and 'admin_note' in data:
+            leave.admin_note = data['admin_note']
+        if is_admin and 'status' in data:
+            if data['status'] == 'APPROVED':
+                if not _approve_leave_if_pending(leave):
+                    return jsonify({'error': 'Ce congé est déjà approuvé'}), 409
+            else:
+                leave.status = data['status']
 
         db.session.commit()
         return jsonify(leave.to_dict())
@@ -3116,12 +3257,26 @@ def valider_chantier_assignment(current_user, assignment_id):
     the SAME winning date — bug, reported after real use).
     Only meaningful on a statut='proposition' row — confirming an
     already-confirme entry (no group) is a no-op error, not a silent
-    success, since there'd be nothing to actually resolve."""
+    success, since there'd be nothing to actually resolve.
+
+    Concurrency: two different candidate dates of the SAME group can be
+    validated at (almost) the same instant — e.g. two admins racing to pick
+    the winner. Each request initially sees every row (including the OTHER
+    request's target) as still statut='proposition', and each one deletes
+    the other's target as a "losing sibling". Whichever commits first wins
+    cleanly; the loser must not crash trying to confirm a row that no longer
+    exists. Every write below is therefore a conditional bulk statement
+    (WHERE statut='proposition', synchronize_session=False) rather than
+    "mutate the loaded ORM object and let flush() figure it out" — a 0-row
+    match is a normal outcome here (someone else got there first), not an
+    error, and never raises SQLAlchemy's StaleDataError."""
     a = db.session.get(ChantierAssignment, assignment_id)
     if not a:
         return jsonify({'error': 'Assignment not found'}), 404
     if a.statut != 'proposition':
         return jsonify({'error': 'Cette entrée n\'est pas une proposition à valider'}), 400
+
+    now = datetime.datetime.utcnow()
 
     if a.proposal_group_id:
         winning_period = (a.date_debut, a.date_fin, a.heure_debut, a.heure_fin, bool(a.toute_la_journee))
@@ -3129,22 +3284,49 @@ def valider_chantier_assignment(current_user, assignment_id):
             ChantierAssignment.proposal_group_id == a.proposal_group_id,
             ChantierAssignment.id != a.id,
         ).all()
+        co_winner_ids = []
+        loser_ids = []
         for sibling in siblings:
             sibling_period = (sibling.date_debut, sibling.date_fin, sibling.heure_debut, sibling.heure_fin, bool(sibling.toute_la_journee))
-            if sibling_period == winning_period:
-                # Same candidate date, different employee — this date won
-                # for everyone assigned to it, confirm them too.
-                sibling.statut = 'confirme'
-                sibling.proposal_group_id = None
-                sibling.updated_by_id = current_user.id
-                sibling.updated_at = datetime.datetime.utcnow()
-            else:
-                db.session.delete(sibling)
+            # Same candidate date, different employee — this date won for
+            # everyone assigned to it, confirm them too. Otherwise it's a
+            # losing candidate date, delete it.
+            (co_winner_ids if sibling_period == winning_period else loser_ids).append(sibling.id)
 
+        if co_winner_ids:
+            ChantierAssignment.query.filter(
+                ChantierAssignment.id.in_(co_winner_ids), ChantierAssignment.statut == 'proposition',
+            ).update({
+                'statut': 'confirme', 'proposal_group_id': None,
+                'updated_by_id': current_user.id, 'updated_at': now,
+            }, synchronize_session=False)
+        if loser_ids:
+            ChantierAssignment.query.filter(
+                ChantierAssignment.id.in_(loser_ids), ChantierAssignment.statut == 'proposition',
+            ).delete(synchronize_session=False)
+
+    # Confirm the target itself — conditional on it still being a proposal.
+    # If a concurrent request already resolved this exact row in the
+    # meantime (double-click, or it turned out to be someone else's
+    # "losing sibling" above), this matches 0 rows: report a clean conflict
+    # instead of the StaleDataError a plain ORM update would raise here.
+    rowcount = ChantierAssignment.query.filter(
+        ChantierAssignment.id == a.id, ChantierAssignment.statut == 'proposition',
+    ).update({
+        'statut': 'confirme', 'proposal_group_id': None,
+        'updated_by_id': current_user.id, 'updated_at': now,
+    }, synchronize_session=False)
+    if rowcount == 0:
+        db.session.rollback()
+        return jsonify({'error': 'Cette proposition a déjà été traitée (validée ou écartée) entre-temps'}), 409
+
+    # The bulk update above bypassed the ORM, so the already-loaded `a`
+    # still shows its pre-update values — mirror them for the response
+    # instead of an extra round-trip to re-fetch.
     a.statut = 'confirme'
-    a.proposal_group_id = None  # no longer part of a group of one
+    a.proposal_group_id = None
     a.updated_by_id = current_user.id
-    a.updated_at = datetime.datetime.utcnow()
+    a.updated_at = now
     db.session.commit()
     return jsonify(a.to_dict())
 

@@ -53,10 +53,15 @@ class AuthTestCase(unittest.TestCase):
     def setUp(self):
         self.client = ohmapp.app.test_client()
 
-    def _create_user(self, username, role, password=STRONG_PASSWORD):
+    def _create_user(self, username, role, password=STRONG_PASSWORD, mfa_enabled=True):
+        """mfa_enabled defaults to True (fully onboarded) so tests that just
+        need a working admin actor aren't blocked by token_required's
+        onboarding check — pass mfa_enabled=False for the tests that
+        specifically exercise the pending-enrollment state itself."""
         with ohmapp.app.app_context():
             user = ohmapp.User(
                 username=username, role=role, must_change_password=False,
+                mfa_enabled=mfa_enabled,
                 pin_hash=ohmapp.generate_password_hash('unused'),
             )
             user.set_password(password)
@@ -95,43 +100,120 @@ class AuthTestCase(unittest.TestCase):
         self.assertEqual(res.get_json()['status'], 'ok')
 
     # --- Admin 2FA gating ---
+    # Enrollment is a post-session onboarding step, not a login state — see
+    # MFA_REQUIRED_ROLES comment in app.py. Login itself only gates on real
+    # 2FA *verification* (mfa_enabled=True); an admin who still needs to
+    # enroll gets a normal session, restricted server-side (token_required's
+    # onboarding check) until they do.
 
-    @unittest.skip("MFA admin temporairement désactivée — voir TODO app.py:150 (MFA_REQUIRED_ROLES)")
-    def test_admin_without_mfa_gets_enroll_required(self):
-        self._create_user('admin_new', 'admin')
+    def test_admin_without_mfa_gets_session_but_is_flagged_pending_enrollment(self):
+        self._create_user('admin_new', 'admin', mfa_enabled=False)
         res = self._login('admin_new', STRONG_PASSWORD)
         self.assertEqual(res.status_code, 200)
         body = res.get_json()
-        self.assertEqual(body['status'], 'mfa_enroll_required')
-        self.assertIn('mfa_token', body)
-        # No session cookie yet — login isn't complete.
-        self.assertNotIn(ohmapp.COOKIE_NAME, res.headers.get('Set-Cookie', ''))
+        self.assertEqual(body['status'], 'ok')
+        self.assertTrue(body['mfa_required'])
+        self.assertFalse(body['mfa_enabled'])
+        self.assertIn(ohmapp.COOKIE_NAME, res.headers.get('Set-Cookie', ''))
 
-    @unittest.skip("MFA admin temporairement désactivée — voir TODO app.py:150 (MFA_REQUIRED_ROLES)")
-    def test_full_admin_enroll_flow_issues_session_and_backup_codes(self):
-        self._create_user('admin_enroll', 'admin')
-        login_res = self._login('admin_enroll', STRONG_PASSWORD)
-        mfa_token = login_res.get_json()['mfa_token']
+    def test_admin_pending_enrollment_session_is_restricted_to_onboarding_routes(self):
+        self._create_user('admin_pending', 'admin', mfa_enabled=False)
+        self._login('admin_pending', STRONG_PASSWORD)
 
-        start_res = self.client.post('/api/mfa/enroll/start', json={'mfa_token': mfa_token})
+        # /api/me stays reachable (needed to render the enrollment screen)...
+        me = self.client.get('/api/me')
+        self.assertEqual(me.status_code, 200)
+        # ...but any real business endpoint is blocked until enrolled.
+        blocked = self.client.get('/api/users')
+        self.assertEqual(blocked.status_code, 403)
+        # `code` (not just the French `error` text) is what the frontend's
+        # api.ts keys off of to refresh stale user state and redirect —
+        # regression coverage for that contract, not just the status code.
+        self.assertEqual(blocked.get_json()['code'], 'mfa_enroll_required')
+
+    def test_must_change_password_session_is_restricted_to_onboarding_routes(self):
+        """Regression: must_change_password was only ever enforced by the
+        frontend (ChangePasswordGate) — a session for an account with a
+        temp/admin-reset password could reach any endpoint directly,
+        bypassing the "change it first" requirement entirely. Applies to
+        every role, not just admin (unlike the MFA gate)."""
+        user_id = self._create_user('worker_temp_pw', 'user')
+        with ohmapp.app.app_context():
+            user = ohmapp.db.session.get(ohmapp.User, user_id)
+            user.must_change_password = True
+            ohmapp.db.session.commit()
+            token = ohmapp.serializer.dumps({'user_id': user_id})
+        c = ohmapp.app.test_client()
+        c.set_cookie(ohmapp.COOKIE_NAME, token)
+
+        # /api/me and /api/change-password stay reachable...
+        self.assertEqual(c.get('/api/me').status_code, 200)
+        # ...but any real business endpoint is blocked, even one this role
+        # would otherwise be allowed to call.
+        blocked = c.get('/api/entries/pending')  # admin-only anyway, but proves the gate fires before the role check
+        self.assertEqual(blocked.status_code, 403)
+        self.assertIn('mot de passe', blocked.get_json()['error'])
+        self.assertEqual(blocked.get_json()['code'], 'must_change_password')
+
+    def test_must_change_password_checked_before_mfa_enrollment(self):
+        """An admin with BOTH a temp password and no 2FA enrolled must be
+        stopped on the password gate first — token_required must never let
+        must_change_password=True fall through to the MFA check."""
+        user_id = self._create_user('admin_both_pending', 'admin', mfa_enabled=False)
+        with ohmapp.app.app_context():
+            user = ohmapp.db.session.get(ohmapp.User, user_id)
+            user.must_change_password = True
+            ohmapp.db.session.commit()
+        self._login('admin_both_pending', STRONG_PASSWORD)
+
+        res = self.client.get('/api/users')
+        self.assertEqual(res.status_code, 403)
+        self.assertIn('mot de passe', res.get_json()['error'])  # not the 2FA message
+
+    def test_full_admin_enroll_flow_issues_backup_codes_over_existing_session(self):
+        self._create_user('admin_enroll', 'admin', mfa_enabled=False)
+        self._login('admin_enroll', STRONG_PASSWORD)  # session already issued, no mfa_token
+
+        start_res = self.client.post('/api/mfa/enroll/start', json={})
         self.assertEqual(start_res.status_code, 200, start_res.get_json())
         secret = start_res.get_json()['manual_entry_key']
         self.assertTrue(start_res.get_json()['qr_code_data_uri'].startswith('data:image/svg+xml;base64,'))
 
         code = pyotp.TOTP(secret).now()
-        confirm_res = self.client.post('/api/mfa/enroll/confirm', json={'mfa_token': mfa_token, 'code': code})
+        confirm_res = self.client.post('/api/mfa/enroll/confirm', json={'code': code})
         self.assertEqual(confirm_res.status_code, 200, confirm_res.get_json())
         body = confirm_res.get_json()
-        self.assertEqual(body['status'], 'ok')
-        self.assertTrue(body['session_issued'])
+        self.assertFalse(body['session_issued'])  # already had a session — none reissued
+        self.assertTrue(body['mfa_enabled'])
         self.assertEqual(len(body['backup_codes']), 10)
-        self.assertIn(ohmapp.COOKIE_NAME, confirm_res.headers.get('Set-Cookie', ''))
 
         with ohmapp.app.app_context():
             user = ohmapp.User.query.filter_by(username='admin_enroll').first()
             self.assertTrue(user.mfa_enabled)
 
-    @unittest.skip("MFA admin temporairement désactivée — voir TODO app.py:150 (MFA_REQUIRED_ROLES)")
+        # Enrollment done — the same session can now reach business routes.
+        unblocked = self.client.get('/api/users')
+        self.assertEqual(unblocked.status_code, 200)
+
+    def test_admin_must_change_password_before_enrolling_mfa(self):
+        user_id = self._create_user('admin_order', 'admin', mfa_enabled=False)
+        with ohmapp.app.app_context():
+            user = ohmapp.db.session.get(ohmapp.User, user_id)
+            user.must_change_password = True
+            ohmapp.db.session.commit()
+        self._login('admin_order', STRONG_PASSWORD)
+
+        # Can't jump straight to MFA enrollment before changing the password...
+        start_res = self.client.post('/api/mfa/enroll/start', json={})
+        self.assertEqual(start_res.status_code, 400)
+
+        # ...but once it's changed, enrollment opens up.
+        self.client.post('/api/change-password', json={
+            'current_password': STRONG_PASSWORD, 'new_password': 'New-Strong-Pass-99',
+        })
+        start_res = self.client.post('/api/mfa/enroll/start', json={})
+        self.assertEqual(start_res.status_code, 200, start_res.get_json())
+
     def test_admin_with_mfa_enabled_requires_verify(self):
         user_id = self._create_user('admin_mfa', 'admin')
         secret = pyotp.random_base32()
@@ -155,7 +237,6 @@ class AuthTestCase(unittest.TestCase):
         self.assertEqual(good.get_json()['status'], 'ok')
         self.assertIn(ohmapp.COOKIE_NAME, good.headers.get('Set-Cookie', ''))
 
-    @unittest.skip("MFA admin temporairement désactivée — voir TODO app.py:150 (MFA_REQUIRED_ROLES)")
     def test_backup_code_login_is_single_use(self):
         user_id = self._create_user('admin_backup', 'admin')
         secret = pyotp.random_base32()
@@ -179,10 +260,16 @@ class AuthTestCase(unittest.TestCase):
         second = self.client.post('/api/mfa/verify-backup', json={'mfa_token': mfa_token_2, 'backup_code': plaintext_code})
         self.assertEqual(second.status_code, 401)
 
-    @unittest.skip("MFA admin temporairement désactivée — voir TODO app.py:150 (MFA_REQUIRED_ROLES)")
     def test_mfa_pending_token_cannot_be_used_as_session(self):
         """A stolen in-flight mfa_token must never work against an authed route."""
-        self._create_user('admin_ticket', 'admin')
+        user_id = self._create_user('admin_ticket', 'admin')
+        secret = pyotp.random_base32()
+        with ohmapp.app.app_context():
+            user = ohmapp.db.session.get(ohmapp.User, user_id)
+            user.mfa_enabled = True
+            user.mfa_secret_enc = ohmapp.mfa_service.encrypt_secret(secret)
+            ohmapp.db.session.commit()
+
         mfa_token = self._login('admin_ticket', STRONG_PASSWORD).get_json()['mfa_token']
         c = ohmapp.app.test_client()
         c.set_cookie(ohmapp.COOKIE_NAME, mfa_token)
@@ -203,6 +290,52 @@ class AuthTestCase(unittest.TestCase):
         # Even the CORRECT password is rejected while locked.
         still_locked = self._login('lockout_target', STRONG_PASSWORD)
         self.assertEqual(still_locked.status_code, 423)
+
+    def test_lockout_escalates_across_mfa_cycles_password_alone_does_not_reset_it(self):
+        """Regression: login() used to call _reset_lockout(user) right after
+        the password check, before the MFA gate — so an attacker who knows
+        an admin's password (but not their TOTP code) could wipe the
+        escalating lockout back to its lowest 15-minute tier before every
+        burst of 2FA guesses, just by resubmitting the correct password
+        first. _reset_lockout must only fire once a session is actually
+        about to be issued (see the comment in login())."""
+        user_id = self._create_user('admin_escalation', 'admin')
+        secret = pyotp.random_base32()
+        with ohmapp.app.app_context():
+            user = ohmapp.db.session.get(ohmapp.User, user_id)
+            user.mfa_enabled = True
+            user.mfa_secret_enc = ohmapp.mfa_service.encrypt_secret(secret)
+            ohmapp.db.session.commit()
+
+        def burn_mfa_attempts():
+            mfa_token = self._login('admin_escalation', STRONG_PASSWORD).get_json()['mfa_token']
+            for _ in range(ohmapp.LOCKOUT_MAX_ATTEMPTS):
+                self.client.post('/api/mfa/verify', json={'mfa_token': mfa_token, 'code': '000000'})
+
+        # Cycle 1: password correct, then exhaust 5 bad TOTP codes -> locked
+        # at the first, 15-minute tier.
+        burn_mfa_attempts()
+        with ohmapp.app.app_context():
+            user = ohmapp.db.session.get(ohmapp.User, user_id)
+            self.assertEqual(user.lockout_stage, 1)
+            first_lock_minutes = (user.locked_until - datetime.datetime.utcnow()).total_seconds() / 60
+            self.assertAlmostEqual(first_lock_minutes, 15, delta=1)
+            # Simulate the 15 minutes having passed (the lock itself
+            # expiring) without touching lockout_stage — is_account_locked
+            # only looks at locked_until.
+            user.locked_until = datetime.datetime.utcnow() - datetime.timedelta(seconds=1)
+            ohmapp.db.session.commit()
+
+        # Cycle 2: password correct again, then exhaust 5 more bad TOTP
+        # codes. If login() still reset lockout_stage on the password step,
+        # this would re-lock at the 15-minute tier again instead of
+        # escalating to the second, 60-minute one.
+        burn_mfa_attempts()
+        with ohmapp.app.app_context():
+            user = ohmapp.db.session.get(ohmapp.User, user_id)
+            self.assertEqual(user.lockout_stage, 2)
+            second_lock_minutes = (user.locked_until - datetime.datetime.utcnow()).total_seconds() / 60
+            self.assertAlmostEqual(second_lock_minutes, 60, delta=1)
 
     # --- Change password ---
 
