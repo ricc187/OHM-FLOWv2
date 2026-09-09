@@ -32,6 +32,23 @@ Caddy, bypassing HTTPS entirely. Either:
   docker compose -f docker-compose.yml up -d
   ```
 
+## Volta sync queue worker
+
+`process_volta_sync_queue` runs automatically — no system cron, no external
+scheduler needed. It's an internal daemon thread started inside the Flask
+process at boot (`_start_volta_sync_cron`, `backend/app.py`), ticking every
+5 minutes. Set `OHM_DISABLE_VOLTA_CRON=1` to disable it (used by the test
+suite only — don't set this on the VPS).
+
+Since gunicorn runs `-w 4` (4 separate processes, each with its own thread),
+an atomic DB-level guard (`VoltaSyncRun` row, conditional `UPDATE`) makes
+only one of them actually run a given cycle — no manual coordination
+needed, this is already handled.
+
+Manual trigger (for testing / forcing a run): `POST /api/volta-sync/run`,
+admin session required. Not meant to be relied on in production — the
+internal cron above is the real mechanism.
+
 ## Certificates persistence
 
 Caddy stores its certificates/state in the `caddy_data` named volume, so
