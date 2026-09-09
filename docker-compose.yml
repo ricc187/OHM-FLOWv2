@@ -17,14 +17,23 @@ services:
       - ./backups:/backups
     restart: always
 
-  # Cloudflare quick tunnel — publishes `web` to a random *.trycloudflare.com
-  # URL with no inbound port opened on the host at all (web has no `ports:`
-  # mapping; only cloudflared reaches it, over the compose network). The URL
-  # changes on every restart of this container (quick tunnels aren't
-  # reservable) — read it from `docker compose logs cloudflared`.
-  cloudflared:
-    image: cloudflare/cloudflared:latest
-    command: tunnel --url http://web:5000
+  # Reverse proxy / public entrypoint. Terminates HTTPS with an
+  # auto-provisioned Let's Encrypt cert (see Caddyfile) and forwards
+  # everything to `web` over the internal compose network. `web` itself
+  # has no `ports:` mapping — only caddy is reachable from outside the host.
+  caddy:
+    image: caddy:latest
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
     depends_on:
       - web
     restart: always
+
+volumes:
+  caddy_data:
+  caddy_config:
