@@ -29,6 +29,12 @@ npm/
 *.log
 get-pip.py
 
+# Local dev override — exposes `web` on 5000:5000 directly. Must never
+# reach the VPS: it would re-expose web publicly alongside Caddy, bypassing
+# HTTPS entirely (see DEPLOY.md). Gitignored so it can't be committed by
+# accident and end up deployed.
+docker-compose.override.yml
+
 # Volta API exploration (scripts/explore_volta_api.py) — raw dumps contain
 # real client data, never committed.
 scripts/volta_dumps/
