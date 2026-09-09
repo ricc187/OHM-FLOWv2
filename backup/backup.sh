@@ -13,6 +13,12 @@ BACKUP_DIR="/backups"
 RCLONE_REMOTE="swissbackup:ohmflow/"
 RCLONE_CONFIG="${HOME}/.config/rclone/rclone.conf"
 
+# Rétention côté remote — filet de sécurité, pas un historique métier
+# (l'historique métier réel vit dans la DB/documents eux-mêmes, pas dans ces
+# archives). 90 jours : assez long pour couvrir un problème découvert
+# tardivement, sans accumuler indéfiniment sur les 200 Go alloués.
+REMOTE_RETENTION_DAYS=90
+
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 BACKUP_FILE="${BACKUP_DIR}/ohm_flow_backup_complet_${TIMESTAMP}.zip"
 
@@ -48,6 +54,20 @@ else
   rclone copy "$BACKUP_FILE" "$RCLONE_REMOTE" --config "$RCLONE_CONFIG"
   if [ $? -eq 0 ]; then
     echo "[$(date)] Envoi Swiss Backup réussi : $RCLONE_REMOTE"
+
+    # Rotation distante — seulement après un envoi réussi : si l'upload du
+    # jour vient d'échouer, aucun nouveau backup n'a pris la place des vieux,
+    # donc on ne purge rien ce cycle (voir branche d'échec ci-dessus).
+    # Échec de la rotation traité séparément : loggé, mais n'affecte pas le
+    # code de sortie global — le backup du jour a déjà réussi, une rotation
+    # ratée n'est que remise au prochain cycle.
+    stale_count=$(rclone lsf "$RCLONE_REMOTE" --min-age "${REMOTE_RETENTION_DAYS}d" --config "$RCLONE_CONFIG" 2>/dev/null | wc -l)
+    rclone delete "$RCLONE_REMOTE" --min-age "${REMOTE_RETENTION_DAYS}d" --config "$RCLONE_CONFIG"
+    if [ $? -eq 0 ]; then
+      echo "[$(date)] Rotation Swiss Backup : $stale_count fichier(s) supprimé(s) (plus vieux que ${REMOTE_RETENTION_DAYS}j)."
+    else
+      echo "[$(date)] ERREUR lors de la rotation des backups distants (Swiss Backup) — réessai au prochain cycle."
+    fi
   else
     echo "[$(date)] ERREUR lors de l'envoi vers Swiss Backup (rclone) — archive locale conservée, réessai au prochain cycle."
   fi
