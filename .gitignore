@@ -35,6 +35,10 @@ get-pip.py
 # accident and end up deployed.
 docker-compose.override.yml
 
+# Swiss Backup (rclone) credentials — lives only on the VPS, never in git.
+# See DEPLOY.md.
+rclone.conf
+
 # Volta API exploration (scripts/explore_volta_api.py) — raw dumps contain
 # real client data, never committed.
 scripts/volta_dumps/

@@ -32,6 +32,35 @@ Caddy, bypassing HTTPS entirely. Either:
   docker compose -f docker-compose.yml up -d
   ```
 
+## Offsite backup (Swiss Backup via rclone)
+
+`backup/backup.sh` still does its local ZIP + 12-file local retention as
+before; it now also pushes each freshly-created archive to Swiss Backup via
+`rclone copy` (remote name/path: `swissbackup:ohmflow/`, hardcoded in the
+script — adjust `RCLONE_REMOTE` there if it changes). Runs daily at 2am
+inside the `backup` container's own cron (not a system cron).
+
+**rclone.conf placement**: the `backup` service reads it from
+`/root/.config/rclone/rclone.conf` inside the container, mounted read-only
+from `./rclone.conf` at the repo root on the VPS host (`docker-compose.yml`
+volume) — same pattern as `Caddyfile`. It is gitignored: never commit it.
+
+Steps on the VPS:
+1. Generate the Swiss Backup rclone config normally (`rclone config`) on
+   the VPS, or copy an existing `rclone.conf` there.
+2. Place it at the repo root as `rclone.conf` (next to `docker-compose.yml`).
+3. Rebuild/restart the `backup` service — it'll pick it up on its next
+   scheduled run, or trigger one manually to check:
+   ```
+   docker compose exec backup /usr/local/bin/backup.sh
+   ```
+   (run inside the container, not on the host — see the note above about
+   `/data`/`/backups` being container-internal paths.)
+
+If `rclone.conf` is missing at run time, the script logs a clear error and
+skips the offsite step — the local ZIP still gets created either way, it's
+the safety net that doesn't depend on rclone or the network.
+
 ## Volta sync queue worker
 
 `process_volta_sync_queue` runs automatically — no system cron, no external
