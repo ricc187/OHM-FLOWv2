@@ -15,6 +15,10 @@ services:
     volumes:
       - ./data:/data:ro
       - ./backups:/backups
+      # Swiss Backup credentials (rclone). Not baked into the image or
+      # committed — place the real file at repo root as ./rclone.conf on
+      # the VPS (gitignored, same pattern as Caddyfile). See DEPLOY.md.
+      - ./rclone.conf:/root/.config/rclone/rclone.conf:ro
     restart: always
 
   # Reverse proxy / public entrypoint. Terminates HTTPS with an
