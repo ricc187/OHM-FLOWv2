@@ -67,6 +67,12 @@
   --shake-ease: cubic-bezier(0.22, 1, 0.36, 1);
   --revert-hold: 3000ms;
   --revert-dur: 280ms;
+
+  /* Text states swap (04) */
+  --text-swap-dur: 150ms;
+  --text-swap-translate-y: 4px;
+  --text-swap-blur: 2px;
+  --text-swap-ease: ease-in-out;
 }
 
 /* --- Notification badge --- */
@@ -265,13 +271,38 @@
   100%    { transform: translateX(0); }
 }
 
+/* --- Text states swap --- */
+.t-text-swap {
+  display: inline-block;
+  transform: translateY(0);
+  filter: blur(0);
+  opacity: 1;
+  transition:
+    transform var(--text-swap-dur) var(--text-swap-ease),
+    filter    var(--text-swap-dur) var(--text-swap-ease),
+    opacity   var(--text-swap-dur) var(--text-swap-ease);
+  will-change: transform, filter, opacity;
+}
+.t-text-swap.is-exit {
+  transform: translateY(calc(var(--text-swap-translate-y) * -1));
+  filter: blur(var(--text-swap-blur));
+  opacity: 0;
+}
+.t-text-swap.is-enter-start {
+  transform: translateY(var(--text-swap-translate-y));
+  filter: blur(var(--text-swap-blur));
+  opacity: 0;
+  transition: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .t-badge, .t-badge-dot,
   .t-modal,
   .t-toast,
   .t-tabs-pill, .t-tab,
   .t-check-box, .t-check-box svg path,
-  .t-input { animation: none !important; transition: none !important; transform: none !important; }
+  .t-input,
+  .t-text-swap { animation: none !important; transition: none !important; transform: none !important; }
 }
 
 @layer base {
@@ -299,6 +330,19 @@
 
   ::-webkit-scrollbar-thumb {
     @apply bg-slate-300 rounded-full hover:bg-primary transition-colors;
+  }
+
+  /* impeccable polish: no button/link in the app styled a visible keyboard
+     focus state (audit found zero focus-visible/ring on any <button>,
+     relying only on the browser default outline, which several components
+     then explicitly suppressed via focus:outline-none with nothing in its
+     place). One base rule instead of touching every button — keeps the
+     mouse-click state untouched (focus-visible skips it) while restoring a
+     real, on-brand indicator for keyboard/switch navigation everywhere. */
+  button:focus-visible,
+  a:focus-visible,
+  [role="button"]:focus-visible {
+    @apply outline-none ring-2 ring-ohm-primary/50 ring-offset-2 ring-offset-ohm-bg;
   }
 }
 

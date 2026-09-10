@@ -144,6 +144,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, activeView, onLo
         }
     }, [queuedCount, queuedAuthError]);
     const queuedPillT = useMountTransition(queuedCount > 0, 250);
+    const drawerT = useMountTransition(drawerOpen, 300);
 
     // Close the drawer automatically if the viewport grows into the desktop
     // layout (e.g. phone rotated to a tablet-sized landscape, or a resize).
@@ -229,7 +230,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, activeView, onLo
                     ))}
 
                     {user?.role === 'admin' && (
-                        <div className="pt-4 mt-2 border-t border-black/5">
+                        <div className="shrink-0 pt-4 mt-2 border-t border-black/5">
                             <div className="hidden group-hover:block px-2 text-[10px] font-bold text-text-muted/60 uppercase tracking-widest mb-3 animate-fade-in pl-4">
                                 Administration
                             </div>
@@ -300,13 +301,18 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, activeView, onLo
             </button>
 
             {/* ===== Mobile Drawer (below lg) ===== */}
-            {drawerOpen && (
+            {/* impeccable polish: this was the one modal-shaped overlay in the
+                app never migrated to the useMountTransition pattern used by
+                every other modal/panel (ConfirmDialog, AgendaForm, Vehicules,
+                etc.) — it unmounted instantly on close with no exit
+                animation, only ever playing the entrance keyframe. */}
+            {drawerT.mounted && (
                 <div className="lg:hidden fixed inset-0 z-50">
                     <div
-                        className="absolute inset-0 bg-black/40 backdrop-blur-sm animate-fade-in touch-none"
+                        className={`absolute inset-0 bg-black/40 backdrop-blur-sm touch-none transition-opacity duration-300 ${drawerT.active ? 'opacity-100' : 'opacity-0'}`}
                         onClick={() => setDrawerOpen(false)}
                     />
-                    <div className="absolute left-0 top-0 bottom-0 w-[82%] max-w-xs bg-surface shadow-2xl flex flex-col animate-slide-in-right safe-top safe-bottom">
+                    <div className={`absolute left-0 top-0 bottom-0 w-[82%] max-w-xs bg-surface shadow-2xl flex flex-col safe-top safe-bottom transition-transform duration-300 ease-out ${drawerT.active ? 'translate-x-0' : '-translate-x-full'}`}>
                         <div className="h-16 flex items-center justify-between px-5 border-b border-slate-200 shrink-0">
                             <div className="flex items-center gap-2">
                                 <OhmIcon className="w-6 h-6 text-primary" />
@@ -329,7 +335,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, activeView, onLo
                             ))}
 
                             {user?.role === 'admin' && (
-                                <div className="pt-4 mt-3 border-t border-slate-200">
+                                <div className="shrink-0 pt-4 mt-3 border-t border-slate-200">
                                     <div className="px-4 text-[10px] font-bold text-text-muted/60 uppercase tracking-widest mb-2">
                                         Administration
                                     </div>
@@ -405,7 +411,14 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, activeView, onLo
 const NavItem = ({ icon, label, active, onClick, badge }: { icon: React.ReactNode, label: string, active?: boolean, onClick: () => void, badge?: number }) => (
     <button
         onClick={onClick}
-        className={`w-full h-14 flex items-center gap-4 px-3 rounded-2xl relative group/item overflow-hidden transition-all duration-300 hover:shadow-md ${active ? 'text-slate-900 bg-black/5' : 'text-text-muted hover:text-slate-900 hover:bg-black/5'
+        // shrink-0: without it, this being a flex child of a `flex flex-col`
+        // nav (see aside above) lets the browser compress h-14 below its set
+        // height instead of leaving that to the nav's own overflow-y-auto —
+        // real bug hit at a non-100% browser zoom (sub-pixel rounding pushed
+        // it to fully collapse the earliest items to 0px instead of just
+        // shrinking everything a little), but the underlying flex-shrink
+        // default is there regardless of zoom once there are enough items.
+        className={`shrink-0 w-full h-14 flex items-center gap-4 px-3 rounded-2xl relative group/item overflow-hidden transition-all duration-300 hover:shadow-md ${active ? 'text-slate-900 bg-black/5' : 'text-text-muted hover:text-slate-900 hover:bg-black/5'
             }`}
     >
         <div className={`w-8 flex justify-center flex-shrink-0 relative z-10 transition-transform duration-300 group-hover/item:scale-110 ${active ? 'text-primary drop-shadow-[0_0_8px_rgba(255,215,0,0.8)]' : 'group-hover/item:text-primary group-hover/item:drop-shadow-[0_0_8px_rgba(255,215,0,0.8)]'
@@ -431,7 +444,10 @@ const NavItem = ({ icon, label, active, onClick, badge }: { icon: React.ReactNod
 const NavItemMobile = ({ icon, label, active, onClick, badge }: { icon: React.ReactNode, label: string, active?: boolean, onClick: () => void, badge?: number }) => (
     <button
         onClick={onClick}
-        className={`w-full h-12 flex items-center gap-4 px-4 rounded-xl font-bold text-sm transition-all active:scale-[0.98] ${active ? 'bg-primary/10 text-primary' : 'text-slate-600 hover:bg-black/5 hover:text-slate-900'
+        // shrink-0: same flex-shrink fix as NavItem above -- this drawer nav
+        // is also a `flex flex-col` scroll container (see mobile drawer
+        // above), same collapse risk without it.
+        className={`shrink-0 w-full h-12 flex items-center gap-4 px-4 rounded-xl font-bold text-sm transition-all active:scale-[0.98] ${active ? 'bg-primary/10 text-primary' : 'text-slate-600 hover:bg-black/5 hover:text-slate-900'
             }`}
     >
         <div className="w-6 flex justify-center flex-shrink-0 relative">

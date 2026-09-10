@@ -1,10 +1,11 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { User } from '../types';
 import { AwesomeSelect } from './ui/AwesomeSelect';
 import { api } from '../api';
-import { ShieldCheck, ShieldAlert, KeyRound, LogOut } from 'lucide-react';
+import { ShieldCheck, ShieldAlert, KeyRound, LogOut, Download, Plus, Pencil, Trash2 } from 'lucide-react';
 import { useConfirm } from '../hooks/useConfirm';
 import { ConfirmDialog } from './ConfirmDialog';
+import { useMountTransition } from '../hooks/useMountTransition';
 
 interface Props {
     currentUser: User;
@@ -14,6 +15,11 @@ export const AdminUsers: React.FC<Props> = ({ currentUser }) => {
     const { confirm, confirmDialogProps } = useConfirm();
     const [users, setUsers] = useState<User[]>([]);
     const [showModal, setShowModal] = useState(false);
+    // transitions-dev "06-modal" — useMountTransition keeps the modal
+    // mounted through its close tween instead of vanishing the instant
+    // showModal/mfaResetTarget flips, no changes needed to the existing
+    // setShowModal(false)/setMfaResetTarget(null) call sites below.
+    const modalT = useMountTransition(showModal, 150);
     const [editingUser, setEditingUser] = useState<User | null>(null);
     const [formData, setFormData] = useState({
         username: '',
@@ -25,6 +31,13 @@ export const AdminUsers: React.FC<Props> = ({ currentUser }) => {
     // "Réinitialiser 2FA" requires the ACTING admin's own password — a
     // small side prompt rather than a full modal, since it's a rare action.
     const [mfaResetTarget, setMfaResetTarget] = useState<User | null>(null);
+    const mfaModalT = useMountTransition(!!mfaResetTarget, 150);
+    // Closing nulls mfaResetTarget immediately, but the modal stays mounted
+    // ~150ms longer to play its close tween and still needs the username to
+    // render during that window — cache the last non-null value for display.
+    const mfaResetTargetRef = useRef<User | null>(null);
+    if (mfaResetTarget) mfaResetTargetRef.current = mfaResetTarget;
+    const mfaResetTargetDisplay = mfaResetTarget ?? mfaResetTargetRef.current;
     const [mfaResetPassword, setMfaResetPassword] = useState('');
     const [mfaResetError, setMfaResetError] = useState('');
 
@@ -158,7 +171,7 @@ export const AdminUsers: React.FC<Props> = ({ currentUser }) => {
     };
 
     return (
-        <div className="animate-in slide-in-from-left duration-300 p-6">
+        <div className="animate-fade-in p-6">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
                 <div>
                     <h1 className="text-3xl font-black text-slate-900 uppercase tracking-tighter">Équipe</h1>
@@ -169,18 +182,14 @@ export const AdminUsers: React.FC<Props> = ({ currentUser }) => {
                         onClick={handleBackup}
                         className="flex-1 sm:flex-none bg-slate-100 text-slate-900 font-bold px-4 py-3 rounded-xl shadow-lg hover:bg-slate-200 transition-all flex items-center justify-center gap-2 uppercase text-xs tracking-wider"
                     >
-                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                        </svg>
+                        <Download size={20} />
                         Backup BDD
                     </button>
                     <button
                         onClick={handleOpenCreate}
                         className="flex-1 sm:flex-none bg-ohm-primary text-ohm-bg font-black px-6 py-3 rounded-xl shadow-lg hover:bg-yellow-300 transition-all flex items-center justify-center gap-2 uppercase text-xs tracking-wider"
                     >
-                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M12 4v16m8-8H4" />
-                        </svg>
+                        <Plus size={20} strokeWidth={3} />
                         Ajouter
                     </button>
                 </div>
@@ -212,7 +221,7 @@ export const AdminUsers: React.FC<Props> = ({ currentUser }) => {
                                         <span className={`text-[10px] font-black uppercase px-2 py-0.5 rounded ${user.role === 'admin'
                                                 ? 'bg-ohm-primary/20 text-ohm-primary border border-ohm-primary/30'
                                                 : user.role === 'depanneur'
-                                                    ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
+                                                    ? 'bg-status-active/20 text-status-active border border-status-active/30'
                                                     : 'bg-slate-100 text-slate-400'
                                             }`}>
                                             {user.role === 'admin' ? 'Admin' : user.role === 'depanneur' ? 'Dépanneur' : 'Employé'}
@@ -255,17 +264,13 @@ export const AdminUsers: React.FC<Props> = ({ currentUser }) => {
                                                 onClick={() => handleOpenEdit(user)}
                                                 className="p-2 text-slate-500 hover:text-ohm-primary hover:bg-ohm-primary/10 rounded-lg transition-all"
                                             >
-                                                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                                                </svg>
+                                                <Pencil size={20} />
                                             </button>
                                             <button
                                                 onClick={() => handleDelete(user)}
                                                 className="p-2 rounded-lg transition-all text-red-400 hover:bg-red-500/10"
                                             >
-                                                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                                                </svg>
+                                                <Trash2 size={20} />
                                             </button>
                                         </div>
                                     </td>
@@ -276,10 +281,10 @@ export const AdminUsers: React.FC<Props> = ({ currentUser }) => {
                 </div>
             </div>
 
-            {showModal && (
-                <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+            {modalT.mounted && (
+                <div className={`t-modal ${modalT.active ? 'is-open' : 'is-closing'} fixed inset-0 z-[100] flex items-center justify-center p-4`}>
                     <div className="absolute inset-0 bg-ohm-bg/80 backdrop-blur-sm" onClick={() => setShowModal(false)}></div>
-                    <div className="relative w-full max-w-md bg-ohm-surface rounded-3xl border border-slate-300 shadow-2xl overflow-hidden animate-in zoom-in duration-200">
+                    <div className="relative w-full max-w-md bg-ohm-surface rounded-3xl border border-slate-300 shadow-2xl overflow-hidden">
                         <div className="bg-slate-50/80 px-6 py-4 flex items-center justify-between border-b border-slate-300">
                             <h3 className="font-black text-slate-900 uppercase tracking-widest text-sm">
                                 {editingUser ? 'Modifier' : 'Ajouter'} Collaborateur
@@ -342,15 +347,15 @@ export const AdminUsers: React.FC<Props> = ({ currentUser }) => {
                 </div>
             )}
 
-            {mfaResetTarget && (
-                <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+            {mfaModalT.mounted && mfaResetTargetDisplay && (
+                <div className={`t-modal ${mfaModalT.active ? 'is-open' : 'is-closing'} fixed inset-0 z-[100] flex items-center justify-center p-4`}>
                     <div className="absolute inset-0 bg-ohm-bg/80 backdrop-blur-sm" onClick={() => setMfaResetTarget(null)}></div>
-                    <form onSubmit={handleMfaReset} className="relative w-full max-w-sm bg-ohm-surface rounded-3xl border border-slate-300 shadow-2xl p-6 space-y-4 animate-in zoom-in duration-200">
+                    <form onSubmit={handleMfaReset} className="relative w-full max-w-sm bg-ohm-surface rounded-3xl border border-slate-300 shadow-2xl p-6 space-y-4">
                         <h3 className="font-black text-slate-900 uppercase tracking-widest text-sm">
-                            Réinitialiser la 2FA de {mfaResetTarget.username}
+                            Réinitialiser la 2FA de {mfaResetTargetDisplay.username}
                         </h3>
                         <p className="text-xs text-slate-500">
-                            Confirmez avec VOTRE propre mot de passe. {mfaResetTarget.username} devra reconfigurer sa 2FA à sa prochaine connexion.
+                            Confirmez avec VOTRE propre mot de passe. {mfaResetTargetDisplay.username} devra reconfigurer sa 2FA à sa prochaine connexion.
                         </p>
                         <input
                             type="password"

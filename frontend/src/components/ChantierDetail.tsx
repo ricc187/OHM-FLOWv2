@@ -93,6 +93,13 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
     const editModalT = useMountTransition(showEditModal, 150);
     // "22-toast": the closure-blocked popup rises in/out instead of popping.
     const closeBlockedT = useMountTransition(!!closeBlockedMessage, 250);
+    const readingEntryModalT = useMountTransition(!!readingEntry, 150);
+    // Closing nulls readingEntry immediately, but the modal stays mounted
+    // ~150ms longer to play its close tween and still needs the entry's
+    // data to render during that window.
+    const readingEntryRef = useRef<Entry | null>(null);
+    if (readingEntry) readingEntryRef.current = readingEntry;
+    const readingEntryDisplay = readingEntry ?? readingEntryRef.current;
 
     const fetchDetails = async () => {
         // Always refresh chantier to get latest status/members
@@ -433,7 +440,7 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
                         ) : (
                             <button
                                 onClick={() => setShowEntryModal(true)}
-                                className="w-full py-3 bg-primary text-black font-black uppercase tracking-widest rounded-xl shadow-md hover:bg-yellow-400 hover:scale-[1.01] active:scale-[0.99] transition-all flex items-center justify-center gap-2 text-sm"
+                                className="w-full py-3 bg-ohm-primary text-ohm-bg font-black uppercase tracking-widest rounded-xl shadow-md hover:bg-yellow-300 hover:scale-[1.01] active:scale-[0.99] transition-all flex items-center justify-center gap-2 text-sm"
                             >
                                 <span className="text-lg">+</span> AJOUTER UNE ENTRÉE
                             </button>
@@ -589,7 +596,7 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
                                                 step="0.5"
                                                 inputMode="decimal"
                                                 autoFocus
-                                                className="w-full bg-transparent text-center text-4xl font-black text-slate-900 py-2 focus:outline-none placeholder-slate-700 appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                                                className="w-full bg-transparent text-center text-4xl font-black text-slate-900 py-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-ohm-primary/50 focus-visible:rounded-xl placeholder-slate-700 appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                                                 placeholder="0"
                                                 value={entryForm.heures}
                                                 onChange={e => setEntryForm({ ...entryForm, heures: e.target.value })}
@@ -737,18 +744,18 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
             )}
 
             {/* Lire la description d'une saisie — juste un aperçu, rien à modifier ici. */}
-            {readingEntry && (
-                <div className="fixed inset-0 bg-white/80 backdrop-blur-sm flex items-center justify-center z-[100] p-4 safe-top safe-bottom">
+            {readingEntryModalT.mounted && readingEntryDisplay && (
+                <div className={`t-modal ${readingEntryModalT.active ? 'is-open' : 'is-closing'} fixed inset-0 bg-white/80 backdrop-blur-sm flex items-center justify-center z-[100] p-4 safe-top safe-bottom`}>
                     <div className="card w-full max-w-md">
                         <div className="flex justify-between items-start mb-4">
                             <div>
                                 <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2"><FileText size={18} className="text-ohm-primary" /> Description de la tâche</h3>
-                                <p className="text-xs text-slate-400 mt-1">{readingEntry.user_name} · {readingEntry.date}</p>
+                                <p className="text-xs text-slate-400 mt-1">{readingEntryDisplay.user_name} · {readingEntryDisplay.date}</p>
                             </div>
                             <button onClick={() => setReadingEntry(null)}><X className="text-slate-500" /></button>
                         </div>
                         <div className="text-sm text-slate-700 whitespace-pre-wrap bg-slate-50 rounded-lg p-4">
-                            {readingEntry.description}
+                            {readingEntryDisplay.description}
                         </div>
                     </div>
                 </div>

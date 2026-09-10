@@ -44,3 +44,4 @@ rclone.conf
 scripts/volta_dumps/
 .claude/skills/impeccable/scripts/bin/
 .claude/settings.local.json
+printscreen/

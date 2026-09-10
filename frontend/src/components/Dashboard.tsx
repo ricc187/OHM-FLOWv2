@@ -317,7 +317,7 @@ export const Dashboard: React.FC<Props> = ({ currentUser, onSelectChantier }) =>
             {(currentUser.role === 'admin' || currentUser.role === 'depanneur') && (
                 <button
                     onClick={() => setShowCreate(!showCreate)}
-                    className="w-full py-4 bg-gradient-to-r from-primary to-yellow-500 text-black font-black uppercase tracking-widest rounded-2xl shadow-lg hover:shadow-md hover:scale-[1.01] active:scale-[0.99] transition-all flex items-center justify-center gap-3 text-lg"
+                    className="w-full py-4 bg-ohm-primary text-ohm-bg font-black uppercase tracking-widest rounded-2xl shadow-lg hover:bg-yellow-300 hover:shadow-md hover:scale-[1.01] active:scale-[0.99] transition-all flex items-center justify-center gap-3 text-lg"
                 >
                     <Plus size={24} strokeWidth={3} />
                     <span>CRÉER UN NOUVEAU CHANTIER</span>
@@ -427,7 +427,7 @@ export const Dashboard: React.FC<Props> = ({ currentUser, onSelectChantier }) =>
                         </div>
 
                         <div className="flex justify-end pt-4">
-                            <button type="submit" className="w-full md:w-auto px-8 py-3 bg-gradient-to-r from-primary to-yellow-600 text-black font-bold rounded-xl hover:shadow-glow hover:scale-[1.02] transition-all">
+                            <button type="submit" className="w-full md:w-auto px-8 py-3 bg-ohm-primary text-ohm-bg font-bold rounded-xl hover:bg-yellow-300 hover:shadow-glow hover:scale-[1.02] transition-all">
                                 CRÉER LE CHANTIER
                             </button>
                         </div>

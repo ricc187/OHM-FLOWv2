@@ -1,9 +1,10 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Vehicule, VehiculeDetail, User } from '../types';
 import { Car, Plus, Pencil, Trash2, ArrowLeft, Gauge } from 'lucide-react';
 import { api } from '../api';
 import { useConfirm } from '../hooks/useConfirm';
 import { ConfirmDialog } from './ConfirmDialog';
+import { useMountTransition } from '../hooks/useMountTransition';
 
 interface Props {
     currentUser: User;
@@ -28,6 +29,14 @@ export const Vehicules: React.FC<Props> = ({ currentUser, forcedVehiculeId, onKm
     const [detailLoading, setDetailLoading] = useState(false);
 
     const [showForm, setShowForm] = useState<'create' | 'edit' | null>(null);
+    // transitions-dev "06-modal" — closeForm nulls showForm immediately, but
+    // the modal stays mounted ~150ms longer to play its close tween and
+    // still needs to know 'create' vs 'edit' to render its title/labels —
+    // cache the last non-null value for display during that window.
+    const formModalT = useMountTransition(showForm !== null, 150);
+    const showFormRef = useRef<'create' | 'edit' | null>(null);
+    if (showForm) showFormRef.current = showForm;
+    const showFormDisplay = showForm ?? showFormRef.current;
     const [form, setForm] = useState(emptyForm);
     const [formError, setFormError] = useState('');
     const [submitting, setSubmitting] = useState(false);
@@ -320,14 +329,14 @@ export const Vehicules: React.FC<Props> = ({ currentUser, forcedVehiculeId, onKm
     );
 
     function renderForm() {
-        if (!showForm) return null;
+        if (!formModalT.mounted) return null;
         return (
-            <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+            <div className={`t-modal ${formModalT.active ? 'is-open' : 'is-closing'} fixed inset-0 z-[100] flex items-center justify-center p-4`}>
                 <div className="absolute inset-0 bg-ohm-bg/80 backdrop-blur-sm" onClick={closeForm} />
-                <div className="relative w-full max-w-md bg-ohm-surface rounded-3xl border border-slate-300 shadow-2xl overflow-hidden animate-in zoom-in duration-200">
+                <div className="relative w-full max-w-md bg-ohm-surface rounded-3xl border border-slate-300 shadow-2xl overflow-hidden">
                     <div className="bg-slate-50/80 px-6 py-4 flex items-center justify-between border-b border-slate-300">
                         <h3 className="font-black text-slate-900 uppercase tracking-widest text-sm">
-                            {showForm === 'edit' ? 'Modifier' : 'Nouveau'} véhicule
+                            {showFormDisplay === 'edit' ? 'Modifier' : 'Nouveau'} véhicule
                         </h3>
                         <button onClick={closeForm} className="text-slate-500 hover:text-slate-900">
                             <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -365,7 +374,7 @@ export const Vehicules: React.FC<Props> = ({ currentUser, forcedVehiculeId, onKm
                         </div>
                         <div>
                             <label className="block text-[10px] font-black uppercase text-slate-500 mb-2 tracking-widest">
-                                Kilométrage {showForm === 'edit' ? '(correction manuelle)' : 'actuel'}
+                                Kilométrage {showFormDisplay === 'edit' ? '(correction manuelle)' : 'actuel'}
                             </label>
                             <input
                                 type="number" min={0} step="any"
@@ -381,7 +390,7 @@ export const Vehicules: React.FC<Props> = ({ currentUser, forcedVehiculeId, onKm
                             disabled={submitting}
                             className="w-full bg-ohm-primary text-ohm-bg font-black py-4 rounded-xl shadow-lg hover:bg-yellow-300 transition-all uppercase tracking-widest active:scale-95 disabled:opacity-50"
                         >
-                            {showForm === 'edit' ? 'Mettre à jour' : 'Enregistrer'}
+                            {showFormDisplay === 'edit' ? 'Mettre à jour' : 'Enregistrer'}
                         </button>
                     </form>
                 </div>

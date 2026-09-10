@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { AlertTriangle } from 'lucide-react';
 import { useEscapeKey } from '../hooks/useEscapeKey';
@@ -21,7 +21,22 @@ export const ConfirmDialog: React.FC<Props> = ({
     const [checked, setChecked] = useState(false);
     const [typed, setTyped] = useState('');
 
-    useEscapeKey(true, onCancel);
+    // transitions-dev "06-modal" — this component owns its own mount (like
+    // DocumentExplorer.tsx), so it plays the close animation itself before
+    // telling the parent (useConfirm) to actually resolve/unmount it.
+    const [isOpen, setIsOpen] = useState(false);
+    useEffect(() => {
+        const raf = requestAnimationFrame(() => setIsOpen(true));
+        return () => cancelAnimationFrame(raf);
+    }, []);
+    const closeThen = (action: () => void) => {
+        setIsOpen(false);
+        setTimeout(action, 150); // matches --modal-close-dur
+    };
+    const handleCancel = () => closeThen(onCancel);
+    const handleConfirm = () => closeThen(onConfirm);
+
+    useEscapeKey(true, handleCancel);
 
     const ready = strict ? typed.trim() === (confirmText ?? '').trim() && typed.trim() !== '' : checked;
 
@@ -36,9 +51,9 @@ export const ConfirmDialog: React.FC<Props> = ({
     // the dialog rendered off-screen below the fold instead of centered).
     // Escaping to a portal sidesteps this regardless of which screen calls it.
     return createPortal(
-        <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
-            <div className="absolute inset-0 bg-ohm-bg/80 backdrop-blur-sm" onClick={onCancel} />
-            <div className="relative w-full max-w-md bg-ohm-surface rounded-3xl border border-slate-300 shadow-2xl overflow-hidden animate-in zoom-in duration-200">
+        <div className={`t-modal ${isOpen ? 'is-open' : 'is-closing'} fixed inset-0 z-[200] flex items-center justify-center p-4`}>
+            <div className="absolute inset-0 bg-ohm-bg/80 backdrop-blur-sm" onClick={handleCancel} />
+            <div className="relative w-full max-w-md bg-ohm-surface rounded-3xl border border-slate-300 shadow-2xl overflow-hidden">
                 <div className="p-6 space-y-5">
                     <div className="flex items-start gap-3">
                         <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${danger ? 'bg-red-500/10 text-red-500' : 'bg-amber-500/10 text-amber-600'}`}>
@@ -76,12 +91,12 @@ export const ConfirmDialog: React.FC<Props> = ({
                     )}
 
                     <div className="flex justify-end gap-2 pt-1">
-                        <button type="button" onClick={onCancel} className="px-4 py-2 rounded-lg bg-slate-100 text-slate-600 hover:bg-slate-200 transition-all text-sm font-bold">
+                        <button type="button" onClick={handleCancel} className="px-4 py-2 rounded-lg bg-slate-100 text-slate-600 hover:bg-slate-200 transition-all text-sm font-bold">
                             {cancelLabel}
                         </button>
                         <button
                             type="button"
-                            onClick={onConfirm}
+                            onClick={handleConfirm}
                             disabled={!ready}
                             className={`px-4 py-2 rounded-lg text-sm font-bold transition-all disabled:opacity-40 disabled:cursor-not-allowed ${danger ? 'bg-red-500 text-white hover:bg-red-600' : 'bg-ohm-primary text-ohm-bg hover:bg-yellow-300'}`}
                         >
