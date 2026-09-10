@@ -71,7 +71,7 @@ export const AwesomeSelect: React.FC<AwesomeSelectProps> = ({ value, onChange, o
                             initial={{ scale: 0.9, y: 20, opacity: 0 }}
                             animate={{ scale: 1, y: 0, opacity: 1 }}
                             exit={{ scale: 0.9, y: 20, opacity: 0 }}
-                            className="bg-white border border-blue-500/50 rounded-2xl shadow-[0_0_40px_rgba(37, 99, 235,0.3)] w-full max-w-md overflow-hidden flex flex-col max-h-[85vh]"
+                            className="bg-white border border-blue-500/50 rounded-2xl shadow-[0_0_40px_rgba(37, 99, 235,0.3)] w-full max-w-md overflow-hidden flex flex-col max-h-[85dvh]"
                             onClick={(e) => e.stopPropagation()}
                         >
                             {/* Header */}

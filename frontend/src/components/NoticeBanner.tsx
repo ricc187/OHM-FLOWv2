@@ -45,7 +45,7 @@ export const NoticeBanner: React.FC = () => {
 
     return (
         <div className={`t-modal ${isOpen ? 'is-open' : 'is-closing'} fixed inset-0 z-[200] flex items-center justify-center bg-white/80 backdrop-blur-md p-4 safe-top safe-bottom`}>
-            <div className="w-full max-w-md bg-white rounded-3xl border border-slate-300 shadow-2xl overflow-hidden">
+            <div className="w-full max-w-md max-h-[90dvh] bg-white rounded-3xl border border-slate-300 shadow-2xl overflow-y-auto overflow-x-hidden animate-fade-in">
                 <div className="p-6 sm:p-8 flex flex-col items-center text-center gap-4">
                     <div className="w-14 h-14 rounded-2xl bg-ohm-primary/15 flex items-center justify-center shrink-0">
                         <Megaphone className="text-ohm-primary" size={28} />

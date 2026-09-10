@@ -255,7 +255,7 @@ export const PrevisionAnnuelle: React.FC = () => {
                                     placeholder="Ex: 45000"
                                 />
                             </div>
-                            <div className="grid grid-cols-2 gap-4">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                                 <div>
                                     <label className="block text-[10px] font-black uppercase text-slate-500 mb-2 tracking-widest">Début théorique</label>
                                     <input

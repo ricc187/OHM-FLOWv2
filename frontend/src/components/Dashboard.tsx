@@ -304,7 +304,7 @@ export const Dashboard: React.FC<Props> = ({ currentUser, onSelectChantier }) =>
                             <button
                                 key={s}
                                 onClick={() => setSortBy(s)}
-                                className={`px-3 py-1.5 rounded-lg text-xs font-bold uppercase tracking-wide transition-all ${sortBy === s ? 'bg-primary text-black shadow-sm' : 'text-text-muted hover:text-slate-900'}`}
+                                className={`px-3 min-h-[40px] flex items-center justify-center rounded-lg text-xs font-bold uppercase tracking-wide transition-all ${sortBy === s ? 'bg-primary text-black shadow-sm' : 'text-text-muted hover:text-slate-900'}`}
                             >
                                 {s === 'nom' ? 'Nom' : 'Deadline'}
                             </button>

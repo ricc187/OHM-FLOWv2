@@ -414,7 +414,7 @@ export const FinancesTab: React.FC<Props> = ({ chantierId, avancementDeclare }) 
                 fiche chantier) pour comparer "où on en est vraiment" vs budget. */}
             <div className="card">
                 <h4 className="text-sm font-black text-slate-900 uppercase tracking-wide mb-5">Avancement</h4>
-                <div className="grid grid-cols-2 sm:grid-cols-5 gap-6">
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-4 sm:gap-6">
                     <DonutStat
                         label="Déclaré (chantier)"
                         pct={avancementDeclare != null ? avancementDeclare / 100 : null}

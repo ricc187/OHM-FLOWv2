@@ -25,6 +25,16 @@ export const InlineSearchSelect: React.FC<InlineSearchSelectProps> = ({ value, o
     const [isOpen, setIsOpen] = useState(false);
     const [query, setQuery] = useState('');
     const containerRef = useRef<HTMLDivElement>(null);
+    // Responsive fix: this popover always opened downward with a fixed
+    // max-h-80 (320px), regardless of how much viewport space was actually
+    // below it — on mobile, a field near the bottom of a scrolled form (or
+    // one pushed up by the virtual keyboard) got its list clipped with no
+    // way to reach the rest. Measured once on open, not tracked live — same
+    // bounded-measurement approach as the rest of this app's popovers
+    // (AwesomeSelect doesn't need this at all, it's a centered full-screen
+    // modal instead of an anchored popover).
+    const [dropUp, setDropUp] = useState(false);
+    const [maxListHeight, setMaxListHeight] = useState(320);
 
     const selectedOption = options.find(o => o.value === value);
 
@@ -37,6 +47,14 @@ export const InlineSearchSelect: React.FC<InlineSearchSelectProps> = ({ value, o
     const openDropdown = () => {
         setQuery('');
         setIsOpen(true);
+        const rect = containerRef.current?.getBoundingClientRect();
+        if (rect) {
+            const spaceBelow = window.innerHeight - rect.bottom - 8;
+            const spaceAbove = rect.top - 8;
+            const flip = spaceBelow < 320 && spaceAbove > spaceBelow;
+            setDropUp(flip);
+            setMaxListHeight(Math.max(160, Math.min(320, flip ? spaceAbove : spaceBelow)));
+        }
     };
 
     const handleSelect = (val: string) => {
@@ -87,11 +105,12 @@ export const InlineSearchSelect: React.FC<InlineSearchSelectProps> = ({ value, o
             <AnimatePresence>
                 {isOpen && (
                     <motion.div
-                        initial={{ opacity: 0, y: -6 }}
+                        initial={{ opacity: 0, y: dropUp ? 6 : -6 }}
                         animate={{ opacity: 1, y: 0 }}
-                        exit={{ opacity: 0, y: -6 }}
+                        exit={{ opacity: 0, y: dropUp ? 6 : -6 }}
                         transition={{ duration: 0.15 }}
-                        className="absolute left-0 right-0 mt-2 z-30 bg-white border border-blue-500/50 rounded-2xl shadow-[0_10px_40px_rgba(37,99,235,0.25)] overflow-hidden flex flex-col max-h-80"
+                        className={`absolute left-0 right-0 z-30 bg-white border border-blue-500/50 rounded-2xl shadow-[0_10px_40px_rgba(37,99,235,0.25)] overflow-hidden flex flex-col ${dropUp ? 'bottom-full mb-2' : 'top-full mt-2'}`}
+                        style={{ maxHeight: maxListHeight }}
                     >
                         <div className="p-2 overflow-y-auto flex-1">
                             {filteredOptions.length === 0 ? (
