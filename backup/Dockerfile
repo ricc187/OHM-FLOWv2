@@ -1,7 +1,8 @@
 FROM alpine:latest
 
-# Installe zip, bash et rclone (envoi offsite vers Swiss Backup — voir backup.sh)
-RUN apk add --no-cache zip bash rclone
+# Installe zip, bash, rclone (envoi offsite vers Swiss Backup) et sqlite
+# (sqlite3 CLI — export DB propre via `.backup`, voir backup.sh)
+RUN apk add --no-cache zip bash rclone sqlite
 
 # HOME explicite : crond ne le peuple pas forcément lui-même pour root, et
 # backup.sh lit ~/.config/rclone/rclone.conf via $HOME (monté depuis l'hôte,

@@ -35,10 +35,26 @@ Caddy, bypassing HTTPS entirely. Either:
 ## Offsite backup (Swiss Backup via rclone)
 
 `backup/backup.sh` still does its local ZIP + 12-file local retention as
-before; it now also pushes each freshly-created archive to Swiss Backup via
-`rclone copy` (remote name/path: `swissbackup:ohmflow/`, hardcoded in the
-script — adjust `RCLONE_REMOTE` there if it changes). Runs daily at 2am
-inside the `backup` container's own cron (not a system cron).
+before (`data/` in full — db + uploads + archives). Runs daily at 2am inside
+the `backup` container's own cron (not a system cron). Offsite, it splits
+into two different flows instead of re-sending that ZIP as a whole (the
+ZIP's bytes differ every day even when the underlying files don't, so
+`rclone` could never tell an unchanged upload apart from a new one):
+
+- **DB**: a clean `sqlite3 chantier.db ".backup ..."` export (falls back to
+  a raw file copy if `sqlite3` isn't in the image) sent with `rclone copy`
+  to `swissbackup:ohmflow/db/`, then rotated by age
+  (`REMOTE_DB_RETENTION_DAYS`, 90 days).
+- **uploads/ and archives/**: mirrored directly with `rclone sync` to
+  `swissbackup:ohmflow/uploads/` and `swissbackup:ohmflow/archives/` — no
+  zipping, rclone only transfers what actually changed. **No age-based
+  rotation on these two** — `sync` already keeps exactly one current copy
+  per live file, so an old-but-still-existing upload (e.g. a months-old job
+  photo) is real data, not a stale backup to purge; deleting by age here
+  would destroy it.
+
+Remote base path (`swissbackup:ohmflow/`) is hardcoded as
+`RCLONE_REMOTE_BASE` in the script — adjust there if it changes.
 
 **rclone.conf placement**: the `backup` service reads it from
 `/root/.config/rclone/rclone.conf` inside the container, mounted read-only
