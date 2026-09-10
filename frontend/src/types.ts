@@ -223,15 +223,17 @@ export interface PrevisionImportResult {
 // Un chantier peut avoir plusieurs VoltaDocumentLink (une par facture/offre
 // à synchroniser) — voir backend/app.py (VoltaDocumentLink,
 // process_volta_sync_queue). La clôture d'un chantier (status -> DONE) est
-// bloquée tant qu'aucune de ses entrées n'a statut_sync='synced'.
+// bloquée tant qu'aucune de ses entrées n'a statut_sync='synced' — ce qui
+// exige toujours une facture réelle (numero_facture optionnelle à la
+// saisie, mais jamais 'synced' sans elle, voir attente_facture ci-dessous).
 
-export type VoltaSyncStatut = 'en_attente' | 'synced' | 'erreur';
+export type VoltaSyncStatut = 'en_attente' | 'synced' | 'erreur' | 'attente_facture';
 
 export interface VoltaDocumentLink {
     id: number;
     chantier_id: number;
     numero_projet: string;
-    numero_facture: string;
+    numero_facture: string | null;
     numero_offre: string | null;
     statut_sync: VoltaSyncStatut;
     derniere_sync_at: string | null;

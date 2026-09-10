@@ -463,6 +463,63 @@ class VoltaSyncTestCase(unittest.TestCase):
             self.assertEqual(link.statut_sync, 'erreur')
             self.assertIn('Variable d', link.erreur_message or '')
 
+    # --- Facture optionnelle : statut 'attente_facture' (retour utilisateur —
+    # numero_facture n'est plus obligatoire à la saisie du lien, seulement
+    # pour pouvoir clôturer le chantier ensuite) ---
+
+    def test_facture_less_link_with_offer_becomes_attente_facture(self):
+        chantier_id = self._create_chantier('Facture manquante avec offre')
+        link_id = self._create_link(chantier_id, numero_facture=None, numero_offre='7747')
+        offers_fetch = _ok_offers([
+            {'numero_offre': '7747', 'montant': 100.0, 'heures': 1.0, 'materiel': None},
+        ])
+
+        with ohmapp.app.app_context():
+            # fetch_invoice_amount ne doit JAMAIS être appelée pour ce lien —
+            # échoue le test si elle l'est (pas juste "non testé").
+            result = ohmapp.process_volta_sync_queue(
+                fetch_invoice_amount=_failing_fetch('fetch_invoice_amount appelée sans facture !'),
+                fetch_project_offers_or_contracts=offers_fetch,
+            )
+        self.assertEqual(result, {'processed': 1, 'stopped_reason': None})
+        link = self._reload_link(link_id)
+        self.assertEqual(link.statut_sync, 'attente_facture')
+        self.assertIsNone(link.erreur_message)
+
+        # L'offre a bien été traitée malgré l'absence de facture.
+        with ohmapp.app.app_context():
+            ligne = ohmapp.CaLignePrevue.query.filter_by(chantier_id=chantier_id).first()
+            self.assertIsNotNone(ligne)
+            self.assertEqual(ligne.montant, 100.0)
+
+    def test_facture_less_link_without_offer_either_becomes_attente_facture(self):
+        chantier_id = self._create_chantier('Facture et offre manquantes')
+        link_id = self._create_link(chantier_id, numero_facture=None, numero_offre=None)
+
+        with ohmapp.app.app_context():
+            result = ohmapp.process_volta_sync_queue(
+                fetch_invoice_amount=_failing_fetch('ne doit pas être appelée'),
+                fetch_project_offers_or_contracts=_failing_fetch('ne doit pas être appelée non plus'),
+            )
+        self.assertEqual(result, {'processed': 1, 'stopped_reason': None})
+        self.assertEqual(self._reload_link(link_id).statut_sync, 'attente_facture')
+
+    def test_attente_facture_link_not_reprocessed_next_cycle(self):
+        """'attente_facture' sort le lien de la file 'en_attente' — sans ça
+        l'offre serait re-fetchée à chaque cycle pour rien tant qu'aucune
+        facture n'est ajoutée."""
+        chantier_id = self._create_chantier('Pas de reprocessing')
+        self._create_link(chantier_id, numero_facture=None, numero_offre='7747')
+        offers_fetch = _ok_offers([{'numero_offre': '7747', 'montant': 1.0, 'heures': 1.0, 'materiel': None}])
+
+        with ohmapp.app.app_context():
+            ohmapp.process_volta_sync_queue(fetch_invoice_amount=_failing_fetch(), fetch_project_offers_or_contracts=offers_fetch)
+            result2 = ohmapp.process_volta_sync_queue(
+                fetch_invoice_amount=_failing_fetch('ne doit plus être appelée'),
+                fetch_project_offers_or_contracts=_failing_fetch('offre ne doit plus être re-fetchée'),
+            )
+        self.assertEqual(result2, {'processed': 0, 'stopped_reason': None})
+
     # --- Blocage de clôture (même pattern/emplacement que l'ancien gating
     # Mesures/Rapport d'intervention — PUT /api/chantiers/<id>) ---
 
@@ -505,6 +562,16 @@ class VoltaSyncTestCase(unittest.TestCase):
         res2 = self.client.put(f'/api/chantiers/{chantier_id}', json={'status': 'DONE'})
         self.assertEqual(res2.status_code, 200, res2.get_json())
 
+    def test_closure_still_blocked_when_link_has_offer_but_no_facture(self):
+        """Le coeur du retour utilisateur, de bout en bout : une offre
+        renseignée (et même synchronisée avec succès) ne suffit jamais à
+        clôturer — seule une facture réellement synchronisée le peut."""
+        chantier_id = self._create_chantier('Cloture offre sans facture')
+        self._create_link(chantier_id, numero_facture=None, numero_offre='7747', statut_sync='attente_facture')
+        res = self.client.put(f'/api/chantiers/{chantier_id}', json={'status': 'DONE'})
+        self.assertEqual(res.status_code, 409)
+        self.assertIn('Volta', res.get_json()['error'])
+
     # --- Endpoint CRUD minimal des VoltaDocumentLink (formulaire étape 4) ---
 
     def test_volta_links_create_and_list(self):
@@ -531,12 +598,22 @@ class VoltaSyncTestCase(unittest.TestCase):
         self.assertEqual(res.status_code, 201, res.get_json())
         self.assertIsNone(res.get_json()['numero_offre'])
 
-    def test_volta_links_requires_numero_projet_and_facture(self):
+    def test_volta_links_requires_numero_projet(self):
         chantier_id = self._create_chantier('Links validation')
         res = self.client.post(f'/api/chantiers/{chantier_id}/volta-links', json={'numero_facture': '7098'})
         self.assertEqual(res.status_code, 400)
-        res2 = self.client.post(f'/api/chantiers/{chantier_id}/volta-links', json={'numero_projet': '024042.001'})
-        self.assertEqual(res2.status_code, 400)
+
+    def test_volta_links_numero_facture_optional(self):
+        """Retour utilisateur : la facture n'est plus obligatoire à la
+        saisie, seulement pour pouvoir clôturer le chantier ensuite (voir
+        test_closure_blocked_without_synced_facture_even_with_offer plus
+        loin, section '--- Blocage de clôture ---')."""
+        chantier_id = self._create_chantier('Links facture optionnelle')
+        res = self.client.post(f'/api/chantiers/{chantier_id}/volta-links', json={
+            'numero_projet': '024042.001', 'numero_offre': '7747',
+        })
+        self.assertEqual(res.status_code, 201, res.get_json())
+        self.assertIsNone(res.get_json()['numero_facture'])
 
     def test_volta_links_unknown_chantier_404(self):
         res = self.client.post('/api/chantiers/999999/volta-links', json={'numero_projet': 'x', 'numero_facture': 'y'})

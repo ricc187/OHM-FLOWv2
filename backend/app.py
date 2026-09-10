@@ -1182,9 +1182,17 @@ class VoltaDocumentLink(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     chantier_id = db.Column(db.Integer, db.ForeignKey('chantiers.id'), nullable=False)
     numero_projet = db.Column(db.String(20), nullable=False)   # ex "024042.001"
-    numero_facture = db.Column(db.String(20), nullable=False)  # ex "7098"
+    # Optionnelle depuis le retour "pas obligatoire à la saisie, seulement à
+    # la clôture" — un lien peut être créé avec juste projet+offre (avance
+    # le CA prévisionnel) avant que la facture existe ; voir
+    # process_volta_sync_queue pour ce que ça change au traitement, et le
+    # gating de clôture (statut='DONE') qui, lui, exige toujours une
+    # facture réellement synchronisée.
+    numero_facture = db.Column(db.String(20), nullable=True)   # ex "7098"
     numero_offre = db.Column(db.String(20), nullable=True)     # optionnel — ex "7747"
-    statut_sync = db.Column(db.String(20), nullable=False, default='en_attente')  # en_attente | synced | erreur
+    # en_attente | synced | erreur | attente_facture (offre traitée, ou rien
+    # à traiter, mais pas de facture donc jamais "synced" — voir le worker).
+    statut_sync = db.Column(db.String(20), nullable=False, default='en_attente')
     derniere_sync_at = db.Column(db.DateTime, nullable=True)
     erreur_message = db.Column(db.Text, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
@@ -1635,6 +1643,42 @@ def init_db():
                 if migrated:
                     db.session.commit()
                     logger.info(f"Migrated {migrated} CA prévisionnel line(s) into ca_lignes_prevues")
+
+        # One-time migration: numero_facture devient optionnel à la saisie
+        # (voir VoltaDocumentLink docstring/commentaire) — SQLite n'a pas
+        # d'ALTER COLUMN pour retirer une contrainte NOT NULL, la seule voie
+        # est de reconstruire la table (recette standard SQLite : nouvelle
+        # table, copie des données, suppression de l'ancienne, renommage).
+        if 'volta_document_links' in existing_tables:
+            facture_col = next((c for c in inspector.get_columns('volta_document_links') if c['name'] == 'numero_facture'), None)
+            if facture_col is not None and not facture_col['nullable']:
+                logger.info("Migrating volta_document_links: numero_facture NOT NULL -> nullable")
+                with db.engine.connect() as legacy_conn:
+                    legacy_conn.execute(text("""
+                        CREATE TABLE volta_document_links_new (
+                            id INTEGER NOT NULL PRIMARY KEY,
+                            chantier_id INTEGER NOT NULL,
+                            numero_projet VARCHAR(20) NOT NULL,
+                            numero_facture VARCHAR(20),
+                            numero_offre VARCHAR(20),
+                            statut_sync VARCHAR(20) NOT NULL DEFAULT 'en_attente',
+                            derniere_sync_at DATETIME,
+                            erreur_message TEXT,
+                            created_at DATETIME,
+                            FOREIGN KEY(chantier_id) REFERENCES chantiers (id)
+                        )
+                    """))
+                    legacy_conn.execute(text(
+                        "INSERT INTO volta_document_links_new "
+                        "(id, chantier_id, numero_projet, numero_facture, numero_offre, statut_sync, derniere_sync_at, erreur_message, created_at) "
+                        "SELECT id, chantier_id, numero_projet, numero_facture, numero_offre, statut_sync, derniere_sync_at, erreur_message, created_at "
+                        "FROM volta_document_links"
+                    ))
+                    legacy_conn.execute(text("DROP TABLE volta_document_links"))
+                    legacy_conn.execute(text("ALTER TABLE volta_document_links_new RENAME TO volta_document_links"))
+                    legacy_conn.commit()
+                inspector = inspect(db.engine)
+                existing_tables = inspector.get_table_names()
 
         # One-time migration: the old Plan/Devis/Mesures/Rapports categories
         # were merged into a single "document" category — move each affected
@@ -4634,14 +4678,6 @@ def process_volta_sync_queue(fetch_invoice_amount=fetch_invoice_amount,
             return {'processed': processed, 'stopped_reason': 'rate_limit'}
 
         try:
-            try:
-                invoice_result = fetch_invoice_amount(link.numero_facture)
-            except Exception:
-                _log_volta_call('fetch_invoice_amount', False)
-                raise
-            _log_volta_call('fetch_invoice_amount', True)
-            _upsert_acompte_from_invoice(link, invoice_result)
-
             if link.numero_offre:
                 if link.numero_projet in project_cache:
                     offers = project_cache[link.numero_projet]
@@ -4659,9 +4695,29 @@ def process_volta_sync_queue(fetch_invoice_amount=fetch_invoice_amount,
                     raise VoltaSyncError(f"Offre {link.numero_offre} introuvable dans le projet {link.numero_projet}")
                 _upsert_ca_ligne_from_offer(link, offer)
 
-            link.statut_sync = 'synced'
-            link.derniere_sync_at = datetime.datetime.utcnow()
-            link.erreur_message = None
+            # numero_facture optionnel à la saisie (voir modèle) : sans elle,
+            # rien à synchroniser côté facture — l'offre ci-dessus (si
+            # présente) a déjà été traitée, mais le statut reste
+            # 'attente_facture' (jamais 'synced') puisque c'est justement ce
+            # que le gating de clôture du chantier vérifie. 'attente_facture'
+            # sort ce lien de la file 'en_attente' : sans ça, il serait
+            # retraité (et l'offre re-fetchée pour rien) à chaque cycle tant
+            # qu'aucune facture n'est ajoutée.
+            if not link.numero_facture:
+                link.statut_sync = 'attente_facture'
+                link.erreur_message = None
+            else:
+                try:
+                    invoice_result = fetch_invoice_amount(link.numero_facture)
+                except Exception:
+                    _log_volta_call('fetch_invoice_amount', False)
+                    raise
+                _log_volta_call('fetch_invoice_amount', True)
+                _upsert_acompte_from_invoice(link, invoice_result)
+
+                link.statut_sync = 'synced'
+                link.derniere_sync_at = datetime.datetime.utcnow()
+                link.erreur_message = None
         except Exception as e:
             link.statut_sync = 'erreur'
             link.erreur_message = str(e)
@@ -4768,13 +4824,15 @@ def manage_volta_links(current_user, chantier_id):
 
     data = request.json or {}
     numero_projet = (data.get('numero_projet') or '').strip()
-    numero_facture = (data.get('numero_facture') or '').strip()
+    numero_facture = (data.get('numero_facture') or '').strip() or None
     numero_offre = (data.get('numero_offre') or '').strip() or None
 
     if not numero_projet:
         return jsonify({'error': 'numero_projet is required'}), 400
-    if not numero_facture:
-        return jsonify({'error': 'numero_facture is required'}), 400
+    # numero_facture n'est plus obligatoire ici (voir VoltaDocumentLink et
+    # process_volta_sync_queue) — seule la clôture du chantier l'exige
+    # (statut='DONE' gating, voir chantier_detail PUT : nécessite un lien
+    # avec statut_sync='synced', qui n'arrive jamais sans facture réelle).
 
     link = VoltaDocumentLink(
         chantier_id=chantier_id,
