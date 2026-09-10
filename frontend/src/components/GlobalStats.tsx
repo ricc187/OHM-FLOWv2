@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { AlertTriangle } from 'lucide-react';
 import { api } from '../api';
 import { SlidingTabs } from './ui/SlidingTabs';
 import { RhPlanningTab } from './RhPlanningTab';
@@ -41,13 +42,23 @@ interface ChantierFinancierStat {
 }
 interface FinancierTotals {
     chantiers_count: number; chantiers_positive_marge: number; chantiers_negative_marge: number;
+    // Chantiers existants mais sans ChantierFinancier configuré — absents de
+    // `chantiers`/`totals` ci-dessus (pas à zéro, juste absents). Voir la
+    // bannière rendue plus bas, sinon ces totaux paraissent couvrir tout
+    // alors qu'ils sautent silencieusement ces chantiers-là.
+    chantiers_non_configures_count: number;
     ca_prevu: number; ca_reel: number;
     marge_prevue: number; marge_reelle: number; pct_marge_reelle: number | null;
     debourse_sec_prevu: number; debourse_sec_reel: number;
     pct_avancement_ca: number | null; pct_avancement_materiel: number | null;
     pct_avancement_mo: number | null; pct_avancement_debourse_sec: number | null;
 }
-interface FinancierStatsData { chantiers: ChantierFinancierStat[]; totals: FinancierTotals | null; }
+interface FinancierStatsData {
+    chantiers: ChantierFinancierStat[];
+    totals: FinancierTotals | null;
+    // Présent seulement quand `totals` est null (aucun chantier configuré du tout).
+    chantiers_non_configures_count?: number;
+}
 
 const formatCHF = (v: number | null | undefined, compact = false) => {
     if (v == null) return '—';
@@ -292,6 +303,9 @@ export const GlobalStats: React.FC = () => {
 
     const totals = fin?.totals;
     const chantiers = fin?.chantiers ?? [];
+    // Présent soit sur `totals` (cas normal), soit à la racine de la réponse
+    // quand aucun chantier n'a de suivi financier du tout (`totals: null`).
+    const chantiersNonConfigures = totals?.chantiers_non_configures_count ?? fin?.chantiers_non_configures_count ?? 0;
 
     // Au-delà d'une dizaine de chantiers, une barre par chantier devient
     // illisible (et ça va monter à ~70) — on montre les 5 meilleures/moins
@@ -326,6 +340,19 @@ export const GlobalStats: React.FC = () => {
             {activeTab === 'RH' && <RhPlanningTab />}
 
             {activeTab === 'FINANCIER' && <>
+
+            {/* Chantiers sans suivi financier configuré — invisibles dans les
+                totaux/graphes ci-dessous (pas à zéro, juste absents), donc
+                affiché explicitement plutôt que de laisser croire que cette
+                page couvre tous les chantiers. */}
+            {chantiersNonConfigures > 0 && (
+                <div className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-sm">
+                    <AlertTriangle size={16} className="shrink-0" />
+                    <span>
+                        <strong>{chantiersNonConfigures}</strong> chantier{chantiersNonConfigures > 1 ? 's' : ''} sans suivi financier configuré — exclu{chantiersNonConfigures > 1 ? 's' : ''} des totaux et graphiques ci-dessous.
+                    </span>
+                </div>
+            )}
 
             {/* ===== KPI ===== */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">

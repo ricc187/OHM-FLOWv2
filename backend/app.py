@@ -5245,9 +5245,18 @@ def get_financier_stats(current_user):
 
     from collections import defaultdict
 
+    # Tous les chantiers, y compris FUTURE — un chantier "en attente de
+    # planification" reste un engagement financier réel (offre déjà émise,
+    # devis en cours) même sans une seule heure encore posée dessus.
+    total_chantiers_count = Chantier.query.count()
+
     financiers = ChantierFinancier.query.all()
     if not financiers:
-        return jsonify({'chantiers': [], 'totals': None})
+        return jsonify({
+            'chantiers': [],
+            'totals': None,
+            'chantiers_non_configures_count': total_chantiers_count,
+        })
 
     chantier_ids = [f.chantier_id for f in financiers]
     chantiers_by_id = {c.id: c for c in Chantier.query.filter(Chantier.id.in_(chantier_ids)).all()}
@@ -5290,8 +5299,16 @@ def get_financier_stats(current_user):
     def total(key):
         return round(sum(c[key] for c in per_chantier), 2)
 
+    # Combien de chantiers existent mais n'ont AUCUN ChantierFinancier — donc
+    # totalement absents de `per_chantier` et de `totals` ci-dessous, sans
+    # que rien ne le signale ailleurs (ni zéro, ni ligne vide : juste absent).
+    # Affiché en avertissement côté GlobalStats plutôt que de laisser croire
+    # que ces totaux couvrent tous les chantiers.
+    chantiers_non_configures_count = total_chantiers_count - len(per_chantier)
+
     totals = {
         'chantiers_count': len(per_chantier),
+        'chantiers_non_configures_count': chantiers_non_configures_count,
         'chantiers_positive_marge': sum(1 for c in per_chantier if c['marge_reelle'] >= 0),
         'chantiers_negative_marge': sum(1 for c in per_chantier if c['marge_reelle'] < 0),
         'ca_prevu': total('ca_prevu'),
