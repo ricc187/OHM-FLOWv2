@@ -351,7 +351,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, activeView, onLo
                                 </div>
                                 <button
                                     onClick={onLogout}
-                                    className="p-2 rounded-lg hover:bg-red-500/10 text-text-muted hover:text-red-500 transition-all"
+                                    className="p-2 min-w-[40px] min-h-[40px] flex items-center justify-center rounded-lg hover:bg-red-500/10 text-text-muted hover:text-red-500 transition-all"
                                     title="Déconnexion"
                                     aria-label="Déconnexion"
                                 >

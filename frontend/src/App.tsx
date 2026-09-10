@@ -307,7 +307,7 @@ function App() {
 
     if (user.mfa_required && !user.mfa_enabled) {
         return (
-            <div className="h-[100dvh] flex items-center justify-center p-4 bg-ohm-bg safe-top safe-bottom safe-left safe-right">
+            <div className="h-[100dvh] flex items-center justify-center p-4 bg-ohm-bg safe-top safe-bottom safe-left safe-right overflow-y-auto">
                 <div className="w-full max-w-sm">
                     <p className="text-slate-400 text-sm text-center mb-4">
                         La double authentification est obligatoire sur ce compte — dernière étape avant de continuer.

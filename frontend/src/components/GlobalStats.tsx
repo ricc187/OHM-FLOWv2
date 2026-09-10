@@ -444,7 +444,7 @@ export const GlobalStats: React.FC = () => {
                         <div className="flex p-1 bg-slate-100 rounded-lg overflow-hidden">
                             {(['3M', '6M', '1Y', 'ALL'] as const).map(range => (
                                 <button key={range} onClick={() => setFilterRange(range)}
-                                    className={`px-2.5 py-1 text-xs font-bold rounded-md transition-all ${filterRange === range ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-900'}`}>
+                                    className={`px-2.5 min-h-[40px] flex items-center justify-center text-xs font-bold rounded-md transition-all ${filterRange === range ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-900'}`}>
                                     {range}
                                 </button>
                             ))}

@@ -40,7 +40,7 @@ export const ChangePasswordGate: React.FC<Props> = ({ user, onChanged }) => {
     };
 
     return (
-        <div className="h-[100dvh] flex items-center justify-center p-4 bg-ohm-bg safe-top safe-bottom safe-left safe-right">
+        <div className="h-[100dvh] flex items-center justify-center p-4 bg-ohm-bg safe-top safe-bottom safe-left safe-right overflow-y-auto">
             <form onSubmit={submit} className="card w-full max-w-sm space-y-5">
                 <div className="flex items-center gap-3">
                     <div className="w-10 h-10 rounded-xl bg-ohm-primary/15 flex items-center justify-center shrink-0">

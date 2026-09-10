@@ -42,3 +42,5 @@ rclone.conf
 # Volta API exploration (scripts/explore_volta_api.py) — raw dumps contain
 # real client data, never committed.
 scripts/volta_dumps/
+.claude/skills/impeccable/scripts/bin/
+.claude/settings.local.json

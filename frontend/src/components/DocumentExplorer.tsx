@@ -194,7 +194,7 @@ export const DocumentExplorer: React.FC<Props> = ({ chantierId, chantierNom, isA
 
     return (
         <div className={`t-modal ${isOpen ? 'is-open' : 'is-closing'} fixed inset-0 bg-white/80 backdrop-blur-md flex items-center justify-center z-[100] p-4 safe-top safe-bottom`}>
-            <div className="w-full max-w-4xl h-[85vh] bg-white rounded-3xl border border-slate-300 shadow-2xl overflow-hidden flex flex-col">
+            <div className="w-full max-w-4xl h-[85dvh] bg-white rounded-3xl border border-slate-300 shadow-2xl overflow-hidden flex flex-col">
                 <div className="p-4 sm:p-6 border-b border-black/5 flex justify-between items-center bg-slate-50 shrink-0">
                     <div className="min-w-0">
                         <h3 className="text-lg sm:text-xl font-black text-slate-900 uppercase tracking-tight truncate">Dossiers — {chantierNom}</h3>

@@ -253,7 +253,7 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
     ];
 
     return (
-        <div className="animate-fade-in relative pb-40 min-h-screen">
+        <div className="animate-fade-in relative pb-40">
             {/* Header — scrolls away with the rest of the page instead of staying
                 pinned, so it never sits on top of the entries below it */}
             <div className="pt-4 pb-4 mb-6 -mx-4 px-4">
@@ -304,7 +304,7 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
                         />
                     </div>
 
-                    <div className="grid grid-cols-2 sm:flex sm:items-center gap-2 w-full sm:w-auto">
+                    <div className="flex flex-wrap sm:flex-nowrap sm:items-center gap-2 w-full sm:w-auto">
                         <input ref={photoInputRef} type="file" accept="image/*" multiple className="hidden" onChange={e => handleDocumentInputChange('photo', e)} />
 
                         <button
@@ -535,7 +535,7 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
             {/* ENTRY MODAL */}
             {entryModalT.mounted && (
                 <div className={`t-modal ${entryModalT.active ? 'is-open' : 'is-closing'} fixed inset-0 bg-white/80 backdrop-blur-md flex items-center justify-center z-[100] p-4 safe-top safe-bottom`}>
-                    <div className="w-full max-w-2xl bg-white rounded-3xl border border-slate-300 shadow-2xl overflow-hidden ring-1 ring-white/10 max-h-[90vh] flex flex-col">
+                    <div className="w-full max-w-2xl bg-white rounded-3xl border border-slate-300 shadow-2xl overflow-hidden ring-1 ring-white/10 max-h-[90dvh] flex flex-col">
                         <div className="p-4 sm:p-8 border-b border-black/5 flex justify-between items-center bg-slate-50 shrink-0">
                             <div>
                                 <h3 className="text-xl sm:text-2xl font-black text-slate-900 uppercase tracking-tight">Nouvelle Saisie</h3>
@@ -642,7 +642,7 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
             {/* EDIT MODAL */}
             {editModalT.mounted && (
                 <div className={`t-modal ${editModalT.active ? 'is-open' : 'is-closing'} fixed inset-0 bg-white/80 backdrop-blur-sm flex items-center justify-center z-[100] p-4 safe-top safe-bottom`}>
-                    <div className="card w-full max-w-2xl max-h-[90vh] overflow-y-auto overflow-x-hidden">
+                    <div className="card w-full max-w-2xl max-h-[90dvh] overflow-y-auto overflow-x-hidden">
                         <div className="flex justify-between items-center mb-6">
                             <h3 className="text-xl font-bold text-slate-900 uppercase">Modifier le chantier</h3>
                             <button onClick={() => setShowEditModal(false)}><X className="text-slate-500" /></button>
