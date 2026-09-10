@@ -433,7 +433,7 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
                         ) : (
                             <button
                                 onClick={() => setShowEntryModal(true)}
-                                className="w-full py-3 bg-primary text-black font-black uppercase tracking-widest rounded-xl shadow-md hover:bg-yellow-400 hover:scale-[1.01] active:scale-[0.99] transition-all flex items-center justify-center gap-2 text-sm"
+                                className="w-full py-3 bg-ohm-primary text-ohm-bg font-black uppercase tracking-widest rounded-xl shadow-md hover:bg-yellow-300 hover:scale-[1.01] active:scale-[0.99] transition-all flex items-center justify-center gap-2 text-sm"
                             >
                                 <span className="text-lg">+</span> AJOUTER UNE ENTRÉE
                             </button>
@@ -589,7 +589,7 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
                                                 step="0.5"
                                                 inputMode="decimal"
                                                 autoFocus
-                                                className="w-full bg-transparent text-center text-4xl font-black text-slate-900 py-2 focus:outline-none placeholder-slate-700 appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                                                className="w-full bg-transparent text-center text-4xl font-black text-slate-900 py-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-ohm-primary/50 focus-visible:rounded-xl placeholder-slate-700 appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                                                 placeholder="0"
                                                 value={entryForm.heures}
                                                 onChange={e => setEntryForm({ ...entryForm, heures: e.target.value })}
