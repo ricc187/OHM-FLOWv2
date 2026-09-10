@@ -144,6 +144,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, activeView, onLo
         }
     }, [queuedCount, queuedAuthError]);
     const queuedPillT = useMountTransition(queuedCount > 0, 250);
+    const drawerT = useMountTransition(drawerOpen, 300);
 
     // Close the drawer automatically if the viewport grows into the desktop
     // layout (e.g. phone rotated to a tablet-sized landscape, or a resize).
@@ -300,13 +301,18 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, activeView, onLo
             </button>
 
             {/* ===== Mobile Drawer (below lg) ===== */}
-            {drawerOpen && (
+            {/* impeccable polish: this was the one modal-shaped overlay in the
+                app never migrated to the useMountTransition pattern used by
+                every other modal/panel (ConfirmDialog, AgendaForm, Vehicules,
+                etc.) — it unmounted instantly on close with no exit
+                animation, only ever playing the entrance keyframe. */}
+            {drawerT.mounted && (
                 <div className="lg:hidden fixed inset-0 z-50">
                     <div
-                        className="absolute inset-0 bg-black/40 backdrop-blur-sm animate-fade-in touch-none"
+                        className={`absolute inset-0 bg-black/40 backdrop-blur-sm touch-none transition-opacity duration-300 ${drawerT.active ? 'opacity-100' : 'opacity-0'}`}
                         onClick={() => setDrawerOpen(false)}
                     />
-                    <div className="absolute left-0 top-0 bottom-0 w-[82%] max-w-xs bg-surface shadow-2xl flex flex-col animate-slide-in-right safe-top safe-bottom">
+                    <div className={`absolute left-0 top-0 bottom-0 w-[82%] max-w-xs bg-surface shadow-2xl flex flex-col safe-top safe-bottom transition-transform duration-300 ease-out ${drawerT.active ? 'translate-x-0' : '-translate-x-full'}`}>
                         <div className="h-16 flex items-center justify-between px-5 border-b border-slate-200 shrink-0">
                             <div className="flex items-center gap-2">
                                 <OhmIcon className="w-6 h-6 text-primary" />

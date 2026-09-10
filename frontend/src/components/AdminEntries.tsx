@@ -231,7 +231,7 @@ export const AdminEntries: React.FC<Props> = () => {
                                         <button onClick={() => setEditingId(null)} className="p-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-900 transition-all" title="Annuler">
                                             <X size={18} />
                                         </button>
-                                        <button onClick={() => handleSaveEdit(e.id)} className="p-2 rounded-lg bg-blue-500/20 text-blue-500 hover:bg-blue-500 hover:text-white transition-all" title="Enregistrer">
+                                        <button onClick={() => handleSaveEdit(e.id)} className="p-2 rounded-lg text-green-600 hover:bg-green-500/10 transition-all" title="Enregistrer">
                                             <Check size={18} />
                                         </button>
                                     </div>

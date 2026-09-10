@@ -331,6 +331,19 @@
   ::-webkit-scrollbar-thumb {
     @apply bg-slate-300 rounded-full hover:bg-primary transition-colors;
   }
+
+  /* impeccable polish: no button/link in the app styled a visible keyboard
+     focus state (audit found zero focus-visible/ring on any <button>,
+     relying only on the browser default outline, which several components
+     then explicitly suppressed via focus:outline-none with nothing in its
+     place). One base rule instead of touching every button — keeps the
+     mouse-click state untouched (focus-visible skips it) while restoring a
+     real, on-brand indicator for keyboard/switch navigation everywhere. */
+  button:focus-visible,
+  a:focus-visible,
+  [role="button"]:focus-visible {
+    @apply outline-none ring-2 ring-ohm-primary/50 ring-offset-2 ring-offset-ohm-bg;
+  }
 }
 
 @layer components {

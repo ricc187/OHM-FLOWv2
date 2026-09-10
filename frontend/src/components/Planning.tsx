@@ -38,7 +38,6 @@ const CalendarView = ({ leaves }: { leaves: Leave[] }) => {
             .then(res => res.json())
             .then(data => {
                 // The backend proxy now directly returns `{ 'YYYY-MM-DD': 'Holiday Name' }`
-                console.log("Mapped Holidays from Proxy:", data);
                 setHolidays(data);
             })
             .catch(err => console.error("Erreur lors du chargement des jours fériés", err));
@@ -429,7 +428,7 @@ export const Planning: React.FC<Props> = ({ currentUser }) => {
                                 {editingLeaveId === l.id ? (
                                     <>
                                         <button onClick={() => setEditingLeaveId(null)} className="p-2 rounded-lg bg-slate-100 text-slate-900 hover:bg-slate-200 transition-all text-xs font-bold uppercase">Annuler</button>
-                                        <button onClick={() => handleSaveEditLeave(l.id)} className="px-4 py-2 rounded-lg bg-blue-500 text-slate-900 font-bold hover:bg-blue-400 transition-all text-xs uppercase">Enregistrer</button>
+                                        <button onClick={() => handleSaveEditLeave(l.id)} className="px-4 py-2 rounded-lg bg-ohm-primary text-ohm-bg font-bold hover:bg-yellow-300 transition-all text-xs uppercase">Enregistrer</button>
                                     </>
                                 ) : (
                                     <>
