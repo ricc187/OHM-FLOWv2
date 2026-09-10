@@ -291,6 +291,55 @@ class FinancierApiTestCase(unittest.TestCase):
         self.assertEqual(res.status_code, 200)
         self.assertAlmostEqual(res.get_json()['heures'], 12.5, places=2)
 
+    # --- /api/stats/financier : les chantiers sans ChantierFinancier ne
+    # doivent jamais disparaitre silencieusement des totaux, voir le
+    # chantiers_non_configures_count ajoute au retour de l'endpoint.
+
+    def test_stats_financier_reports_unconfigured_chantiers_count(self):
+        # setUp() a deja cree self.chantier_id SANS financier configure.
+        # On cree un second chantier lui aussi non configure, et on donne
+        # un financier au chantier de ce test pour verifier les deux
+        # compteurs bougent dans des sens opposes.
+        with ohmapp.app.app_context():
+            other = ohmapp.Chantier(nom='Sans financier', annee=2026, status='FUTURE')
+            ohmapp.db.session.add(other)
+            ohmapp.db.session.commit()
+
+        res_before = self.client.get('/api/stats/financier')
+        self.assertEqual(res_before.status_code, 200)
+        totals_before = res_before.get_json()['totals']
+
+        self._put_financier()
+
+        res_after = self.client.get('/api/stats/financier')
+        self.assertEqual(res_after.status_code, 200)
+        data_after = res_after.get_json()
+        totals_after = data_after['totals']
+
+        # Un chantier de plus configure : chantiers_count +1, l'inconfigure -1.
+        if totals_before is None:
+            # Premier chantier jamais configure dans toute la classe de test.
+            self.assertEqual(totals_after['chantiers_count'], 1)
+        else:
+            self.assertEqual(totals_after['chantiers_count'], totals_before['chantiers_count'] + 1)
+            self.assertEqual(
+                totals_after['chantiers_non_configures_count'],
+                totals_before['chantiers_non_configures_count'] - 1,
+            )
+
+        # Invariant qui doit TOUJOURS tenir, peu importe l'etat accumule par
+        # les autres tests de la classe : compte visible + compte invisible
+        # = total reel de chantiers en base (rien ne doit se perdre).
+        with ohmapp.app.app_context():
+            total_reel = ohmapp.Chantier.query.count()
+        self.assertEqual(
+            totals_after['chantiers_count'] + totals_after['chantiers_non_configures_count'],
+            total_reel,
+        )
+        # Le chantier "Sans financier" cree ci-dessus doit etre compte dans
+        # l'inconfigure, pas silencieusement absorbe nulle part.
+        self.assertGreaterEqual(totals_after['chantiers_non_configures_count'], 1)
+
 
 if __name__ == '__main__':
     unittest.main()
