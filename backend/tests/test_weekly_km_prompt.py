@@ -201,7 +201,7 @@ class WeeklyKmPromptTestCase(unittest.TestCase):
         self._freeze(_next_or_today_friday(datetime.date.today()))
         client.post('/api/weekly-km-prompt/respond', json={'reponse': 'oui'})
 
-        res = client.post(f'/api/vehicules/{vehicule_id}/km-entries', json={'km_parcourus': 42})
+        res = client.post(f'/api/vehicules/{vehicule_id}/km-entries', json={'km_actuel': 42})
         self.assertEqual(res.status_code, 201, res.get_json())
 
         res = client.get('/api/weekly-km-prompt/status')
@@ -231,7 +231,7 @@ class WeeklyKmPromptTestCase(unittest.TestCase):
         self.assertNotEqual(status['semaine_iso'], ohmapp._iso_week_str(following_monday))
 
         # Et se résout bien quand le relevé arrive enfin
-        res = client.post(f'/api/vehicules/{vehicule_id}/km-entries', json={'km_parcourus': 15})
+        res = client.post(f'/api/vehicules/{vehicule_id}/km-entries', json={'km_actuel': 15})
         self.assertEqual(res.status_code, 201, res.get_json())
         res = client.get('/api/weekly-km-prompt/status')
         self.assertFalse(res.get_json()['pending_km_entry'])
@@ -247,7 +247,7 @@ class WeeklyKmPromptTestCase(unittest.TestCase):
         friday = _next_or_today_friday(datetime.date.today())
         self._freeze(friday)
 
-        res = client.post(f'/api/vehicules/{vehicule_id}/km-entries', json={'km_parcourus': 7})
+        res = client.post(f'/api/vehicules/{vehicule_id}/km-entries', json={'km_actuel': 7})
         self.assertEqual(res.status_code, 201, res.get_json())
 
         res = client.get('/api/weekly-km-prompt/status')

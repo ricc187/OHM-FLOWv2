@@ -106,10 +106,13 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, activeView, onLo
         return () => clearInterval(interval);
     }, [user?.role]);
 
-    // Chantiers dans le "Pot à chantier" (aucune chantier_assignment) — visible
-    // de tous (le menu lui-même l'est), pas juste admin comme pendingCount ci-dessus.
+    // Chantiers dans le "Pot à chantier" (aucune chantier_assignment) —
+    // visible aux admins et dépanneurs, pas aux users (voir NAV_ITEMS
+    // filtrage plus bas) — donc pas non plus la peine d'aller chercher le
+    // compte pour un role='user' qui ne verra jamais le badge.
     const [potCount, setPotCount] = useState(0);
     useEffect(() => {
+        if (user?.role === 'user') return;
         const fetchPotCount = async () => {
             const res = await api.get('/api/chantiers?has_assignments=false');
             if (res.ok) setPotCount((await res.json()).length);
@@ -117,7 +120,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, activeView, onLo
         fetchPotCount();
         const interval = setInterval(fetchPotCount, 60000);
         return () => clearInterval(interval);
-    }, []);
+    }, [user?.role]);
 
     // Offline-queued entries (see offlineQueue.ts) — a small persistent
     // indicator so it's obvious something is waiting to send, not silently lost.
@@ -180,6 +183,13 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, activeView, onLo
         setDrawerOpen(false);
     };
 
+    // "Pot à chantier" : admins et dépanneurs seulement, pas les users
+    // (retour utilisateur direct — un simple 'user' n'a pas à voir les
+    // chantiers pas encore assignés). Filtré ici plutôt que de le sortir de
+    // NAV_ITEMS vers ADMIN_NAV_ITEMS : ce dernier est admin-only, ça
+    // exclurait aussi les dépanneurs qui doivent le garder.
+    const visibleNavItems = NAV_ITEMS.filter(item => item.path !== 'pot-a-chantier' || user?.role !== 'user');
+
     return (
         <div className="flex h-[100dvh] bg-background text-text overflow-hidden relative selection:bg-primary/30">
             {/* Background Ambience */}
@@ -214,7 +224,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, activeView, onLo
                 </div>
 
                 <nav className="flex-1 py-6 px-3 space-y-2 flex flex-col w-full overflow-y-auto overflow-x-hidden no-scrollbar">
-                    {NAV_ITEMS.map(item => (
+                    {visibleNavItems.map(item => (
                         <NavItem key={item.path} icon={<item.icon size={22} />} label={item.label} active={activeView === item.view} onClick={() => handleNavigate(item.path)} badge={item.path === 'pot-a-chantier' ? potCount : undefined} />
                     ))}
 
@@ -314,7 +324,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, activeView, onLo
                         </div>
 
                         <nav className="flex-1 py-4 px-3 space-y-1 overflow-y-auto">
-                            {NAV_ITEMS.map(item => (
+                            {visibleNavItems.map(item => (
                                 <NavItemMobile key={item.path} icon={<item.icon size={22} />} label={item.label} active={activeView === item.view} onClick={() => handleNavigate(item.path)} badge={item.path === 'pot-a-chantier' ? potCount : undefined} />
                             ))}
 

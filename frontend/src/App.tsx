@@ -70,8 +70,15 @@ function App() {
     // l'affichage du Oui/Non, kmPending le blocage de navigation une fois
     // "Oui" cliqué — mutuellement exclusifs côté serveur (voir
     // get_weekly_km_prompt_status dans app.py), jamais les deux à true.
+    // kmStatusChecked distingue "pas encore su" de "su, rien à faire" — sans
+    // lui, le premier rendu (kmPending initialisé à false) affiche brièvement
+    // le contenu normal avant que le fetch ci-dessous ne corrige, le temps
+    // d'un aller-retour réseau (flash visible sur un F5 pendant un blocage
+    // actif). Tant qu'il est false, le rendu affiche un loader neutre au
+    // lieu de trancher sur une valeur pas encore fiable.
     const [showKmPopup, setShowKmPopup] = useState(false);
     const [kmPending, setKmPending] = useState(false);
+    const [kmStatusChecked, setKmStatusChecked] = useState(false);
 
     const handleLogout = () => {
         api.post('/api/logout').catch(() => {}); // best-effort, clears the server-side cookie
@@ -81,6 +88,7 @@ function App() {
         setSelectedChantier(null);
         setShowKmPopup(false);
         setKmPending(false);
+        setKmStatusChecked(false);
         window.history.pushState({}, '', '/');
     };
 
@@ -192,20 +200,33 @@ function App() {
     // Popup hebdo de relevé km — vérifié à l'ouverture de l'app (une fois par
     // user connecté, pas en polling continu : "à l'ouverture de l'app" dans
     // le prompt initial). Attend que l'onboarding (mdp/2FA) soit fini, sinon
-    // l'appel 403erait avant même d'atteindre Layout — user.id en dépendance
-    // (pas `user` en entier) pour ne pas relancer à chaque mutation mineure
-    // de l'objet user (ex: mfa_enabled qui bascule pendant l'enrôlement).
+    // l'appel 403erait avant même d'atteindre Layout.
+    //
+    // Dépendances : PAS juste user?.id — must_change_password/mfa_required/
+    // mfa_enabled changent sans changer l'id (ChangePasswordGate/
+    // MfaEnrollFlow appellent setUser avec le même compte). Avec [user?.id]
+    // seul, ce check ne se relançait jamais pour un compte qui finit son
+    // onboarding dans la même session : le premier passage (juste après
+    // login, onboarding pas fini) sortait tout de suite via le guard
+    // ci-dessous, et l'id ne changeant plus jamais ensuite, l'effect ne
+    // repassait plus — le popup/blocage ne se déclenchait alors jamais pour
+    // ce compte tant qu'il restait sur la même page.
     useEffect(() => {
         if (!user || user.must_change_password || (user.mfa_required && !user.mfa_enabled)) return;
+        setKmStatusChecked(false); // voir déclaration : neutralise le rendu pendant l'aller-retour réseau
         (async () => {
-            const res = await api.get('/api/weekly-km-prompt/status');
-            if (res.ok) {
-                const data: WeeklyKmPromptStatus = await res.json();
-                setKmPending(data.pending_km_entry);
-                setShowKmPopup(data.show_popup);
+            try {
+                const res = await api.get('/api/weekly-km-prompt/status');
+                if (res.ok) {
+                    const data: WeeklyKmPromptStatus = await res.json();
+                    setKmPending(data.pending_km_entry);
+                    setShowKmPopup(data.show_popup);
+                }
+            } finally {
+                setKmStatusChecked(true);
             }
         })();
-    }, [user?.id]);
+    }, [user?.id, user?.must_change_password, user?.mfa_required, user?.mfa_enabled]);
 
     // "Non" referme simplement. "Oui" n'est jamais fermé par ce composant —
     // il bascule en mode bloqué et atterrit sur Véhicules, où seul un relevé
@@ -302,6 +323,17 @@ function App() {
     // application du blocage qui compte réellement (les guards dans
     // handleNavigate/handleSelectChantier/onPopState ne servent qu'à éviter
     // que l'URL dérive, pas à faire respecter le blocage lui-même).
+    //
+    // CHOIX ASSUMÉ, pas un oubli : ce blocage n'existe QUE côté frontend.
+    // Aucun endpoint (/api/chantiers, /api/entries, etc.) ne vérifie
+    // pending_km_entry côté serveur — contrairement à must_change_password/
+    // mfa_enroll_required (voir token_required dans app.py), qui EUX sont
+    // appliqués aussi côté serveur. Un user qui appelle l'API directement
+    // (devtools, JS désactivé) contourne ce blocage sans même chercher un
+    // chemin de navigation oublié : il n'y a rien à contourner côté serveur.
+    // Volontaire : c'est un rappel hebdomadaire, pas une frontière de
+    // sécurité/permissions — si ça devait un jour le devenir, il faudrait
+    // ajouter un check équivalent dans token_required, pas seulement ici.
     const effectiveView: View = kmPending ? 'vehicules' : view;
     const effectiveChantier = kmPending ? null : selectedChantier;
 
@@ -315,7 +347,16 @@ function App() {
             <NoticeBanner />
             {showKmPopup && <WeeklyKmPrompt onAnswered={handleKmPromptAnswered} />}
             <Suspense fallback={<PageLoader />}>
-                {effectiveChantier ? (
+                {!kmStatusChecked ? (
+                    // Le statut du popup hebdo (kmPending en particulier)
+                    // n'est pas encore fiable — trancher maintenant sur
+                    // kmPending=false (sa valeur initiale) afficherait la vue
+                    // normale un instant avant de basculer sur Véhicules si
+                    // le fetch revient bloqué (flash visible sur un F5
+                    // pendant un blocage actif). Neutre le temps de l'aller-
+                    // retour réseau plutôt que de deviner.
+                    <PageLoader />
+                ) : effectiveChantier ? (
                     // Vérifié avant les vues nommées : sinon un chantier ouvert
                     // depuis l'Agenda ("Voir le chantier") reste bloqué sur
                     // view === 'agenda' et ne s'affiche jamais (bug corrigé).
@@ -335,7 +376,12 @@ function App() {
                     <Agenda currentUser={user} onOpenChantier={handleSelectChantier} />
                 ) : effectiveView === 'mes-conges' ? (
                     <MesConges currentUser={user} />
-                ) : effectiveView === 'pot-a-chantier' ? (
+                ) : effectiveView === 'pot-a-chantier' && user.role !== 'user' ? (
+                    // role !== 'user' (pas juste masqué dans la nav, voir
+                    // Layout.tsx visibleNavItems) : un lien direct par URL
+                    // (?view=pot-a-chantier) ne doit pas non plus donner
+                    // accès. Si la condition est fausse, retombe sur le
+                    // fallback Dashboard tout en bas de cette chaîne.
                     <PotAChantier currentUser={user} />
                 ) : effectiveView === 'vehicules' ? (
                     <Vehicules currentUser={user} onKmEntrySubmitted={handleKmEntrySubmitted} />

@@ -53,6 +53,15 @@ export const Vehicules: React.FC<Props> = ({ currentUser, forcedVehiculeId, onKm
         else setDetail(null);
     }, [selectedId]);
 
+    // Pré-remplit avec le kilométrage actuel — l'utilisateur lit un chiffre
+    // sur le compteur et corrige à partir de là, il ne part pas de zéro à
+    // chaque fois (voir handleSubmitKm : le champ est un total, pas un
+    // delta). Se redéclenche aussi après un envoi réussi (km_actuel change),
+    // pour remontrer la nouvelle valeur de référence plutôt qu'un champ vide.
+    useEffect(() => {
+        if (detail) setKmInput(String(detail.km_actuel));
+    }, [detail?.id, detail?.km_actuel]);
+
     // Un forcedVehiculeId qui change (ex: le popup redirige vers un autre
     // véhicule) doit re-sélectionner même si c'était déjà la vue courante.
     useEffect(() => {
@@ -116,16 +125,19 @@ export const Vehicules: React.FC<Props> = ({ currentUser, forcedVehiculeId, onKm
         e.preventDefault();
         if (!detail) return;
         setKmError('');
-        const km = Number(kmInput);
-        if (!kmInput || Number.isNaN(km) || km < 0) {
-            setKmError('Entrez un nombre de km valide');
+        const kmActuelNouveau = Number(kmInput);
+        // Le champ est le kilométrage total relevé sur le compteur (pas un
+        // delta) — voir add_vehicule_km_entry côté backend. Un compteur ne
+        // recule jamais : en dessous du km_actuel courant, on ne laisse même
+        // pas partir la requête.
+        if (!kmInput || Number.isNaN(kmActuelNouveau) || kmActuelNouveau < detail.km_actuel) {
+            setKmError(`Entrez un kilométrage valide (≥ ${detail.km_actuel.toLocaleString('fr-CH')} km)`);
             return;
         }
         setKmSubmitting(true);
         try {
-            const res = await api.post(`/api/vehicules/${detail.id}/km-entries`, { km_parcourus: km });
+            const res = await api.post(`/api/vehicules/${detail.id}/km-entries`, { km_actuel: kmActuelNouveau });
             if (res.ok) {
-                setKmInput('');
                 await fetchDetail(detail.id);
                 fetchList();
                 onKmEntrySubmitted?.();
@@ -190,13 +202,12 @@ export const Vehicules: React.FC<Props> = ({ currentUser, forcedVehiculeId, onKm
                             (étape 5) après avoir répondu "Oui". */}
                         <form onSubmit={handleSubmitKm} className="card p-4 sm:p-6 space-y-3">
                             <label className="text-xs font-bold text-slate-500 uppercase tracking-widest block">
-                                Ajouter un relevé (km parcourus cette semaine)
+                                Mettre à jour le kilométrage (relevé compteur)
                             </label>
                             <div className="flex flex-wrap gap-3">
                                 <input
-                                    type="number" min={0} step="any"
+                                    type="number" min={detail.km_actuel} step="any"
                                     className="input-field flex-1 min-w-[140px]"
-                                    placeholder="Ex: 120"
                                     value={kmInput}
                                     onChange={e => setKmInput(e.target.value)}
                                 />

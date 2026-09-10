@@ -632,10 +632,14 @@ def _iso_week_str(dt=None):
 
 
 class Vehicule(db.Model):
-    """A company vehicle. km_actuel is a running total, incremented weekly by
-    VehiculeKmEntry.km_parcourus (see POST /api/vehicules/<id>/km-entries) —
-    never re-entered as an absolute odometer reading, since drivers only
-    know how much they drove this week, not the vehicle's lifetime total."""
+    """A company vehicle. km_actuel is replaced (not incremented) each time a
+    driver submits a weekly reading — see POST /api/vehicules/<id>/km-entries
+    — with whatever they read off the vehicle's actual odometer. VehiculeKmEntry.
+    km_parcourus is derived from that (new - previous km_actuel), kept only
+    for the weekly history display; it is never itself the source of truth.
+    (Originally this was reversed — the driver entered km_parcourus and the
+    server accumulated it — changed after a live look at the screen: a
+    driver reads a total off the dashboard, not a delta since last week.)"""
     __tablename__ = 'vehicules'
     id = db.Column(db.Integer, primary_key=True)
     marque = db.Column(db.String(80), nullable=False)
@@ -3839,23 +3843,31 @@ def vehicule_detail(current_user, vehicule_id):
 @app.route('/api/vehicules/<int:vehicule_id>/km-entries', methods=['POST'])
 @token_required
 def add_vehicule_km_entry(current_user, vehicule_id):
+    """Body: {km_actuel: <nouveau kilométrage total relevé sur le compteur>}
+    — PAS un delta. Revu suite au test live : le conducteur lit un chiffre
+    sur le compteur du véhicule, il ne calcule pas lui-même combien de km il
+    a fait depuis le dernier relevé. Le serveur calcule ce delta lui-même
+    (km_parcourus, stocké pour l'historique hebdo) et remplace
+    Vehicule.km_actuel par la valeur reçue (pas un +=)."""
     vehicule = db.session.get(Vehicule, vehicule_id)
     if not vehicule:
         return jsonify({'error': 'Véhicule introuvable'}), 404
 
     data = request.json or {}
     try:
-        km_parcourus = float(data.get('km_parcourus'))
+        km_actuel_nouveau = float(data.get('km_actuel'))
     except (TypeError, ValueError):
-        return jsonify({'error': 'km_parcourus est requis et doit être un nombre'}), 400
-    if km_parcourus < 0:
-        return jsonify({'error': 'km_parcourus ne peut pas être négatif'}), 400
+        return jsonify({'error': 'km_actuel est requis et doit être un nombre'}), 400
+    if km_actuel_nouveau < (vehicule.km_actuel or 0):
+        return jsonify({'error': 'Le kilométrage ne peut pas être inférieur au kilométrage actuel enregistré'}), 400
 
     semaine_iso = _iso_week_str()
 
     if VehiculeKmEntry.query.filter_by(vehicule_id=vehicule_id, user_id=current_user.id,
                                         semaine_iso=semaine_iso).first():
         return jsonify({'error': 'Relevé déjà soumis pour ce véhicule cette semaine'}), 409
+
+    km_parcourus = km_actuel_nouveau - (vehicule.km_actuel or 0)
 
     entry = VehiculeKmEntry(
         vehicule_id=vehicule_id,
@@ -3864,17 +3876,15 @@ def add_vehicule_km_entry(current_user, vehicule_id):
         semaine_iso=semaine_iso,
     )
     db.session.add(entry)
-    # km_actuel += km_parcourus (pas une valeur absolue) : voir docstring
-    # Vehicule.km_actuel — le conducteur ne connaît que les km faits cette
-    # semaine, pas le compteur total du véhicule.
-    vehicule.km_actuel = (vehicule.km_actuel or 0) + km_parcourus
+    vehicule.km_actuel = km_actuel_nouveau
     # Un relevé soumis (peu importe le véhicule) répond à la question du
     # popup hebdo — lève le blocage "Oui" en attente s'il y en a un (voir
     # _resolve_weekly_km_prompt).
     _resolve_weekly_km_prompt(current_user.id)
     db.session.commit()
     audit_log('vehicules', current_user,
-              f"km entry on vehicule #{vehicule.id}: +{km_parcourus} km (semaine {semaine_iso})")
+              f"km entry on vehicule #{vehicule.id}: kilométrage mis à jour à {km_actuel_nouveau} "
+              f"(+{km_parcourus} km, semaine {semaine_iso})")
     return jsonify(entry.to_dict()), 201
 
 

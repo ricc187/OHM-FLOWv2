@@ -175,9 +175,11 @@ class VehiculesApiTestCase(unittest.TestCase):
         res = admin.get(f'/api/vehicules/{vehicule_id}')
         self.assertEqual(res.status_code, 404)
 
-    # --- km-entries : ouvert à tout user connecté, incrémente km_actuel ---
+    # --- km-entries : ouvert à tout user connecté, REMPLACE km_actuel -------
+    # (revu après test live : le body est {km_actuel: <nouveau total>}, un
+    # relevé de compteur, pas un delta — voir docstring add_vehicule_km_entry)
 
-    def test_km_entry_increments_km_actuel_not_replaces(self):
+    def test_km_entry_replaces_km_actuel_not_increments(self):
         admin = self._admin_client()
         res = admin.post('/api/vehicules', json={
             'marque': 'Renault', 'modele': 'Kangoo', 'numero_plaque': 'VS-3333', 'km_actuel': 50000,
@@ -185,8 +187,11 @@ class VehiculesApiTestCase(unittest.TestCase):
         vehicule_id = res.get_json()['id']
 
         worker = self._user_client()
-        res = worker.post(f'/api/vehicules/{vehicule_id}/km-entries', json={'km_parcourus': 250})
+        res = worker.post(f'/api/vehicules/{vehicule_id}/km-entries', json={'km_actuel': 50250})
         self.assertEqual(res.status_code, 201, res.get_json())
+        # L'entrée stocke le delta calculé côté serveur (historique), pas la
+        # valeur brute envoyée.
+        self.assertEqual(res.get_json()['km_parcourus'], 250)
 
         res = worker.get(f'/api/vehicules/{vehicule_id}')
         body = res.get_json()
@@ -202,25 +207,39 @@ class VehiculesApiTestCase(unittest.TestCase):
         vehicule_id = res.get_json()['id']
 
         worker = self._user_client()
-        res = worker.post(f'/api/vehicules/{vehicule_id}/km-entries', json={'km_parcourus': 100})
+        res = worker.post(f'/api/vehicules/{vehicule_id}/km-entries', json={'km_actuel': 100})
         self.assertEqual(res.status_code, 201)
-        res = worker.post(f'/api/vehicules/{vehicule_id}/km-entries', json={'km_parcourus': 50})
+        res = worker.post(f'/api/vehicules/{vehicule_id}/km-entries', json={'km_actuel': 150})
         self.assertEqual(res.status_code, 409)
 
-    def test_km_entry_rejects_negative(self):
+    def test_km_entry_rejects_value_below_current(self):
         admin = self._admin_client()
         res = admin.post('/api/vehicules', json={
-            'marque': 'Renault', 'modele': 'Kangoo', 'numero_plaque': 'VS-5555',
+            'marque': 'Renault', 'modele': 'Kangoo', 'numero_plaque': 'VS-5555', 'km_actuel': 1000,
         })
         vehicule_id = res.get_json()['id']
 
         worker = self._user_client()
-        res = worker.post(f'/api/vehicules/{vehicule_id}/km-entries', json={'km_parcourus': -10})
+        # Un compteur ne recule jamais — en dessous du km_actuel enregistré, refusé.
+        res = worker.post(f'/api/vehicules/{vehicule_id}/km-entries', json={'km_actuel': 999})
         self.assertEqual(res.status_code, 400)
+
+    def test_km_entry_equal_to_current_allowed(self):
+        """Véhicule pas utilisé cette semaine : même valeur, delta 0, doit passer."""
+        admin = self._admin_client()
+        res = admin.post('/api/vehicules', json={
+            'marque': 'Renault', 'modele': 'Kangoo', 'numero_plaque': 'VS-6666', 'km_actuel': 2000,
+        })
+        vehicule_id = res.get_json()['id']
+
+        worker = self._user_client()
+        res = worker.post(f'/api/vehicules/{vehicule_id}/km-entries', json={'km_actuel': 2000})
+        self.assertEqual(res.status_code, 201, res.get_json())
+        self.assertEqual(res.get_json()['km_parcourus'], 0)
 
     def test_km_entry_unknown_vehicule_404(self):
         worker = self._user_client()
-        res = worker.post('/api/vehicules/999999/km-entries', json={'km_parcourus': 10})
+        res = worker.post('/api/vehicules/999999/km-entries', json={'km_actuel': 10})
         self.assertEqual(res.status_code, 404)
 
 
