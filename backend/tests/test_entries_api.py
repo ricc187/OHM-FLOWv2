@@ -61,6 +61,16 @@ class EntriesApiTestCase(unittest.TestCase):
             ohmapp.db.session.add(chantier)
             ohmapp.db.session.commit()
             self.chantier_id = chantier.id
+            # Planifié par défaut (a une ChantierAssignment) — has_assignments
+            # gate (voir test_has_assignments_gate.py) est un cas séparé,
+            # testé sur son propre chantier délibérément non planifié ; les
+            # tests ici portent sur la validation des entries elles-mêmes et
+            # ne doivent pas être bloqués par ce garde-fou.
+            ohmapp.db.session.add(ohmapp.ChantierAssignment(
+                chantier_id=chantier.id, user_id=self.admin_id,
+                date_debut='2026-01-05', date_fin='2026-01-05',
+            ))
+            ohmapp.db.session.commit()
 
     def test_create_requires_description(self):
         res = self.client.post('/api/entries', json={

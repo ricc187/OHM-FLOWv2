@@ -1,7 +1,7 @@
 import { Chantier } from '../types';
 import { StatusBadge } from './StatusBadge';
 import { chantierPhase } from '../chantierPhase';
-import { deadlineSeverity, deadlineDaysLabel, DeadlineSeverity, DEADLINE_TEXT_CLASSES, CARD_SEVERITY_CLASSES, BADGE_SEVERITY_CLASSES } from '../deadlineSeverity';
+import { deadlineSeverity, deadlineDaysLabel, DeadlineSeverity, DEADLINE_TEXT_CLASSES, CARD_SEVERITY_CLASSES } from '../deadlineSeverity';
 import { Clock, User as UserIcon, CalendarClock, AlertTriangle, AlertOctagon } from 'lucide-react';
 
 interface ChantierCardProps {
@@ -15,26 +15,23 @@ const SeverityIcon = ({ severity, size, className }: { severity: DeadlineSeverit
 };
 
 export const ChantierCard = ({ chantier, onClick }: ChantierCardProps) => {
-    // Encore dans le "Pot à chantier" (aucune chantier_assignment) : grisé,
-    // pas cliquable — pas d'accès détail/saisie tant qu'il n'est pas planifié.
+    // Encore dans le "Pot à chantier" (aucune chantier_assignment) —
+    // reste cliquable/modifiable comme un chantier planifié (revu : seule la
+    // saisie d'heures est bloquée, côté ChantierDetail/backend, pas l'accès
+    // à la fiche). Juste un badge "NON PLANIFIÉ" pour le distinguer visuellement.
     const inPot = chantier.has_assignments === false;
     const severity = deadlineSeverity(chantier);
 
     return (
-        // Wrapper non affecté par l'opacity du grisage ci-dessous — c'est ce
-        // qui permet à l'indicateur deadline discret de rester visible même
-        // sur une carte grisée (voir plus bas). h-full + min-h fixe : toutes
-        // les cartes de la grille alignent sur la même hauteur (celle du
-        // contenu le plus riche : adresse + référent + deadline + heures),
-        // qu'elles soient sur la même ligne ou non — sinon une carte courte
-        // à côté d'une longue casse visuellement l'alignement de la grille.
+        // Wrapper : h-full + min-h fixe : toutes les cartes de la grille
+        // alignent sur la même hauteur (celle du contenu le plus riche :
+        // adresse + référent + deadline + heures), qu'elles soient sur la
+        // même ligne ou non — sinon une carte courte à côté d'une longue
+        // casse visuellement l'alignement de la grille.
         <div className="relative h-full">
             <div
-                onClick={inPot ? undefined : onClick}
-                className={`group relative glass-panel p-8 hover-card overflow-hidden transition-all duration-500 h-full min-h-[360px] flex flex-col ${inPot
-                    ? 'opacity-50 saturate-50 cursor-not-allowed'
-                    : 'cursor-pointer hover:bg-white/80'
-                    } ${CARD_SEVERITY_CLASSES[severity]}`}
+                onClick={onClick}
+                className={`group relative glass-panel p-8 hover-card overflow-hidden transition-all duration-500 h-full min-h-[360px] flex flex-col cursor-pointer hover:bg-white/80 ${CARD_SEVERITY_CLASSES[severity]}`}
             >
                 {/* Neon Spotlight Effect (Simulated via CSS) */}
                 <div className="absolute inset-0 bg-gradient-to-br from-primary/10 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500 pointer-events-none"></div>
@@ -49,6 +46,14 @@ export const ChantierCard = ({ chantier, onClick }: ChantierCardProps) => {
                             {chantier.client_repere || chantier.nom}
                         </h3>
                         <div className="shrink-0 pt-1 flex items-center gap-1.5">
+                            {inPot && (
+                                <span
+                                    className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wide bg-amber-500/15 text-amber-700"
+                                    title="Aucune date en Agenda pour l'instant — visible aussi dans le Pot à chantier"
+                                >
+                                    <CalendarClock size={11} /> Non planifié
+                                </span>
+                            )}
                             {severity === 'overdue' && (
                                 <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wide bg-red-700 text-white animate-pulse">
                                     <AlertOctagon size={11} /> Dépassée
@@ -110,22 +115,6 @@ export const ChantierCard = ({ chantier, onClick }: ChantierCardProps) => {
 
                 {/* Footer Removed as per user request */}
             </div>
-
-            {/* Le grisage "non planifié" reste prioritaire visuellement (opacity
-                sur toute la carte ci-dessus l'assourdit déjà), mais l'urgence
-                deadline ne doit pas disparaître complètement dessous — ce badge
-                est un sibling du div grisé, donc sa propre opacity échappe à
-                celle du parent. Discret : petite pastille coin haut-droit,
-                jamais le "fond plein" réservé à la carte normale en overdue. */}
-            {inPot && severity !== 'none' && (
-                <div
-                    className={`absolute top-3 right-3 z-20 flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wide shadow-md ${BADGE_SEVERITY_CLASSES[severity]}`}
-                    title={`Deadline ${chantier.deadline} — ${deadlineDaysLabel(chantier.deadline!)}`}
-                >
-                    <SeverityIcon severity={severity} size={12} className="shrink-0" />
-                    {deadlineDaysLabel(chantier.deadline!)}
-                </div>
-            )}
         </div>
     );
 };

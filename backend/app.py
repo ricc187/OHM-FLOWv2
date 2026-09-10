@@ -2595,8 +2595,15 @@ def add_entry(current_user):
     date = data.get('date')
     if not chantier_id or not date:
         return jsonify({'error': 'chantier_id and date are required'}), 400
-    if not db.session.get(Chantier, chantier_id):
+    chantier = db.session.get(Chantier, chantier_id)
+    if not chantier:
         return jsonify({'error': 'Chantier not found'}), 404
+    # Chantier "en attente" (Pot à chantier, aucune ChantierAssignment) :
+    # tout le reste (infos générales, documents Volta, photos/plans) reste
+    # éditable une fois entré dans sa fiche détail — seule la saisie
+    # d'heures reste bloquée tant qu'il n'a pas de date réelle en Agenda.
+    if not chantier._get_has_assignments():
+        return jsonify({'error': "Ce chantier doit être planifié dans l'Agenda avant de pouvoir y saisir des heures"}), 400
 
     try:
         heures = float(data.get('heures', 0))
@@ -2634,7 +2641,6 @@ def add_entry(current_user):
 
     if target_user_id != current_user.id:
         target_user = db.session.get(User, target_user_id)
-        chantier = db.session.get(Chantier, chantier_id)
         audit_log('entries', current_user,
                    f"created entry #{new_entry.id} on behalf of {target_user.username if target_user else target_user_id} "
                    f"(chantier {chantier.nom if chantier else chantier_id}, date {date}, heures {heures})")

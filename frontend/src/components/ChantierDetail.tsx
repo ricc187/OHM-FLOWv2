@@ -409,12 +409,28 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
                         </div>
 
                         {/* Static Add Button (Moved from FAB) */}
-                        <button
-                            onClick={() => setShowEntryModal(true)}
-                            className="w-full py-3 bg-primary text-black font-black uppercase tracking-widest rounded-xl shadow-md hover:bg-yellow-400 hover:scale-[1.01] active:scale-[0.99] transition-all flex items-center justify-center gap-2 text-sm"
-                        >
-                            <span className="text-lg">+</span> AJOUTER UNE ENTRÉE
-                        </button>
+                        {/* Chantier "en attente" (Pot à chantier, has_assignments=false) :
+                            tout le reste de la fiche reste éditable (infos, documents
+                            Volta, photos/plans) — seule la saisie d'heures est bloquée
+                            tant qu'aucune date réelle n'existe en Agenda. Backend
+                            applique le même refus sur POST /api/entries (voir
+                            add_entry) — ce bouton désactivé n'est qu'un reflet, pas
+                            la seule protection. */}
+                        {chantier.has_assignments === false ? (
+                            <div
+                                className="w-full py-3 bg-slate-100 text-slate-400 font-black uppercase tracking-widest rounded-xl flex items-center justify-center gap-2 text-sm text-center cursor-not-allowed"
+                                title="Ce chantier doit être planifié dans l'Agenda avant de pouvoir y saisir des heures"
+                            >
+                                Saisie d'heures indisponible — chantier non planifié
+                            </div>
+                        ) : (
+                            <button
+                                onClick={() => setShowEntryModal(true)}
+                                className="w-full py-3 bg-primary text-black font-black uppercase tracking-widest rounded-xl shadow-md hover:bg-yellow-400 hover:scale-[1.01] active:scale-[0.99] transition-all flex items-center justify-center gap-2 text-sm"
+                            >
+                                <span className="text-lg">+</span> AJOUTER UNE ENTRÉE
+                            </button>
+                        )}
 
                         <div className="card overflow-hidden p-0 overflow-x-auto">
                             <table className="w-full text-left text-sm min-w-[520px]">
