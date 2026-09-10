@@ -1,10 +1,12 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Inbox, CalendarPlus, User as UserIcon } from 'lucide-react';
+import { Inbox, CalendarPlus, User as UserIcon, Trash2 } from 'lucide-react';
 import { Chantier, User } from '../types';
 import { api } from '../api';
 import { AgendaFormModal, AgendaFormValues, emptyFormValues } from './AgendaForm';
 import { SlidingTabs } from './ui/SlidingTabs';
 import { DeadlineSeverity, CARD_SEVERITY_CLASSES, BADGE_SEVERITY_CLASSES } from '../deadlineSeverity';
+import { useConfirm } from '../hooks/useConfirm';
+import { ConfirmDialog } from './ConfirmDialog';
 
 // Chantiers créés mais sans aucune chantier_assignment — pas encore
 // planifiés. "Planifier" ouvre le même AgendaFormModal que l'Agenda, avec le
@@ -41,7 +43,9 @@ const unplannedSeverity = (days: number | null): DeadlineSeverity => {
 
 type SortMode = 'oldest' | 'recent';
 
-export const PotAChantier: React.FC<Props> = ({ currentUser: _currentUser }) => {
+export const PotAChantier: React.FC<Props> = ({ currentUser }) => {
+    const isAdmin = currentUser.role === 'admin';
+    const { confirm, confirmDialogProps } = useConfirm();
     const [chantiers, setChantiers] = useState<Chantier[]>([]);
     const [users, setUsers] = useState<User[]>([]);
     const [planning, setPlanning] = useState<{ chantier: Chantier; initial: AgendaFormValues } | null>(null);
@@ -68,6 +72,27 @@ export const PotAChantier: React.FC<Props> = ({ currentUser: _currentUser }) => 
     const openPlanifier = (c: Chantier) => {
         const today = new Date().toISOString().split('T')[0];
         setPlanning({ chantier: c, initial: { ...emptyFormValues(today), chantierId: c.id.toString() } });
+    };
+
+    // Strict (taper le nom) : suppression complète et en cascade (voir
+    // DELETE /api/chantiers/<id> côté backend) — documents, finances, tout
+    // disparaît définitivement. Uniquement possible depuis ici, sur un
+    // chantier encore en attente (le backend refuse aussi si déjà planifié).
+    const handleDelete = async (c: Chantier) => {
+        const ok = await confirm({
+            title: 'Supprimer ce chantier ?',
+            message: 'Suppression complète et définitive : documents, finances et tout le reste rattaché disparaîtront. Cette action est irréversible.',
+            strict: true,
+            confirmText: c.nom,
+        });
+        if (!ok) return;
+        const res = await api.delete(`/api/chantiers/${c.id}`);
+        if (res.ok) {
+            fetchPot();
+        } else {
+            const body = await res.json().catch(() => ({}));
+            alert(body.error || 'Erreur lors de la suppression');
+        }
     };
 
     return (
@@ -126,6 +151,15 @@ export const PotAChantier: React.FC<Props> = ({ currentUser: _currentUser }) => 
                                     </div>
                                 </div>
 
+                                {isAdmin && (
+                                    <button
+                                        onClick={() => handleDelete(c)}
+                                        title="Supprimer définitivement"
+                                        className="p-2.5 rounded-lg text-red-400 hover:bg-red-500/10 hover:text-red-500 transition-all shrink-0"
+                                    >
+                                        <Trash2 size={18} />
+                                    </button>
+                                )}
                                 <button
                                     onClick={() => openPlanifier(c)}
                                     className="px-5 py-2.5 rounded-lg font-bold text-sm bg-primary text-white hover:bg-primary-dark transition-all flex items-center gap-2 shrink-0"
@@ -156,6 +190,7 @@ export const PotAChantier: React.FC<Props> = ({ currentUser: _currentUser }) => 
                     onSaved={fetchPot}
                 />
             )}
+            {confirmDialogProps && <ConfirmDialog {...confirmDialogProps} />}
         </div>
     );
 };

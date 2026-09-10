@@ -2,6 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { Vehicule, VehiculeDetail, User } from '../types';
 import { Car, Plus, Pencil, Trash2, ArrowLeft, Gauge } from 'lucide-react';
 import { api } from '../api';
+import { useConfirm } from '../hooks/useConfirm';
+import { ConfirmDialog } from './ConfirmDialog';
 
 interface Props {
     currentUser: User;
@@ -17,6 +19,7 @@ const emptyForm = { marque: '', modele: '', numero_plaque: '', km_actuel: '' };
 
 export const Vehicules: React.FC<Props> = ({ currentUser, forcedVehiculeId, onKmEntrySubmitted }) => {
     const isAdmin = currentUser.role === 'admin';
+    const { confirm, confirmDialogProps } = useConfirm();
 
     const [vehicules, setVehicules] = useState<Vehicule[]>([]);
     const [loading, setLoading] = useState(true);
@@ -110,7 +113,11 @@ export const Vehicules: React.FC<Props> = ({ currentUser, forcedVehiculeId, onKm
     };
 
     const handleDelete = async (v: Vehicule) => {
-        if (!confirm(`Supprimer ${v.marque} ${v.modele} (${v.numero_plaque}) ?`)) return;
+        const ok = await confirm({
+            title: 'Supprimer ce véhicule ?',
+            message: `${v.marque} ${v.modele} (${v.numero_plaque}) et son historique de relevés seront définitivement supprimés.`,
+        });
+        if (!ok) return;
         const res = await api.delete(`/api/vehicules/${v.id}`);
         if (res.ok) {
             if (selectedId === v.id) setSelectedId(null);
@@ -249,6 +256,7 @@ export const Vehicules: React.FC<Props> = ({ currentUser, forcedVehiculeId, onKm
                 )}
 
                 {renderForm()}
+                {confirmDialogProps && <ConfirmDialog {...confirmDialogProps} />}
             </div>
         );
     }
@@ -307,6 +315,7 @@ export const Vehicules: React.FC<Props> = ({ currentUser, forcedVehiculeId, onKm
             </div>
 
             {renderForm()}
+            {confirmDialogProps && <ConfirmDialog {...confirmDialogProps} />}
         </div>
     );
 

@@ -3,6 +3,8 @@ import { X, FileText, Image as ImageIcon, Download, Trash2, FolderDown, Archive,
 import { ChantierDocument, DocumentCategory } from '../types';
 import { api } from '../api';
 import { useEscapeKey } from '../hooks/useEscapeKey';
+import { useConfirm } from '../hooks/useConfirm';
+import { ConfirmDialog } from './ConfirmDialog';
 
 interface Props {
     chantierId: number;
@@ -47,6 +49,7 @@ interface UploadTask {
 }
 
 export const DocumentExplorer: React.FC<Props> = ({ chantierId, chantierNom, isAdmin, onClose }) => {
+    const { confirm, confirmDialogProps } = useConfirm();
     const [documents, setDocuments] = useState<ChantierDocument[]>([]);
     const [archived, setArchived] = useState(false);
     const [loading, setLoading] = useState(true);
@@ -89,7 +92,8 @@ export const DocumentExplorer: React.FC<Props> = ({ chantierId, chantierNom, isA
     useEffect(() => { fetchDocuments(); }, [chantierId]);
 
     const handleDelete = async (doc: ChantierDocument) => {
-        if (!confirm(`Supprimer "${doc.filename}" ?`)) return;
+        const ok = await confirm({ title: 'Supprimer ce fichier ?', message: `« ${doc.filename} » sera définitivement supprimé.` });
+        if (!ok) return;
         setBusyId(doc.id);
         const res = await api.delete(`/api/documents/${doc.id}`);
         setBusyId(null);
@@ -106,7 +110,11 @@ export const DocumentExplorer: React.FC<Props> = ({ chantierId, chantierNom, isA
     const handleDeleteCategory = async (category: DocumentCategory) => {
         const count = byCategory(category).length;
         if (!count) return;
-        if (!confirm(`Supprimer les ${count} fichier(s) du dossier "${CATEGORY_META[category].label}" ?`)) return;
+        const ok = await confirm({
+            title: `Vider le dossier « ${CATEGORY_META[category].label} » ?`,
+            message: `${count} fichier(s) seront définitivement supprimés.`,
+        });
+        if (!ok) return;
         setBusyId(category);
         const res = await api.delete(`/api/chantiers/${chantierId}/documents/category?category=${category}`);
         setBusyId(null);
@@ -393,6 +401,7 @@ export const DocumentExplorer: React.FC<Props> = ({ chantierId, chantierNom, isA
                     </div>
                 )}
             </div>
+            {confirmDialogProps && <ConfirmDialog {...confirmDialogProps} />}
         </div>
     );
 };

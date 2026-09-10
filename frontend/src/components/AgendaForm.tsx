@@ -7,6 +7,8 @@ import { AwesomeDatePicker } from './ui/AwesomeDatePicker';
 import { InlineSearchSelect } from './ui/InlineSearchSelect';
 import { StatusBadge } from './StatusBadge';
 import { api } from '../api';
+import { useConfirm } from '../hooks/useConfirm';
+import { ConfirmDialog } from './ConfirmDialog';
 
 export type EntryType = 'CHANTIER' | (typeof LEAVE_TYPE_OPTIONS)[number]['value'];
 
@@ -509,6 +511,7 @@ interface AgendaDetailPanelProps {
 }
 
 export const AgendaDetailPanel: React.FC<AgendaDetailPanelProps> = ({ item, users, onClose, onEdit, onChanged, onOpenChantier }) => {
+    const { confirm, confirmDialogProps } = useConfirm();
     const [deleting, setDeleting] = useState(false);
     const [validating, setValidating] = useState(false);
     const [chantier, setChantier] = useState<Chantier | null>(null);
@@ -525,7 +528,8 @@ export const AgendaDetailPanel: React.FC<AgendaDetailPanelProps> = ({ item, user
     }, [item.source, item.chantier_id]);
 
     const handleDelete = async () => {
-        if (!confirm('Supprimer cette entrée ?')) return;
+        const ok = await confirm({ title: 'Supprimer cette entrée ?', message: 'Cette action est définitive.' });
+        if (!ok) return;
         setDeleting(true);
         const res = item.source === 'chantier'
             ? await api.delete(`/api/calendar/chantier-assignments/${item.id}`)
@@ -544,7 +548,13 @@ export const AgendaDetailPanel: React.FC<AgendaDetailPanelProps> = ({ item, user
     // and drops every other proposition in the same group server-side —
     // see PUT .../valider in app.py.
     const handleValider = async () => {
-        if (!confirm('Valider cette date ? Les autres dates possibles de ce chantier seront supprimées.')) return;
+        const ok = await confirm({
+            title: 'Valider cette date ?',
+            message: 'Les autres dates possibles de ce chantier seront supprimées.',
+            confirmLabel: 'Valider',
+            danger: false,
+        });
+        if (!ok) return;
         setValidating(true);
         const res = await api.put(`/api/calendar/chantier-assignments/${item.id}/valider`);
         setValidating(false);
@@ -643,6 +653,7 @@ export const AgendaDetailPanel: React.FC<AgendaDetailPanelProps> = ({ item, user
                     </button>
                 </div>
             </div>
+            {confirmDialogProps && <ConfirmDialog {...confirmDialogProps} />}
         </div>
     );
 };
