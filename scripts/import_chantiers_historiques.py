@@ -49,10 +49,27 @@ try:
 except ImportError:
     pass  # python-dotenv absent : on suppose les variables déjà dans l'environnement
 
+# data/chantier.db est résolu par app.py relativement à os.getcwd() (app.py:71)
+# — mais ce cwd diffère entre dev local (on lance `python app.py` depuis
+# backend/, donc backend/data/) et le conteneur Docker (gunicorn tourne
+# depuis WORKDIR=/app, et c'est ./data:/app/data qui est monté — pas
+# backend/data/, qui resterait vide/éphémère dans le conteneur). On détecte
+# le bon cwd en cherchant lequel des deux contient réellement chantier.db,
+# plutôt que de figer un choix qui casserait silencieusement l'autre
+# environnement (voir l'incident .mfa_key : même piège, un chemin qui
+# "marche en dev" mais pointe dans le vide en conteneur).
+_candidates = [BACKEND_DIR, REPO_ROOT]
+_app_cwd = next((c for c in _candidates if (c / "data" / "chantier.db").exists()), None)
+if _app_cwd is None:
+    raise SystemExit(
+        "FATAL: aucune base data/chantier.db trouvée sous "
+        f"{BACKEND_DIR} ni {REPO_ROOT} — abandon (mauvais répertoire de lancement ?)."
+    )
+
 _orig_cwd = os.getcwd()
-os.chdir(BACKEND_DIR)  # data/chantier.db est résolu relativement au cwd (app.py:71)
+os.chdir(_app_cwd)
 try:
-    import app as ohmapp  # noqa: E402 — doit s'importer avec cwd=backend/
+    import app as ohmapp  # noqa: E402 — doit s'importer avec le cwd où vit réellement data/
 finally:
     os.chdir(_orig_cwd)
 
