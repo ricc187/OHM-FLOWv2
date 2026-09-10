@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { createPortal } from 'react-dom';
 import { AlertTriangle } from 'lucide-react';
 import { useEscapeKey } from '../hooks/useEscapeKey';
 import type { ConfirmOptions } from '../hooks/useConfirm';
@@ -24,7 +25,17 @@ export const ConfirmDialog: React.FC<Props> = ({
 
     const ready = strict ? typed.trim() === (confirmText ?? '').trim() && typed.trim() !== '' : checked;
 
-    return (
+    // Portal straight to <body> — this dialog gets invoked from all over the
+    // app, including from inside screens whose own wrapper animates in with
+    // a transform (animate-slide-up: translateY, computes to a non-'none'
+    // matrix even at rest). ANY ancestor with a transform (however inert)
+    // becomes the containing block for position:fixed descendants per the
+    // CSS spec, which silently breaks "fixed inset-0" — it then covers that
+    // ancestor's own box instead of the viewport, not the full screen (real
+    // bug hit rendering this from FinancesTab, caught via a live screenshot:
+    // the dialog rendered off-screen below the fold instead of centered).
+    // Escaping to a portal sidesteps this regardless of which screen calls it.
+    return createPortal(
         <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
             <div className="absolute inset-0 bg-ohm-bg/80 backdrop-blur-sm" onClick={onCancel} />
             <div className="relative w-full max-w-md bg-ohm-surface rounded-3xl border border-slate-300 shadow-2xl overflow-hidden animate-in zoom-in duration-200">
@@ -79,6 +90,7 @@ export const ConfirmDialog: React.FC<Props> = ({
                     </div>
                 </div>
             </div>
-        </div>
+        </div>,
+        document.body
     );
 };

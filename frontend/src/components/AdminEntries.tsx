@@ -3,6 +3,8 @@ import { Entry, User } from '../types';
 import { Check, X, Pencil, CheckCheck, Loader2 } from 'lucide-react';
 import { api } from '../api';
 import { AwesomeSelect } from './ui/AwesomeSelect';
+import { useConfirm } from '../hooks/useConfirm';
+import { ConfirmDialog } from './ConfirmDialog';
 
 interface Props {
     currentUser: any;
@@ -23,6 +25,7 @@ const formatDateHeader = (dateStr: string) => {
 };
 
 export const AdminEntries: React.FC<Props> = () => {
+    const { confirm, confirmDialogProps } = useConfirm();
     const [entries, setEntries] = useState<Entry[]>([]);
     const [users, setUsers] = useState<User[]>([]);
 
@@ -93,20 +96,24 @@ export const AdminEntries: React.FC<Props> = () => {
         });
     };
 
-    const handleReject = async (entryId: number) => {
-        if (confirm('Refuser et supprimer cette saisie ?')) {
-            const res = await api.delete(`/api/entries/${entryId}`);
-            if (res.ok) {
-                fetchPendingEntries();
-            }
-        }
+    const handleReject = async (entry: Entry) => {
+        const ok = await confirm({
+            title: 'Refuser cette saisie ?',
+            message: `${entry.heures}h sur « ${entry.chantier_nom} » (${entry.user_name}, ${entry.date}) seront définitivement supprimées.`,
+        });
+        if (!ok) return;
+        const res = await api.delete(`/api/entries/${entry.id}`);
+        if (res.ok) fetchPendingEntries();
     };
 
     const [validatingDay, setValidatingDay] = useState<string | null>(null);
     const handleValidateDay = async (date: string) => {
         const ids = sorted.filter(e => e.date === date).map(e => e.id);
         if (ids.length === 0) return;
-        if (!confirm(`Valider les ${ids.length} saisie(s) de ce jour ?`)) return;
+        // Validation groupée, pas une suppression/clôture — hors scope de la
+        // double validation (voir prompt). window.confirm explicite : `confirm`
+        // local (useConfirm ci-dessus) masquerait sinon le global du même nom.
+        if (!window.confirm(`Valider les ${ids.length} saisie(s) de ce jour ?`)) return;
         setValidatingDay(date);
         try {
             // Settle, not all — one dropped connection shouldn't abort the
@@ -246,7 +253,7 @@ export const AdminEntries: React.FC<Props> = () => {
                                                 <Pencil size={16} />
                                             </button>
                                             <button
-                                                onClick={ev => { ev.stopPropagation(); handleReject(e.id); }}
+                                                onClick={ev => { ev.stopPropagation(); handleReject(e); }}
                                                 className="p-2 rounded-lg bg-red-500/10 text-red-400 hover:bg-red-500 hover:text-white transition-all"
                                                 title="Refuser"
                                             >
@@ -276,6 +283,7 @@ export const AdminEntries: React.FC<Props> = () => {
                     </div>
                 )}
             </div>
+            {confirmDialogProps && <ConfirmDialog {...confirmDialogProps} />}
         </div>
     );
 };

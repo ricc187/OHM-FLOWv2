@@ -3,6 +3,8 @@ import { CalendarCheck, Check, X } from 'lucide-react';
 import { Leave } from '../types';
 import { LEAVE_TYPE_LABELS } from '../leaveTypes';
 import { api } from '../api';
+import { useConfirm } from '../hooks/useConfirm';
+import { ConfirmDialog } from './ConfirmDialog';
 
 // Écran admin "Validation des congés" — comble le trou identifié : un
 // employé qui crée sa propre demande (Mes congés) reste bloqué en
@@ -18,6 +20,7 @@ const formatDateRange = (l: Leave) => {
 };
 
 export const AdminLeaves: React.FC = () => {
+    const { confirm, confirmDialogProps } = useConfirm();
     const [leaves, setLeaves] = useState<Leave[]>([]);
     const [loading, setLoading] = useState(true);
     const [actingId, setActingId] = useState<number | null>(null);
@@ -37,6 +40,13 @@ export const AdminLeaves: React.FC = () => {
     useEffect(fetchLeaves, []);
 
     const act = async (leave: Leave, status: 'APPROVED' | 'REJECTED') => {
+        if (status === 'REJECTED') {
+            const ok = await confirm({
+                title: 'Rejeter cette demande ?',
+                message: `La demande de ${leave.user_name} (${formatDateRange(leave)}) sera rejetée.`,
+            });
+            if (!ok) return;
+        }
         setActingId(leave.id);
         const res = await api.put(`/api/leaves/${leave.id}/status`, { status });
         setActingId(null);
@@ -102,6 +112,7 @@ export const AdminLeaves: React.FC = () => {
                     </div>
                 )}
             </div>
+            {confirmDialogProps && <ConfirmDialog {...confirmDialogProps} />}
         </div>
     );
 };

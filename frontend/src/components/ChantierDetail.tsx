@@ -15,6 +15,8 @@ import { useMountTransition } from '../hooks/useMountTransition';
 import { useAutoRefresh } from '../hooks/useAutoRefresh';
 import { queueEntry } from '../offlineQueue';
 import { SlidingTabs } from './ui/SlidingTabs';
+import { useConfirm } from '../hooks/useConfirm';
+import { ConfirmDialog } from './ConfirmDialog';
 
 interface Props {
     chantier: Chantier;
@@ -25,6 +27,7 @@ interface Props {
 type Tab = 'SUIVI' | 'INFO' | 'FINANCES';
 
 export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, currentUser, onBack }) => {
+    const { confirm, confirmDialogProps } = useConfirm();
     const [chantier, setChantier] = useState(initialChantier);
     const [activeTab, setActiveTab] = useState<Tab>('SUIVI');
     const [entries, setEntries] = useState<Entry[]>([]);
@@ -136,6 +139,10 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
 
     const handleToggleStatus = async () => {
         const newStatus = chantier.status === 'DONE' ? 'ACTIVE' : 'DONE';
+        const ok = await confirm(newStatus === 'DONE'
+            ? { title: 'Clôturer ce chantier ?', message: 'Ses documents seront archivés (récupérables en le ré-ouvrant).' }
+            : { title: 'Ré-ouvrir ce chantier ?', message: 'Il redeviendra actif et ses documents archivés seront restaurés.', danger: false, confirmLabel: 'Ré-ouvrir' });
+        if (!ok) return;
         const res = await api.put(`/api/chantiers/${chantier.id}`, { ...chantier, status: newStatus });
         if (res.ok) {
             const updated = await res.json();
@@ -746,6 +753,7 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
                     </div>
                 </div>
             )}
+            {confirmDialogProps && <ConfirmDialog {...confirmDialogProps} />}
         </div>
     );
 };

@@ -2,10 +2,13 @@ import React, { useEffect, useState } from 'react';
 import { AdminNotice } from '../types';
 import { Megaphone, Plus, Trash2, Power } from 'lucide-react';
 import { api } from '../api';
+import { useConfirm } from '../hooks/useConfirm';
+import { ConfirmDialog } from './ConfirmDialog';
 
 const todayStr = new Date().toISOString().split('T')[0];
 
 export const AdminNotices: React.FC = () => {
+    const { confirm, confirmDialogProps } = useConfirm();
     const [notices, setNotices] = useState<AdminNotice[]>([]);
     const [loading, setLoading] = useState(true);
     const [showCreate, setShowCreate] = useState(false);
@@ -49,7 +52,8 @@ export const AdminNotices: React.FC = () => {
     };
 
     const handleDelete = async (n: AdminNotice) => {
-        if (!confirm('Supprimer cette annonce ?')) return;
+        const ok = await confirm({ title: 'Supprimer cette annonce ?', message: 'Elle disparaîtra pour tous les utilisateurs.' });
+        if (!ok) return;
         const res = await api.delete(`/api/notices/${n.id}`);
         if (res.ok) fetchNotices();
     };
@@ -167,6 +171,7 @@ export const AdminNotices: React.FC = () => {
                     );
                 })}
             </div>
+            {confirmDialogProps && <ConfirmDialog {...confirmDialogProps} />}
         </div>
     );
 };

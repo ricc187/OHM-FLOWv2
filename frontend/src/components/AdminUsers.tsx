@@ -3,12 +3,15 @@ import { User } from '../types';
 import { AwesomeSelect } from './ui/AwesomeSelect';
 import { api } from '../api';
 import { ShieldCheck, ShieldAlert, KeyRound, LogOut } from 'lucide-react';
+import { useConfirm } from '../hooks/useConfirm';
+import { ConfirmDialog } from './ConfirmDialog';
 
 interface Props {
     currentUser: User;
 }
 
 export const AdminUsers: React.FC<Props> = ({ currentUser }) => {
+    const { confirm, confirmDialogProps } = useConfirm();
     const [users, setUsers] = useState<User[]>([]);
     const [showModal, setShowModal] = useState(false);
     const [editingUser, setEditingUser] = useState<User | null>(null);
@@ -86,16 +89,30 @@ export const AdminUsers: React.FC<Props> = ({ currentUser }) => {
         }
     };
 
-    const handleDelete = async (id: number) => {
-        if (confirm('Supprimer définitivement cet utilisateur ?')) {
-            const res = await api.delete(`/api/users/${id}`);
-            if (res.ok) fetchUsers();
-        }
+    const handleDelete = async (user: User) => {
+        // Strict (taper le nom) : suppression définitive d'un compte —
+        // toutes ses saisies/congés/entrées restent attribués à un user_id
+        // qui n'existera plus, une simple checkbox n'est pas assez de
+        // friction pour ça (voir prompt double-validation, tier "strict").
+        const ok = await confirm({
+            title: 'Supprimer cet utilisateur ?',
+            message: `Le compte « ${user.username} » sera définitivement supprimé.`,
+            strict: true,
+            confirmText: user.username,
+        });
+        if (!ok) return;
+        const res = await api.delete(`/api/users/${user.id}`);
+        if (res.ok) fetchUsers();
     };
 
     const handleForceLogout = async (user: User) => {
         if (user.id === currentUser.id) return; // backend also rejects this — button is disabled on our own row anyway
-        if (!confirm(`Déconnecter ${user.username} de partout ? Sa session en cours sera immédiatement invalidée.`)) return;
+        // Exception délibérée à la double validation (voir prompt) : ni une
+        // suppression ni une clôture — juste une invalidation de session,
+        // pleinement réversible (l'utilisateur se reconnecte). window.confirm
+        // explicite : `confirm` local (useConfirm ci-dessus) masquerait sinon
+        // le global du même nom.
+        if (!window.confirm(`Déconnecter ${user.username} de partout ? Sa session en cours sera immédiatement invalidée.`)) return;
         const res = await api.post(`/api/users/${user.id}/force-logout`);
         if (!res.ok) {
             const data = await res.json().catch(() => ({}));
@@ -243,7 +260,7 @@ export const AdminUsers: React.FC<Props> = ({ currentUser }) => {
                                                 </svg>
                                             </button>
                                             <button
-                                                onClick={() => handleDelete(user.id)}
+                                                onClick={() => handleDelete(user)}
                                                 className="p-2 rounded-lg transition-all text-red-400 hover:bg-red-500/10"
                                             >
                                                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -356,6 +373,7 @@ export const AdminUsers: React.FC<Props> = ({ currentUser }) => {
                     </form>
                 </div>
             )}
+            {confirmDialogProps && <ConfirmDialog {...confirmDialogProps} />}
         </div>
     );
 };

@@ -3,6 +3,8 @@ import { Loader2, TrendingUp, TrendingDown, Pencil, Plus, Trash2, Check, X, Aler
 import { Acompte, AchatMateriel, CaLignePrevue, ChantierFinancierPrevu, FinancierPayload, VoltaDocumentLink } from '../types';
 import { api } from '../api';
 import { useAutoRefresh } from '../hooks/useAutoRefresh';
+import { useConfirm } from '../hooks/useConfirm';
+import { ConfirmDialog } from './ConfirmDialog';
 
 // Reproduit la mise en page de G 500 Analyse Chantier.xlsx à l'identique :
 // même bandeau PRÉVISIONNEL/RÉALISÉ/ÉCART, mêmes titres de section
@@ -146,6 +148,7 @@ type CaLigneDraftShape = { libelle: string; montant: string; heures: string };
 type AcompteDraftShape = { libelle: string; montant: string; date: string };
 
 export const FinancesTab: React.FC<Props> = ({ chantierId, avancementDeclare }) => {
+    const { confirm, confirmDialogProps } = useConfirm();
     const [data, setData] = useState<FinancierPayload | null>(null);
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
@@ -308,7 +311,8 @@ export const FinancesTab: React.FC<Props> = ({ chantierId, avancementDeclare }) 
         else { const err = await res.json().catch(() => ({})); alert(err.error || 'Erreur lors de l\'enregistrement'); }
     };
     const deleteCaLigne = async (l: CaLignePrevue) => {
-        if (!confirm(`Supprimer la ligne "${l.libelle}" ?`)) return;
+        const ok = await confirm({ title: 'Supprimer cette ligne ?', message: `« ${l.libelle} » sera définitivement supprimée.` });
+        if (!ok) return;
         setBusyId(l.id);
         const res = await api.delete(`/api/chantiers/${chantierId}/ca_lignes/${l.id}`);
         setBusyId(null);
@@ -326,7 +330,8 @@ export const FinancesTab: React.FC<Props> = ({ chantierId, avancementDeclare }) 
         else { const err = await res.json().catch(() => ({})); alert(err.error || 'Erreur lors de l\'enregistrement'); }
     };
     const deleteAcompte = async (a: Acompte) => {
-        if (!confirm(`Supprimer l'acompte "${a.libelle}" ?`)) return;
+        const ok = await confirm({ title: 'Supprimer cet acompte ?', message: `« ${a.libelle} » sera définitivement supprimé.` });
+        if (!ok) return;
         setBusyId(a.id);
         const res = await api.delete(`/api/chantiers/${chantierId}/acomptes/${a.id}`);
         setBusyId(null);
@@ -348,7 +353,8 @@ export const FinancesTab: React.FC<Props> = ({ chantierId, avancementDeclare }) 
         else { const err = await res.json().catch(() => ({})); alert(err.error || 'Erreur lors de l\'enregistrement'); }
     };
     const deleteAchat = async (a: AchatMateriel) => {
-        if (!confirm(`Supprimer l'achat "${a.libelle}" ?`)) return;
+        const ok = await confirm({ title: 'Supprimer cet achat ?', message: `« ${a.libelle} » sera définitivement supprimé.` });
+        if (!ok) return;
         setBusyId(a.id);
         const res = await api.delete(`/api/chantiers/${chantierId}/achats/${a.id}`);
         setBusyId(null);
@@ -704,6 +710,7 @@ export const FinancesTab: React.FC<Props> = ({ chantierId, avancementDeclare }) 
                     <Td className={`text-right ${signColor(data.ecart_marge)}`}>{formatCHF(data.ecart_marge)}</Td>
                 </tr>
             </SectionCard>
+            {confirmDialogProps && <ConfirmDialog {...confirmDialogProps} />}
         </div>
     );
 };
