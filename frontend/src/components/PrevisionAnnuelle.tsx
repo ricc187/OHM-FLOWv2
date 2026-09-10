@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { useMountTransition } from '../hooks/useMountTransition';
 import { CalendarRange, Plus, Download, X, Loader2 } from 'lucide-react';
 import { ChantierPrevision, PrevisionImportResult, User } from '../types';
 import { api } from '../api';
@@ -37,6 +38,7 @@ export const PrevisionAnnuelle: React.FC = () => {
     const [message, setMessage] = useState<{ kind: 'success' | 'error'; text: string } | null>(null);
 
     const [showCreate, setShowCreate] = useState(false);
+    const createModalT = useMountTransition(showCreate, 150); // transitions-dev "06-modal"
     const [form, setForm] = useState(emptyForm);
     const [formError, setFormError] = useState('');
     const [submitting, setSubmitting] = useState(false);
@@ -211,10 +213,10 @@ export const PrevisionAnnuelle: React.FC = () => {
                 </div>
             </div>
 
-            {showCreate && (
-                <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+            {createModalT.mounted && (
+                <div className={`t-modal ${createModalT.active ? 'is-open' : 'is-closing'} fixed inset-0 z-[100] flex items-center justify-center p-4`}>
                     <div className="absolute inset-0 bg-ohm-bg/80 backdrop-blur-sm" onClick={() => setShowCreate(false)}></div>
-                    <div className="relative w-full max-w-md bg-ohm-surface rounded-3xl border border-slate-300 shadow-2xl overflow-hidden animate-in zoom-in duration-200">
+                    <div className="relative w-full max-w-md bg-ohm-surface rounded-3xl border border-slate-300 shadow-2xl overflow-hidden">
                         <div className="bg-slate-50/80 px-6 py-4 flex items-center justify-between border-b border-slate-300">
                             <h3 className="font-black text-slate-900 uppercase tracking-widest text-sm">Nouveau chantier à venir</h3>
                             <button onClick={() => setShowCreate(false)} className="text-slate-500 hover:text-slate-900">

@@ -237,6 +237,18 @@ interface AgendaFormModalProps {
 }
 
 export const AgendaFormModal: React.FC<AgendaFormModalProps> = ({ mode, initial, editingItem, users, sidebarUserIds, lockedChantier, onClose, onSaved }) => {
+    // transitions-dev "06-modal" — this component owns its own mount, so it
+    // plays the close animation itself before telling the parent to unmount it.
+    const [isOpen, setIsOpen] = useState(false);
+    useEffect(() => {
+        const raf = requestAnimationFrame(() => setIsOpen(true));
+        return () => cancelAnimationFrame(raf);
+    }, []);
+    const handleClose = () => {
+        setIsOpen(false);
+        setTimeout(onClose, 150); // matches --modal-close-dur
+    };
+
     const [values, setValues] = useState<AgendaFormValues>(initial);
     const [chantiers, setChantiers] = useState<Chantier[]>([]);
     const [error, setError] = useState<string | null>(null);
@@ -333,7 +345,7 @@ export const AgendaFormModal: React.FC<AgendaFormModalProps> = ({ mode, initial,
         setSaving(false);
         if (res && res.ok) {
             onSaved();
-            onClose();
+            handleClose();
         } else {
             const body = res ? await res.json().catch(() => ({})) : {};
             setError(body.error || "Échec de l'enregistrement.");
@@ -348,11 +360,11 @@ export const AgendaFormModal: React.FC<AgendaFormModalProps> = ({ mode, initial,
     const typeOptions = lockedChantier ? null : (mode === 'create' ? TYPE_OPTIONS : (editingItem?.source === 'chantier' ? null : LEAVE_TYPE_OPTIONS));
 
     return (
-        <div className="fixed inset-0 bg-white/80 backdrop-blur-sm flex items-center justify-center z-[100] p-4 safe-top safe-bottom">
+        <div className={`t-modal ${isOpen ? 'is-open' : 'is-closing'} fixed inset-0 bg-white/80 backdrop-blur-sm flex items-center justify-center z-[100] p-4 safe-top safe-bottom`}>
             <div className="card w-full max-w-xl max-h-[90vh] overflow-y-auto overflow-x-hidden">
                 <div className="flex justify-between items-center mb-6">
                     <h3 className="text-xl font-bold text-slate-900 uppercase">{mode === 'create' ? 'Nouvelle entrée' : "Modifier l'entrée"}</h3>
-                    <button type="button" onClick={onClose}><X className="text-slate-500" /></button>
+                    <button type="button" onClick={handleClose}><X className="text-slate-500" /></button>
                 </div>
 
                 <form onSubmit={handleSubmit} className="space-y-5">
@@ -488,7 +500,7 @@ export const AgendaFormModal: React.FC<AgendaFormModalProps> = ({ mode, initial,
                     {error && <p className="text-sm text-red-500 font-medium">{error}</p>}
 
                     <div className="flex justify-end gap-2 pt-2">
-                        <button type="button" onClick={onClose} className="px-6 py-2 rounded-lg font-bold text-slate-500 hover:text-slate-900 hover:bg-slate-100 transition-colors">Annuler</button>
+                        <button type="button" onClick={handleClose} className="px-6 py-2 rounded-lg font-bold text-slate-500 hover:text-slate-900 hover:bg-slate-100 transition-colors">Annuler</button>
                         <button type="submit" disabled={saving} className="px-6 py-2 rounded-lg font-bold bg-primary text-white hover:bg-primary-dark transition-colors disabled:opacity-50">
                             {saving ? 'Enregistrement...' : 'Enregistrer'}
                         </button>
@@ -512,6 +524,16 @@ interface AgendaDetailPanelProps {
 
 export const AgendaDetailPanel: React.FC<AgendaDetailPanelProps> = ({ item, users, onClose, onEdit, onChanged, onOpenChantier }) => {
     const { confirm, confirmDialogProps } = useConfirm();
+    // transitions-dev "06-modal" — see AgendaFormModal above for the pattern.
+    const [isOpen, setIsOpen] = useState(false);
+    useEffect(() => {
+        const raf = requestAnimationFrame(() => setIsOpen(true));
+        return () => cancelAnimationFrame(raf);
+    }, []);
+    const handleClose = () => {
+        setIsOpen(false);
+        setTimeout(onClose, 150);
+    };
     const [deleting, setDeleting] = useState(false);
     const [validating, setValidating] = useState(false);
     const [chantier, setChantier] = useState<Chantier | null>(null);
@@ -537,7 +559,7 @@ export const AgendaDetailPanel: React.FC<AgendaDetailPanelProps> = ({ item, user
         setDeleting(false);
         if (res.ok) {
             onChanged();
-            onClose();
+            handleClose();
         } else {
             const body = await res.json().catch(() => ({}));
             alert(body.error || 'Suppression impossible.');
@@ -560,7 +582,7 @@ export const AgendaDetailPanel: React.FC<AgendaDetailPanelProps> = ({ item, user
         setValidating(false);
         if (res.ok) {
             onChanged();
-            onClose();
+            handleClose();
         } else {
             const body = await res.json().catch(() => ({}));
             alert(body.error || 'Validation impossible.');
@@ -568,14 +590,14 @@ export const AgendaDetailPanel: React.FC<AgendaDetailPanelProps> = ({ item, user
     };
 
     return (
-        <div className="fixed inset-0 bg-white/80 backdrop-blur-sm flex items-center justify-center z-[100] p-4 safe-top safe-bottom">
+        <div className={`t-modal ${isOpen ? 'is-open' : 'is-closing'} fixed inset-0 bg-white/80 backdrop-blur-sm flex items-center justify-center z-[100] p-4 safe-top safe-bottom`}>
             <div className="card w-full max-w-md">
                 <div className="flex justify-between items-start mb-4">
                     <div className="flex items-center gap-3">
                         <span className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: item.couleur }} />
                         <h3 className="text-lg font-bold text-slate-900">{item.titre}</h3>
                     </div>
-                    <button onClick={onClose}><X className="text-slate-500" /></button>
+                    <button onClick={handleClose}><X className="text-slate-500" /></button>
                 </div>
 
                 {item.source === 'leave' && item.status && (
@@ -628,7 +650,7 @@ export const AgendaDetailPanel: React.FC<AgendaDetailPanelProps> = ({ item, user
 
                 {item.source === 'chantier' && chantier && (
                     <button
-                        onClick={() => { onOpenChantier(chantier); onClose(); }}
+                        onClick={() => { onOpenChantier(chantier); handleClose(); }}
                         className="w-full mt-5 py-2.5 rounded-lg font-bold text-sm bg-slate-100 text-slate-700 hover:bg-slate-200 transition-all flex items-center justify-center gap-2"
                     >
                         <FolderOpen size={16} /> Voir le chantier
