@@ -16,21 +16,36 @@ export const NoticeBanner: React.FC = () => {
     }, []);
 
     const current = queue[0];
+
+    // transitions-dev "06-modal" — re-triggers on every new `current.id` (not
+    // just on mount) so each notice in the queue plays its own open tween as
+    // it becomes current, not just the very first one.
+    const [isOpen, setIsOpen] = useState(false);
+    useEffect(() => {
+        if (!current) return;
+        setIsOpen(false);
+        const raf = requestAnimationFrame(() => setIsOpen(true));
+        return () => cancelAnimationFrame(raf);
+    }, [current?.id]);
+
     if (!current) return null;
 
-    const handleAck = async () => {
-        setAcking(true);
-        try {
-            await api.post(`/api/notices/${current.id}/ack`);
-        } finally {
-            setAcking(false);
-            setQueue(q => q.slice(1));
-        }
+    const handleAck = () => {
+        setIsOpen(false);
+        setTimeout(async () => {
+            setAcking(true);
+            try {
+                await api.post(`/api/notices/${current.id}/ack`);
+            } finally {
+                setAcking(false);
+                setQueue(q => q.slice(1));
+            }
+        }, 150); // matches --modal-close-dur
     };
 
     return (
-        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-white/80 backdrop-blur-md p-4 safe-top safe-bottom">
-            <div className="w-full max-w-md bg-white rounded-3xl border border-slate-300 shadow-2xl overflow-hidden animate-fade-in">
+        <div className={`t-modal ${isOpen ? 'is-open' : 'is-closing'} fixed inset-0 z-[200] flex items-center justify-center bg-white/80 backdrop-blur-md p-4 safe-top safe-bottom`}>
+            <div className="w-full max-w-md bg-white rounded-3xl border border-slate-300 shadow-2xl overflow-hidden">
                 <div className="p-6 sm:p-8 flex flex-col items-center text-center gap-4">
                     <div className="w-14 h-14 rounded-2xl bg-ohm-primary/15 flex items-center justify-center shrink-0">
                         <Megaphone className="text-ohm-primary" size={28} />
