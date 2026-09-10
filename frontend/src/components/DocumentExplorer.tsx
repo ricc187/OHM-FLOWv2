@@ -334,7 +334,7 @@ export const DocumentExplorer: React.FC<Props> = ({ chantierId, chantierNom, isA
                                                     <div className="w-full h-full flex items-center justify-center text-slate-300"><ImageIcon size={24} /></div>
                                                 )}
                                                 {!archived && (
-                                                    <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 active:opacity-100 transition-opacity flex items-center justify-center gap-2">
+                                                    <div className="absolute inset-0 bg-black/50 opacity-30 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
                                                         <button onClick={() => downloadUrl(`/api/documents/${doc.id}`, doc.filename)} className="p-1.5 rounded-full bg-white/90 text-slate-900" title="Télécharger">
                                                             <Download size={14} />
                                                         </button>

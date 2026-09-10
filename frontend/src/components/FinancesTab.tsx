@@ -632,7 +632,7 @@ export const FinancesTab: React.FC<Props> = ({ chantierId, avancementDeclare }) 
                                         <span className="inline-flex items-center gap-1.5">
                                             {formatCHF(achat.montant)}
                                             {achat.type !== 'estimation_petites_fournitures' && (
-                                                <button onClick={() => deleteAchat(achat)} disabled={busyId === achat.id} className="opacity-0 group-hover:opacity-100 text-slate-300 hover:text-red-500 transition-opacity" title="Supprimer"><Trash2 size={12} /></button>
+                                                <button onClick={() => deleteAchat(achat)} disabled={busyId === achat.id} className="opacity-30 sm:opacity-0 sm:group-hover:opacity-100 text-slate-300 hover:text-red-500 transition-opacity" title="Supprimer"><Trash2 size={12} /></button>
                                             )}
                                         </span>
                                     </Td>

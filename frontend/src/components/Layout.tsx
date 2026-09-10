@@ -307,7 +307,16 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, activeView, onLo
                 etc.) — it unmounted instantly on close with no exit
                 animation, only ever playing the entrance keyframe. */}
             {drawerT.mounted && (
-                <div className="lg:hidden fixed inset-0 z-50">
+                // pointer-events-none while closing: this backdrop used to stay
+                // fully clickable through its whole 300ms fade-out (unlike every
+                // t-modal elsewhere, whose .is-closing rule already does this —
+                // see index.css). Real bug: handleNavigate closes the drawer and
+                // routes at the same time, so the very next tap on the freshly
+                // rendered page — extremely likely, the user just navigated on
+                // purpose to tap something — could land on this still-live
+                // full-viewport overlay instead, doing nothing (setDrawerOpen(false)
+                // again, already false) and needing a second tap once it's gone.
+                <div className={`lg:hidden fixed inset-0 z-50 ${drawerT.active ? '' : 'pointer-events-none'}`}>
                     <div
                         className={`absolute inset-0 bg-black/40 backdrop-blur-sm touch-none transition-opacity duration-300 ${drawerT.active ? 'opacity-100' : 'opacity-0'}`}
                         onClick={() => setDrawerOpen(false)}
