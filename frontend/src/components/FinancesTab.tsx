@@ -813,14 +813,19 @@ const VoltaLinksSection: React.FC<{ chantierId: number }> = ({ chantierId }) => 
 
     const submit = async () => {
         setError(null);
-        if (!draft.numero_projet.trim() || !draft.numero_facture.trim()) {
-            setError('Numéro de projet et numéro de facture sont obligatoires.');
+        // numero_facture n'est plus obligatoire ici — seulement pour
+        // pouvoir clôturer le chantier ensuite (voir chantier_detail PUT
+        // côté backend, gating sur statut_sync='synced', qui n'arrive
+        // jamais sans facture réelle). Permet d'enregistrer projet+offre
+        // dès que l'offre est connue, avant que la facture existe.
+        if (!draft.numero_projet.trim()) {
+            setError('Le numéro de projet est obligatoire.');
             return;
         }
         setSaving(true);
         const res = await api.post(`/api/chantiers/${chantierId}/volta-links`, {
             numero_projet: draft.numero_projet.trim(),
-            numero_facture: draft.numero_facture.trim(),
+            numero_facture: draft.numero_facture.trim() || null,
             numero_offre: draft.numero_offre.trim() || null,
         });
         setSaving(false);
@@ -843,6 +848,9 @@ const VoltaLinksSection: React.FC<{ chantierId: number }> = ({ chantierId }) => 
         if (link.statut_sync === 'erreur') {
             return <span className="text-red-500 font-bold text-xs">Erreur — {link.erreur_message || 'raison inconnue'}</span>;
         }
+        if (link.statut_sync === 'attente_facture') {
+            return <span className="text-amber-600 font-bold text-xs">Facture manquante — chantier non clôturable</span>;
+        }
         return <span className="text-slate-400 font-bold text-xs">En attente</span>;
     };
 
@@ -863,7 +871,7 @@ const VoltaLinksSection: React.FC<{ chantierId: number }> = ({ chantierId }) => 
                     />
                 </div>
                 <div>
-                    <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wide">Numéro de facture</label>
+                    <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wide">Numéro de facture (optionnel — requis pour clôturer)</label>
                     <input
                         type="text" placeholder="ex. 7098" value={draft.numero_facture}
                         onChange={e => setDraft({ ...draft, numero_facture: e.target.value })}
@@ -896,7 +904,8 @@ const VoltaLinksSection: React.FC<{ chantierId: number }> = ({ chantierId }) => 
                     {links.map(link => (
                         <div key={link.id} className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-xs sm:text-sm">
                             <span className="font-mono text-slate-600">
-                                Projet {link.numero_projet} · Facture {link.numero_facture}
+                                Projet {link.numero_projet}
+                                {link.numero_facture ? <> · Facture {link.numero_facture}</> : <> · <span className="italic text-slate-400">pas de facture</span></>}
                                 {link.numero_offre && <> · Offre {link.numero_offre}</>}
                             </span>
                             {statusLabel(link)}
