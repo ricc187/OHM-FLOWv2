@@ -1,9 +1,28 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
+import { execSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
+
+const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf-8'))
+// Short commit hash baked in at build time — the version number alone
+// doesn't tell you whether you're on the latest deploy (nothing here bumps
+// it automatically per commit), but the hash always matches exactly what
+// was built. Falls back to 'dev' outside a git checkout (e.g. some CI/
+// Docker build contexts) rather than failing the build.
+let gitHash = 'dev'
+try {
+    gitHash = execSync('git rev-parse --short HEAD').toString().trim()
+} catch {
+    // no .git available at build time — keep the 'dev' fallback
+}
 
 // https://vitejs.dev/config/
 export default defineConfig({
+    define: {
+        __APP_VERSION__: JSON.stringify(pkg.version),
+        __GIT_HASH__: JSON.stringify(gitHash),
+    },
     plugins: [
         react(),
         VitePWA({

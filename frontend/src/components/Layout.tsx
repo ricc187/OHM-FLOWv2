@@ -260,6 +260,13 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, activeView, onLo
                             <LogOut size={16} />
                         </button>
                     </div>
+                    {/* Version + commit courts, jamais bougés/ecrases par le survol
+                        (contrairement au reste du footer) — sert a confirmer qu'un
+                        deploiement a bien pris (le PWA se met a jour tout seul en
+                        arriere-plan, ce texte est le seul moyen de le verifier). */}
+                    <div className="text-[9px] font-mono text-text-muted/50 text-center mt-1.5 select-none">
+                        v{__APP_VERSION__} · {__GIT_HASH__}
+                    </div>
                 </div>
             </aside>
 
@@ -363,6 +370,12 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, activeView, onLo
                                 >
                                     <LogOut size={18} />
                                 </button>
+                            </div>
+                            {/* Meme raison que la version desktop juste au-dessus (aside) :
+                                confirmer qu'un deploiement a bien pris malgre la mise a
+                                jour silencieuse du PWA en arriere-plan. */}
+                            <div className="text-[9px] font-mono text-text-muted/50 text-center mt-2 select-none">
+                                v{__APP_VERSION__} · {__GIT_HASH__}
                             </div>
                         </div>
                     </div>
