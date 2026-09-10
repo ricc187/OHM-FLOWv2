@@ -1,10 +1,11 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { User } from '../types';
 import { AwesomeSelect } from './ui/AwesomeSelect';
 import { api } from '../api';
 import { ShieldCheck, ShieldAlert, KeyRound, LogOut, Download, Plus, Pencil, Trash2 } from 'lucide-react';
 import { useConfirm } from '../hooks/useConfirm';
 import { ConfirmDialog } from './ConfirmDialog';
+import { useMountTransition } from '../hooks/useMountTransition';
 
 interface Props {
     currentUser: User;
@@ -14,6 +15,11 @@ export const AdminUsers: React.FC<Props> = ({ currentUser }) => {
     const { confirm, confirmDialogProps } = useConfirm();
     const [users, setUsers] = useState<User[]>([]);
     const [showModal, setShowModal] = useState(false);
+    // transitions-dev "06-modal" — useMountTransition keeps the modal
+    // mounted through its close tween instead of vanishing the instant
+    // showModal/mfaResetTarget flips, no changes needed to the existing
+    // setShowModal(false)/setMfaResetTarget(null) call sites below.
+    const modalT = useMountTransition(showModal, 150);
     const [editingUser, setEditingUser] = useState<User | null>(null);
     const [formData, setFormData] = useState({
         username: '',
@@ -25,6 +31,13 @@ export const AdminUsers: React.FC<Props> = ({ currentUser }) => {
     // "Réinitialiser 2FA" requires the ACTING admin's own password — a
     // small side prompt rather than a full modal, since it's a rare action.
     const [mfaResetTarget, setMfaResetTarget] = useState<User | null>(null);
+    const mfaModalT = useMountTransition(!!mfaResetTarget, 150);
+    // Closing nulls mfaResetTarget immediately, but the modal stays mounted
+    // ~150ms longer to play its close tween and still needs the username to
+    // render during that window — cache the last non-null value for display.
+    const mfaResetTargetRef = useRef<User | null>(null);
+    if (mfaResetTarget) mfaResetTargetRef.current = mfaResetTarget;
+    const mfaResetTargetDisplay = mfaResetTarget ?? mfaResetTargetRef.current;
     const [mfaResetPassword, setMfaResetPassword] = useState('');
     const [mfaResetError, setMfaResetError] = useState('');
 
@@ -268,10 +281,10 @@ export const AdminUsers: React.FC<Props> = ({ currentUser }) => {
                 </div>
             </div>
 
-            {showModal && (
-                <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+            {modalT.mounted && (
+                <div className={`t-modal ${modalT.active ? 'is-open' : 'is-closing'} fixed inset-0 z-[100] flex items-center justify-center p-4`}>
                     <div className="absolute inset-0 bg-ohm-bg/80 backdrop-blur-sm" onClick={() => setShowModal(false)}></div>
-                    <div className="relative w-full max-w-md bg-ohm-surface rounded-3xl border border-slate-300 shadow-2xl overflow-hidden animate-in zoom-in duration-200">
+                    <div className="relative w-full max-w-md bg-ohm-surface rounded-3xl border border-slate-300 shadow-2xl overflow-hidden">
                         <div className="bg-slate-50/80 px-6 py-4 flex items-center justify-between border-b border-slate-300">
                             <h3 className="font-black text-slate-900 uppercase tracking-widest text-sm">
                                 {editingUser ? 'Modifier' : 'Ajouter'} Collaborateur
@@ -334,15 +347,15 @@ export const AdminUsers: React.FC<Props> = ({ currentUser }) => {
                 </div>
             )}
 
-            {mfaResetTarget && (
-                <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+            {mfaModalT.mounted && mfaResetTargetDisplay && (
+                <div className={`t-modal ${mfaModalT.active ? 'is-open' : 'is-closing'} fixed inset-0 z-[100] flex items-center justify-center p-4`}>
                     <div className="absolute inset-0 bg-ohm-bg/80 backdrop-blur-sm" onClick={() => setMfaResetTarget(null)}></div>
-                    <form onSubmit={handleMfaReset} className="relative w-full max-w-sm bg-ohm-surface rounded-3xl border border-slate-300 shadow-2xl p-6 space-y-4 animate-in zoom-in duration-200">
+                    <form onSubmit={handleMfaReset} className="relative w-full max-w-sm bg-ohm-surface rounded-3xl border border-slate-300 shadow-2xl p-6 space-y-4">
                         <h3 className="font-black text-slate-900 uppercase tracking-widest text-sm">
-                            Réinitialiser la 2FA de {mfaResetTarget.username}
+                            Réinitialiser la 2FA de {mfaResetTargetDisplay.username}
                         </h3>
                         <p className="text-xs text-slate-500">
-                            Confirmez avec VOTRE propre mot de passe. {mfaResetTarget.username} devra reconfigurer sa 2FA à sa prochaine connexion.
+                            Confirmez avec VOTRE propre mot de passe. {mfaResetTargetDisplay.username} devra reconfigurer sa 2FA à sa prochaine connexion.
                         </p>
                         <input
                             type="password"

@@ -93,6 +93,13 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
     const editModalT = useMountTransition(showEditModal, 150);
     // "22-toast": the closure-blocked popup rises in/out instead of popping.
     const closeBlockedT = useMountTransition(!!closeBlockedMessage, 250);
+    const readingEntryModalT = useMountTransition(!!readingEntry, 150);
+    // Closing nulls readingEntry immediately, but the modal stays mounted
+    // ~150ms longer to play its close tween and still needs the entry's
+    // data to render during that window.
+    const readingEntryRef = useRef<Entry | null>(null);
+    if (readingEntry) readingEntryRef.current = readingEntry;
+    const readingEntryDisplay = readingEntry ?? readingEntryRef.current;
 
     const fetchDetails = async () => {
         // Always refresh chantier to get latest status/members
@@ -737,18 +744,18 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
             )}
 
             {/* Lire la description d'une saisie — juste un aperçu, rien à modifier ici. */}
-            {readingEntry && (
-                <div className="fixed inset-0 bg-white/80 backdrop-blur-sm flex items-center justify-center z-[100] p-4 safe-top safe-bottom">
+            {readingEntryModalT.mounted && readingEntryDisplay && (
+                <div className={`t-modal ${readingEntryModalT.active ? 'is-open' : 'is-closing'} fixed inset-0 bg-white/80 backdrop-blur-sm flex items-center justify-center z-[100] p-4 safe-top safe-bottom`}>
                     <div className="card w-full max-w-md">
                         <div className="flex justify-between items-start mb-4">
                             <div>
                                 <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2"><FileText size={18} className="text-ohm-primary" /> Description de la tâche</h3>
-                                <p className="text-xs text-slate-400 mt-1">{readingEntry.user_name} · {readingEntry.date}</p>
+                                <p className="text-xs text-slate-400 mt-1">{readingEntryDisplay.user_name} · {readingEntryDisplay.date}</p>
                             </div>
                             <button onClick={() => setReadingEntry(null)}><X className="text-slate-500" /></button>
                         </div>
                         <div className="text-sm text-slate-700 whitespace-pre-wrap bg-slate-50 rounded-lg p-4">
-                            {readingEntry.description}
+                            {readingEntryDisplay.description}
                         </div>
                     </div>
                 </div>

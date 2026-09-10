@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { api } from '../api';
 
 interface Props {
@@ -18,6 +18,16 @@ export const WeeklyKmPrompt: React.FC<Props> = ({ onAnswered }) => {
     const [busy, setBusy] = useState<'oui' | 'non' | null>(null);
     const [error, setError] = useState('');
 
+    // transitions-dev "06-modal" — this component owns its own mount, so it
+    // plays the close animation itself before telling the parent to unmount
+    // it. Still non-dismissible otherwise: isOpen only ever flips to false
+    // from a successful respond() below, never from Escape/backdrop.
+    const [isOpen, setIsOpen] = useState(false);
+    useEffect(() => {
+        const raf = requestAnimationFrame(() => setIsOpen(true));
+        return () => cancelAnimationFrame(raf);
+    }, []);
+
     const respond = async (reponse: 'oui' | 'non') => {
         setBusy(reponse);
         setError('');
@@ -25,7 +35,8 @@ export const WeeklyKmPrompt: React.FC<Props> = ({ onAnswered }) => {
             const res = await api.post('/api/weekly-km-prompt/respond', { reponse });
             if (res.ok) {
                 const data = await res.json();
-                onAnswered(!!data.pending_km_entry);
+                setIsOpen(false);
+                setTimeout(() => onAnswered(!!data.pending_km_entry), 150); // matches --modal-close-dur
             } else {
                 const data = await res.json().catch(() => ({}));
                 setError(data.error || 'Erreur réseau — réessayez');
@@ -38,8 +49,8 @@ export const WeeklyKmPrompt: React.FC<Props> = ({ onAnswered }) => {
     };
 
     return (
-        <div className="fixed inset-0 z-[300] flex items-center justify-center bg-white/80 backdrop-blur-md p-4 safe-top safe-bottom">
-            <div className="w-full max-w-md bg-white rounded-3xl border border-slate-300 shadow-2xl overflow-hidden animate-fade-in p-6 space-y-5">
+        <div className={`t-modal ${isOpen ? 'is-open' : 'is-closing'} fixed inset-0 z-[300] flex items-center justify-center bg-white/80 backdrop-blur-md p-4 safe-top safe-bottom`}>
+            <div className="w-full max-w-md bg-white rounded-3xl border border-slate-300 shadow-2xl overflow-hidden p-6 space-y-5">
                 <div>
                     <h2 className="text-lg font-black text-slate-900">Relevé kilométrique hebdomadaire</h2>
                     <p className="text-slate-500 text-sm mt-2">
