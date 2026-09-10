@@ -24,6 +24,7 @@ const MesConges = lazy(() => import('./components/MesConges').then(m => ({ defau
 const PotAChantier = lazy(() => import('./components/PotAChantier').then(m => ({ default: m.PotAChantier })));
 const GlobalStats = lazy(() => import('./components/GlobalStats').then(m => ({ default: m.GlobalStats })));
 const AdminNotices = lazy(() => import('./components/AdminNotices').then(m => ({ default: m.AdminNotices })));
+const Vehicules = lazy(() => import('./components/Vehicules').then(m => ({ default: m.Vehicules })));
 const PrevisionAnnuelle = lazy(() => import('./components/PrevisionAnnuelle').then(m => ({ default: m.PrevisionAnnuelle })));
 
 const PageLoader = () => (
@@ -32,8 +33,8 @@ const PageLoader = () => (
     </div>
 );
 
-type View = 'dashboard' | 'admin' | 'admin-entries' | 'missing-entries' | 'admin-leaves' | 'planning' | 'agenda' | 'mes-conges' | 'pot-a-chantier' | 'stats' | 'notices' | 'prevision';
-const VALID_VIEWS: View[] = ['dashboard', 'admin', 'admin-entries', 'missing-entries', 'admin-leaves', 'planning', 'agenda', 'mes-conges', 'pot-a-chantier', 'stats', 'notices', 'prevision'];
+type View = 'dashboard' | 'admin' | 'admin-entries' | 'missing-entries' | 'admin-leaves' | 'planning' | 'agenda' | 'mes-conges' | 'pot-a-chantier' | 'vehicules' | 'stats' | 'notices' | 'prevision';
+const VALID_VIEWS: View[] = ['dashboard', 'admin', 'admin-entries', 'missing-entries', 'admin-leaves', 'planning', 'agenda', 'mes-conges', 'pot-a-chantier', 'vehicules', 'stats', 'notices', 'prevision'];
 
 // Reads the current view/selected-chantier out of the URL — used both on
 // first load and whenever the user hits browser back/forward.
@@ -188,6 +189,7 @@ function App() {
         else if (path === 'agenda') next = 'agenda';
         else if (path === 'mes-conges') next = 'mes-conges';
         else if (path === 'pot-a-chantier') next = 'pot-a-chantier';
+        else if (path === 'vehicules') next = 'vehicules';
         else if (path === 'stats') next = 'stats';
         else if (path === 'notices') next = 'notices';
         else if (path === 'prevision') next = 'prevision';
@@ -267,6 +269,8 @@ function App() {
                     <MesConges currentUser={user} />
                 ) : view === 'pot-a-chantier' ? (
                     <PotAChantier currentUser={user} />
+                ) : view === 'vehicules' ? (
+                    <Vehicules currentUser={user} />
                 ) : view === 'stats' ? (
                     <GlobalStats />
                 ) : view === 'admin-entries' ? (

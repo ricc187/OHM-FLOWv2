@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { OhmIcon } from './Icons';
-import { LayoutDashboard, CalendarDays, CalendarCheck, Users, ClipboardCheck, LogOut, BarChart3, Menu, X, ChevronRight, CloudOff, Megaphone, Inbox, AlertTriangle, CalendarClock, CalendarRange } from 'lucide-react';
+import { LayoutDashboard, CalendarDays, CalendarCheck, Users, ClipboardCheck, LogOut, BarChart3, Menu, X, ChevronRight, CloudOff, Megaphone, Inbox, AlertTriangle, CalendarClock, CalendarRange, Car } from 'lucide-react';
 import { MODAL_STATE_EVENT } from '../modalState';
 import { api } from '../api';
 import { getQueuedEntries, onQueueChange } from '../offlineQueue';
@@ -11,7 +11,7 @@ interface User {
     role: string;
 }
 
-type View = 'dashboard' | 'admin' | 'admin-entries' | 'missing-entries' | 'admin-leaves' | 'planning' | 'agenda' | 'mes-conges' | 'pot-a-chantier' | 'stats' | 'notices' | 'prevision';
+type View = 'dashboard' | 'admin' | 'admin-entries' | 'missing-entries' | 'admin-leaves' | 'planning' | 'agenda' | 'mes-conges' | 'pot-a-chantier' | 'vehicules' | 'stats' | 'notices' | 'prevision';
 
 interface LayoutProps {
     children: React.ReactNode;
@@ -30,6 +30,9 @@ const NAV_ITEMS = [
     { path: 'agenda', view: 'agenda' as View, icon: CalendarDays, label: 'Agenda' },
     { path: 'mes-conges', view: 'mes-conges' as View, icon: CalendarCheck, label: 'Mes congés' },
     { path: 'pot-a-chantier', view: 'pot-a-chantier' as View, icon: Inbox, label: 'Pot à chantier' },
+    // Visible à tous (consultation) — CRUD limité aux admins à l'intérieur
+    // de l'écran lui-même, même convention que "Pot à chantier" ci-dessus.
+    { path: 'vehicules', view: 'vehicules' as View, icon: Car, label: 'Véhicules' },
 ];
 
 const ADMIN_NAV_ITEMS = [
