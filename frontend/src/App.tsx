@@ -1,11 +1,12 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
-import { User, Chantier } from './types.ts';
+import { User, Chantier, WeeklyKmPromptStatus } from './types.ts';
 import { Dashboard } from './components/Dashboard';
 import { Login } from './components/Login';
 import { ChangePasswordGate } from './components/ChangePasswordGate';
 import { MfaEnrollFlow } from './components/MfaEnrollFlow';
 import { Layout } from './components/Layout';
 import { NoticeBanner } from './components/NoticeBanner';
+import { WeeklyKmPrompt } from './components/WeeklyKmPrompt';
 import { api, UNAUTHORIZED_EVENT, ONBOARDING_REQUIRED_EVENT } from './api';
 import { trySyncQueue } from './offlineQueue';
 import { useInactivityLogout } from './hooks/useInactivityLogout';
@@ -65,12 +66,21 @@ function App() {
     const [selectedChantierId, setSelectedChantierId] = useState<number | null>(initial.chantierId);
     const [selectedChantier, setSelectedChantier] = useState<Chantier | null>(null);
 
+    // Popup hebdo de relevé km (voir WeeklyKmPrompt.tsx) : showKmPopup pilote
+    // l'affichage du Oui/Non, kmPending le blocage de navigation une fois
+    // "Oui" cliqué — mutuellement exclusifs côté serveur (voir
+    // get_weekly_km_prompt_status dans app.py), jamais les deux à true.
+    const [showKmPopup, setShowKmPopup] = useState(false);
+    const [kmPending, setKmPending] = useState(false);
+
     const handleLogout = () => {
         api.post('/api/logout').catch(() => {}); // best-effort, clears the server-side cookie
         setUser(null);
         setView('dashboard');
         setSelectedChantierId(null);
         setSelectedChantier(null);
+        setShowKmPopup(false);
+        setKmPending(false);
         window.history.pushState({}, '', '/');
     };
 
@@ -136,6 +146,14 @@ function App() {
     // Browser back/forward — re-sync state from the URL instead of navigating away.
     useEffect(() => {
         const onPopState = () => {
+            if (kmPending) {
+                // Back/forward pendant un blocage actif : reclamp l'URL sur
+                // Véhicules au lieu de la laisser dériver (effectiveView au
+                // rendu bloquerait de toute façon l'affichage, ceci évite
+                // juste que l'URL affichée mente).
+                pushUrl('vehicules', null);
+                return;
+            }
             const p = parseUrl();
             setView(p.view);
             setSelectedChantierId(p.chantierId);
@@ -143,7 +161,7 @@ function App() {
         };
         window.addEventListener('popstate', onPopState);
         return () => window.removeEventListener('popstate', onPopState);
-    }, []);
+    }, [kmPending]);
 
     // A refresh (or a direct link) only has the chantier ID from the URL —
     // fetch its full data before we can render ChantierDetail with it.
@@ -171,12 +189,52 @@ function App() {
         })();
     }, [user, selectedChantierId]);
 
+    // Popup hebdo de relevé km — vérifié à l'ouverture de l'app (une fois par
+    // user connecté, pas en polling continu : "à l'ouverture de l'app" dans
+    // le prompt initial). Attend que l'onboarding (mdp/2FA) soit fini, sinon
+    // l'appel 403erait avant même d'atteindre Layout — user.id en dépendance
+    // (pas `user` en entier) pour ne pas relancer à chaque mutation mineure
+    // de l'objet user (ex: mfa_enabled qui bascule pendant l'enrôlement).
+    useEffect(() => {
+        if (!user || user.must_change_password || (user.mfa_required && !user.mfa_enabled)) return;
+        (async () => {
+            const res = await api.get('/api/weekly-km-prompt/status');
+            if (res.ok) {
+                const data: WeeklyKmPromptStatus = await res.json();
+                setKmPending(data.pending_km_entry);
+                setShowKmPopup(data.show_popup);
+            }
+        })();
+    }, [user?.id]);
+
+    // "Non" referme simplement. "Oui" n'est jamais fermé par ce composant —
+    // il bascule en mode bloqué et atterrit sur Véhicules, où seul un relevé
+    // effectivement soumis lève le blocage (voir Vehicules.tsx
+    // onKmEntrySubmitted et handleKmEntrySubmitted ci-dessous).
+    const handleKmPromptAnswered = (pendingKmEntry: boolean) => {
+        setShowKmPopup(false);
+        setKmPending(pendingKmEntry);
+        if (pendingKmEntry) {
+            setSelectedChantier(null);
+            setSelectedChantierId(null);
+            setView('vehicules');
+            pushUrl('vehicules', null);
+        }
+    };
+
+    const handleKmEntrySubmitted = () => setKmPending(false);
+
     // Login.tsx drives the whole password/2FA flow itself (it may be a
     // multi-step exchange: password -> mfa code -> enroll) and only calls
     // this once a real session actually exists.
     const handleLoginSuccess = (loggedInUser: User) => setUser(loggedInUser);
 
     const handleNavigate = (path: string) => {
+        // Blocage actif (a répondu "Oui", km pas encore soumis) : la vraie
+        // application du blocage est au rendu (effectiveView plus bas, qui
+        // force Véhicules quoi qu'il arrive) — ce guard n'est là que pour ne
+        // pas laisser l'URL dériver vers autre chose pendant ce temps.
+        if (kmPending && path !== 'vehicules') return;
         setSelectedChantier(null);
         setSelectedChantierId(null);
         let next: View = 'dashboard';
@@ -198,6 +256,7 @@ function App() {
     };
 
     const handleSelectChantier = (c: Chantier) => {
+        if (kmPending) return; // même raison que handleNavigate ci-dessus
         setSelectedChantier(c);
         setSelectedChantierId(c.id);
         pushUrl(view, c.id);
@@ -238,16 +297,25 @@ function App() {
         );
     }
 
+    // Blocage km en attente : force Véhicules quoi qu'il arrive, peu importe
+    // ce que view/selectedChantier valent par ailleurs — c'est la seule
+    // application du blocage qui compte réellement (les guards dans
+    // handleNavigate/handleSelectChantier/onPopState ne servent qu'à éviter
+    // que l'URL dérive, pas à faire respecter le blocage lui-même).
+    const effectiveView: View = kmPending ? 'vehicules' : view;
+    const effectiveChantier = kmPending ? null : selectedChantier;
+
     return (
         <Layout
             user={user}
-            activeView={view}
+            activeView={effectiveView}
             onLogout={handleLogout}
             onNavigate={handleNavigate}
         >
             <NoticeBanner />
+            {showKmPopup && <WeeklyKmPrompt onAnswered={handleKmPromptAnswered} />}
             <Suspense fallback={<PageLoader />}>
-                {selectedChantier ? (
+                {effectiveChantier ? (
                     // Vérifié avant les vues nommées : sinon un chantier ouvert
                     // depuis l'Agenda ("Voir le chantier") reste bloqué sur
                     // view === 'agenda' et ne s'affiche jamais (bug corrigé).
@@ -255,33 +323,33 @@ function App() {
                     // pas — on revient exactement là où on était (Agenda ou
                     // Dashboard selon d'où on est venu).
                     <ChantierDetail
-                        chantier={selectedChantier}
+                        chantier={effectiveChantier}
                         currentUser={user}
                         onBack={handleBackFromChantier}
                     />
-                ) : view === 'admin' ? (
+                ) : effectiveView === 'admin' ? (
                     <AdminUsers currentUser={user} />
-                ) : view === 'planning' ? (
+                ) : effectiveView === 'planning' ? (
                     <Planning currentUser={user} />
-                ) : view === 'agenda' ? (
+                ) : effectiveView === 'agenda' ? (
                     <Agenda currentUser={user} onOpenChantier={handleSelectChantier} />
-                ) : view === 'mes-conges' ? (
+                ) : effectiveView === 'mes-conges' ? (
                     <MesConges currentUser={user} />
-                ) : view === 'pot-a-chantier' ? (
+                ) : effectiveView === 'pot-a-chantier' ? (
                     <PotAChantier currentUser={user} />
-                ) : view === 'vehicules' ? (
-                    <Vehicules currentUser={user} />
-                ) : view === 'stats' ? (
+                ) : effectiveView === 'vehicules' ? (
+                    <Vehicules currentUser={user} onKmEntrySubmitted={handleKmEntrySubmitted} />
+                ) : effectiveView === 'stats' ? (
                     <GlobalStats />
-                ) : view === 'admin-entries' ? (
+                ) : effectiveView === 'admin-entries' ? (
                     <AdminEntries currentUser={user} />
-                ) : view === 'missing-entries' ? (
+                ) : effectiveView === 'missing-entries' ? (
                     <MissingEntries />
-                ) : view === 'admin-leaves' ? (
+                ) : effectiveView === 'admin-leaves' ? (
                     <AdminLeaves />
-                ) : view === 'notices' ? (
+                ) : effectiveView === 'notices' ? (
                     <AdminNotices />
-                ) : view === 'prevision' ? (
+                ) : effectiveView === 'prevision' ? (
                     <PrevisionAnnuelle />
                 ) : selectedChantierId ? (
                     null // fetching the chantier for a refreshed/direct link — avoid a dashboard flash
