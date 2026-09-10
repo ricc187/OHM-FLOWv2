@@ -771,7 +771,11 @@ class Entry(db.Model):
 
     user = db.relationship('User', foreign_keys=[user_id], backref='entries')
     created_by = db.relationship('User', foreign_keys=[created_by_id])
-    chantier = db.relationship('Chantier', backref='entries')
+    # cascade='all, delete-orphan' : sans lui, supprimer un chantier avec des
+    # entries existantes lèverait une IntegrityError (PRAGMA foreign_keys=ON,
+    # voir init_db) — même raison que documents/ca_lignes_prevues/acomptes/
+    # achats_materiel/volta_document_links ci-dessous, qui l'ont déjà.
+    chantier = db.relationship('Chantier', backref=db.backref('entries', cascade='all, delete-orphan'))
 
     def to_dict(self):
         return {
@@ -870,7 +874,8 @@ class ChantierAssignment(db.Model):
     updated_by_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
     updated_at = db.Column(db.DateTime, nullable=True)
 
-    chantier = db.relationship('Chantier', backref='assignments')
+    # cascade — même raison que Entry.chantier ci-dessus.
+    chantier = db.relationship('Chantier', backref=db.backref('assignments', cascade='all, delete-orphan'))
     user = db.relationship('User', foreign_keys=[user_id], backref='chantier_assignments')
     created_by = db.relationship('User', foreign_keys=[created_by_id])
     updated_by = db.relationship('User', foreign_keys=[updated_by_id])
@@ -940,7 +945,8 @@ class Alert(db.Model):
     due_date = db.Column(db.String(20), nullable=True)
     is_resolved = db.Column(db.Boolean, default=False)
     
-    chantier = db.relationship('Chantier', backref='alerts')
+    # cascade — même raison que Entry.chantier ci-dessus.
+    chantier = db.relationship('Chantier', backref=db.backref('alerts', cascade='all, delete-orphan'))
 
     def to_dict(self):
         return {
@@ -1308,6 +1314,45 @@ def archive_chantier_documents(chantier):
     finally:
         if os.path.exists(tmp_path):
             os.remove(tmp_path)
+
+def _delete_chantier_cascade(chantier):
+    """Suppression complète et irréversible d'un chantier "en attente" (Pot à
+    chantier) — appelant (DELETE /api/chantiers/<id>) a déjà vérifié
+    has_assignments=False. Supprime tout ce qui lui est rattaché :
+
+    - Fichiers sur disque : le dossier live (chantier_storage_dir) ou, si
+      jamais archivé (théoriquement impossible pour un chantier qui n'a
+      jamais été planifié — status ne peut pas avoir atteint DONE — mais
+      vérifié quand même par défense), le zip d'archive.
+    - Lignes DB rattachées : Entry, ChantierAssignment, Alert, Document,
+      ChantierFinancier, CaLignePrevue, Acompte, AchatMateriel,
+      VoltaDocumentLink — toutes cascade='all, delete-orphan' sur le
+      relationship Chantier (voir chaque modèle), donc supprimées
+      automatiquement par db.session.delete(chantier) ci-dessous. Pas de
+      requête manuelle nécessaire pour celles-là.
+    - chantier_members (table d'association many-to-many) : nettoyée
+      automatiquement par SQLAlchemy pour une table `secondary`, sans
+      cascade explicite à déclarer.
+
+    Exception : ChantierPrevision.chantier_id (nullable, lien en LECTURE
+    SEULE vers un chantier réel une fois rapproché — voir son docstring)
+    n'est PAS cascade-supprimé : la prévision est un enregistrement
+    indépendant qui doit survivre à la suppression du chantier réel, juste
+    délié (chantier_id remis à None, comme avant rapprochement)."""
+    ChantierPrevision.query.filter_by(chantier_id=chantier.id).update({'chantier_id': None})
+
+    if chantier.archived and chantier.archive_zip_path:
+        zip_path = os.path.join(app.config['ARCHIVE_FOLDER'], chantier.archive_zip_path)
+        if os.path.isfile(zip_path):
+            os.remove(zip_path)
+    else:
+        src_dir = chantier_storage_dir(chantier)
+        if os.path.isdir(src_dir):
+            shutil.rmtree(src_dir, ignore_errors=True)
+
+    db.session.delete(chantier)
+    db.session.commit()
+
 
 def unarchive_chantier_documents(chantier):
     """Re-extract a closed chantier's archive back to live storage (reopen)."""
@@ -2220,15 +2265,32 @@ def manage_chantiers(current_user):
         db.session.commit()
         return jsonify(new_chantier.to_dict()), 201
 
-@app.route('/api/chantiers/<int:chantier_id>', methods=['PUT', 'GET'])
+@app.route('/api/chantiers/<int:chantier_id>', methods=['PUT', 'GET', 'DELETE'])
 @token_required
 def chantier_detail(current_user, chantier_id):
     chantier = db.session.get(Chantier, chantier_id)
     if not chantier:
         return jsonify({'error': 'Chantier not found'}), 404
-        
+
     if request.method == 'GET':
         return jsonify(chantier.to_dict())
+
+    if request.method == 'DELETE':
+        if current_user.role != 'admin':
+            return jsonify({'error': 'Admin access required'}), 403
+        # Uniquement depuis le Pot à chantier (jamais planifié) — un chantier
+        # avec une ChantierAssignment a déjà de l'activité réelle dessus, la
+        # suppression complète n'a plus de sens à ce stade (voir prompt).
+        if chantier._get_has_assignments():
+            return jsonify({
+                'error': "Suppression impossible : ce chantier est déjà planifié. "
+                         "Seuls les chantiers en attente (Pot à chantier) peuvent être supprimés définitivement.",
+            }), 400
+        nom, numero = chantier.nom, chantier.numero
+        _delete_chantier_cascade(chantier)
+        audit_log('chantiers', current_user,
+                   f"deleted chantier #{chantier_id} ({numero or ''} {nom}) — cascade complète depuis le Pot à chantier")
+        return jsonify({'message': 'ok'})
 
     if request.method == 'PUT':
         if current_user.role != 'admin':
