@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { OhmIcon } from './Icons';
-import { LayoutDashboard, CalendarDays, CalendarCheck, Users, ClipboardCheck, LogOut, BarChart3, Menu, X, ChevronRight, CloudOff, Megaphone, Inbox, AlertTriangle, CalendarClock, CalendarRange } from 'lucide-react';
+import { LayoutDashboard, CalendarDays, CalendarCheck, Users, ClipboardCheck, LogOut, BarChart3, Menu, X, ChevronRight, CloudOff, Megaphone, Inbox, AlertTriangle, CalendarClock, CalendarRange, Car } from 'lucide-react';
 import { MODAL_STATE_EVENT } from '../modalState';
 import { api } from '../api';
 import { getQueuedEntries, onQueueChange } from '../offlineQueue';
@@ -11,7 +11,7 @@ interface User {
     role: string;
 }
 
-type View = 'dashboard' | 'admin' | 'admin-entries' | 'missing-entries' | 'admin-leaves' | 'planning' | 'agenda' | 'mes-conges' | 'pot-a-chantier' | 'stats' | 'notices' | 'prevision';
+type View = 'dashboard' | 'admin' | 'admin-entries' | 'missing-entries' | 'admin-leaves' | 'planning' | 'agenda' | 'mes-conges' | 'pot-a-chantier' | 'vehicules' | 'stats' | 'notices' | 'prevision';
 
 interface LayoutProps {
     children: React.ReactNode;
@@ -30,6 +30,9 @@ const NAV_ITEMS = [
     { path: 'agenda', view: 'agenda' as View, icon: CalendarDays, label: 'Agenda' },
     { path: 'mes-conges', view: 'mes-conges' as View, icon: CalendarCheck, label: 'Mes congés' },
     { path: 'pot-a-chantier', view: 'pot-a-chantier' as View, icon: Inbox, label: 'Pot à chantier' },
+    // Visible à tous (consultation) — CRUD limité aux admins à l'intérieur
+    // de l'écran lui-même, même convention que "Pot à chantier" ci-dessus.
+    { path: 'vehicules', view: 'vehicules' as View, icon: Car, label: 'Véhicules' },
 ];
 
 const ADMIN_NAV_ITEMS = [
@@ -103,10 +106,13 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, activeView, onLo
         return () => clearInterval(interval);
     }, [user?.role]);
 
-    // Chantiers dans le "Pot à chantier" (aucune chantier_assignment) — visible
-    // de tous (le menu lui-même l'est), pas juste admin comme pendingCount ci-dessus.
+    // Chantiers dans le "Pot à chantier" (aucune chantier_assignment) —
+    // visible aux admins et dépanneurs, pas aux users (voir NAV_ITEMS
+    // filtrage plus bas) — donc pas non plus la peine d'aller chercher le
+    // compte pour un role='user' qui ne verra jamais le badge.
     const [potCount, setPotCount] = useState(0);
     useEffect(() => {
+        if (user?.role === 'user') return;
         const fetchPotCount = async () => {
             const res = await api.get('/api/chantiers?has_assignments=false');
             if (res.ok) setPotCount((await res.json()).length);
@@ -114,7 +120,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, activeView, onLo
         fetchPotCount();
         const interval = setInterval(fetchPotCount, 60000);
         return () => clearInterval(interval);
-    }, []);
+    }, [user?.role]);
 
     // Offline-queued entries (see offlineQueue.ts) — a small persistent
     // indicator so it's obvious something is waiting to send, not silently lost.
@@ -177,6 +183,13 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, activeView, onLo
         setDrawerOpen(false);
     };
 
+    // "Pot à chantier" : admins et dépanneurs seulement, pas les users
+    // (retour utilisateur direct — un simple 'user' n'a pas à voir les
+    // chantiers pas encore assignés). Filtré ici plutôt que de le sortir de
+    // NAV_ITEMS vers ADMIN_NAV_ITEMS : ce dernier est admin-only, ça
+    // exclurait aussi les dépanneurs qui doivent le garder.
+    const visibleNavItems = NAV_ITEMS.filter(item => item.path !== 'pot-a-chantier' || user?.role !== 'user');
+
     return (
         <div className="flex h-[100dvh] bg-background text-text overflow-hidden relative selection:bg-primary/30">
             {/* Background Ambience */}
@@ -211,7 +224,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, activeView, onLo
                 </div>
 
                 <nav className="flex-1 py-6 px-3 space-y-2 flex flex-col w-full overflow-y-auto overflow-x-hidden no-scrollbar">
-                    {NAV_ITEMS.map(item => (
+                    {visibleNavItems.map(item => (
                         <NavItem key={item.path} icon={<item.icon size={22} />} label={item.label} active={activeView === item.view} onClick={() => handleNavigate(item.path)} badge={item.path === 'pot-a-chantier' ? potCount : undefined} />
                     ))}
 
@@ -311,7 +324,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, activeView, onLo
                         </div>
 
                         <nav className="flex-1 py-4 px-3 space-y-1 overflow-y-auto">
-                            {NAV_ITEMS.map(item => (
+                            {visibleNavItems.map(item => (
                                 <NavItemMobile key={item.path} icon={<item.icon size={22} />} label={item.label} active={activeView === item.view} onClick={() => handleNavigate(item.path)} badge={item.path === 'pot-a-chantier' ? potCount : undefined} />
                             ))}
 

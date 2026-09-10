@@ -254,6 +254,42 @@ export interface VoltaSyncStatusGlobal {
 // see Planning.tsx's CalendarView), never sent to/from the API.
 export type LeaveType = 'CONGE' | 'MALADIE' | 'ABSENCE' | 'ARMEE' | 'CONGE_PAT_MAT' | 'DEMENAGEMENT' | 'HOLIDAY';
 
+// --- Module Véhicules ---
+
+export interface VehiculeKmEntry {
+    id: number;
+    vehicule_id: number;
+    user_id: number;
+    user: string | null;
+    km_parcourus: number;
+    date_entry: string | null; // ISO
+    semaine_iso: string; // "2026-W37"
+    created_at: string | null;
+}
+
+export interface Vehicule {
+    id: number;
+    marque: string;
+    modele: string;
+    numero_plaque: string;
+    km_actuel: number; // running total — incrémenté par chaque relevé, jamais ressaisi en absolu
+    created_by: string | null;
+    created_at: string | null;
+}
+
+// GET /api/vehicules/<id> uniquement — la liste (GET /api/vehicules) renvoie
+// des Vehicule simples, sans historique.
+export interface VehiculeDetail extends Vehicule {
+    km_entries: VehiculeKmEntry[]; // triées par date_entry croissant
+}
+
+// GET/POST /api/weekly-km-prompt/* — voir app.py get_weekly_km_prompt_status.
+export interface WeeklyKmPromptStatus {
+    semaine_iso: string;
+    show_popup: boolean;
+    pending_km_entry: boolean;
+}
+
 export interface Leave {
     id: number;
     user_id: number;

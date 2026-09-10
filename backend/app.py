@@ -619,6 +619,123 @@ class NoticeAck(db.Model):
 
     __table_args__ = (db.UniqueConstraint('notice_id', 'user_id', name='uq_notice_user'),)
 
+
+def _iso_week_str(dt=None):
+    """ISO week string like "2026-W37" (ISO year, not calendar year — differs
+    around New Year's for the first/last few days of some years). Used to
+    identify vehicule km entries and weekly popup responses by week, so a
+    duplicate submission or a re-shown prompt can be recognized regardless
+    of exactly which day within the week it happens."""
+    dt = dt or datetime.datetime.now()
+    iso_year, iso_week, _ = dt.isocalendar()
+    return f"{iso_year}-W{iso_week:02d}"
+
+
+class Vehicule(db.Model):
+    """A company vehicle. km_actuel is replaced (not incremented) each time a
+    driver submits a weekly reading — see POST /api/vehicules/<id>/km-entries
+    — with whatever they read off the vehicle's actual odometer. VehiculeKmEntry.
+    km_parcourus is derived from that (new - previous km_actuel), kept only
+    for the weekly history display; it is never itself the source of truth.
+    (Originally this was reversed — the driver entered km_parcourus and the
+    server accumulated it — changed after a live look at the screen: a
+    driver reads a total off the dashboard, not a delta since last week.)"""
+    __tablename__ = 'vehicules'
+    id = db.Column(db.Integer, primary_key=True)
+    marque = db.Column(db.String(80), nullable=False)
+    modele = db.Column(db.String(80), nullable=False)
+    numero_plaque = db.Column(db.String(20), unique=True, nullable=False)
+    km_actuel = db.Column(db.Float, nullable=False, default=0.0)
+    created_by_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+
+    created_by = db.relationship('User', foreign_keys=[created_by_id])
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'marque': self.marque,
+            'modele': self.modele,
+            'numero_plaque': self.numero_plaque,
+            'km_actuel': self.km_actuel,
+            'created_by': self.created_by.username if self.created_by else None,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+class VehiculeKmEntry(db.Model):
+    """One weekly km entry for a vehicle. Unique per (vehicule, user, week) —
+    a driver logs at most one entry per vehicle per ISO week, not one per
+    day. semaine_iso also lets the weekly popup logic (see
+    WeeklyKmPromptResponse) check whether a user has logged km for ANY
+    vehicle this week without scanning every entry."""
+    __tablename__ = 'vehicule_km_entries'
+    id = db.Column(db.Integer, primary_key=True)
+    vehicule_id = db.Column(db.Integer, db.ForeignKey('vehicules.id'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    km_parcourus = db.Column(db.Float, nullable=False)
+    date_entry = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+    semaine_iso = db.Column(db.String(8), nullable=False)  # "2026-W37"
+    created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+
+    vehicule = db.relationship('Vehicule', foreign_keys=[vehicule_id])
+    user = db.relationship('User', foreign_keys=[user_id])
+
+    __table_args__ = (
+        db.UniqueConstraint('vehicule_id', 'user_id', 'semaine_iso', name='uq_km_entry_vehicule_user_week'),
+    )
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'vehicule_id': self.vehicule_id,
+            'user_id': self.user_id,
+            'user': self.user.username if self.user else None,
+            'km_parcourus': self.km_parcourus,
+            'date_entry': self.date_entry.isoformat() if self.date_entry else None,
+            'semaine_iso': self.semaine_iso,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+class WeeklyKmPromptResponse(db.Model):
+    """Per (user, ISO week): whether the Friday km popup has been answered —
+    "Non" clicked, or "Oui" followed by at least one km entry submitted.
+    Persisted server-side (not frontend state) on purpose: a user who clicks
+    "Oui" then closes the browser must stay blocked at next login until they
+    actually submit an entry — see get_weekly_km_prompt_status /
+    respond_weekly_km_prompt / _resolve_weekly_km_prompt.
+
+    pending_km_entry (added beyond the original 4-column sketch): true from
+    the moment "Oui" is clicked until a km entry is actually submitted —
+    the field the navigation-blocking logic reads. Without it there would
+    be no way to tell "said Oui, still needs to log km" apart from "hasn't
+    been asked yet" once repondu is still False in both cases."""
+    __tablename__ = 'weekly_km_prompt_responses'
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    semaine_iso = db.Column(db.String(8), nullable=False)
+    repondu = db.Column(db.Boolean, default=False)
+    repondu_at = db.Column(db.DateTime, nullable=True)
+    pending_km_entry = db.Column(db.Boolean, default=False)
+
+    user = db.relationship('User', foreign_keys=[user_id])
+
+    __table_args__ = (
+        db.UniqueConstraint('user_id', 'semaine_iso', name='uq_weekly_km_prompt_user_week'),
+    )
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'user_id': self.user_id,
+            'semaine_iso': self.semaine_iso,
+            'repondu': bool(self.repondu),
+            'repondu_at': self.repondu_at.isoformat() if self.repondu_at else None,
+            'pending_km_entry': bool(self.pending_km_entry),
+        }
+
+
 class Entry(db.Model):
     __tablename__ = 'entries'
     id = db.Column(db.Integer, primary_key=True)
@@ -3620,6 +3737,256 @@ def ack_notice(current_user, notice_id):
         db.session.add(NoticeAck(notice_id=notice_id, user_id=current_user.id))
         db.session.commit()
     return jsonify({'message': 'ok'})
+
+
+# --- Module Véhicules ---
+@app.route('/api/vehicules', methods=['GET', 'POST'])
+@token_required
+def manage_vehicules(current_user):
+    if request.method == 'GET':
+        vehicules = Vehicule.query.order_by(Vehicule.marque, Vehicule.modele).all()
+        return jsonify([v.to_dict() for v in vehicules])
+
+    # POST
+    if current_user.role != 'admin':
+        return jsonify({'error': 'Admin access required'}), 403
+
+    data = request.json or {}
+    marque = (data.get('marque') or '').strip()
+    modele = (data.get('modele') or '').strip()
+    numero_plaque = (data.get('numero_plaque') or '').strip()
+    if not marque or not modele or not numero_plaque:
+        return jsonify({'error': 'Marque, modèle et numéro de plaque sont requis'}), 400
+
+    if Vehicule.query.filter_by(numero_plaque=numero_plaque).first():
+        return jsonify({'error': 'Un véhicule avec cette plaque existe déjà'}), 409
+
+    try:
+        km_actuel = float(data.get('km_actuel', 0) or 0)
+    except (TypeError, ValueError):
+        return jsonify({'error': 'km_actuel doit être un nombre'}), 400
+    if km_actuel < 0:
+        return jsonify({'error': 'km_actuel ne peut pas être négatif'}), 400
+
+    vehicule = Vehicule(
+        marque=marque,
+        modele=modele,
+        numero_plaque=numero_plaque,
+        km_actuel=km_actuel,
+        created_by_id=current_user.id,
+    )
+    db.session.add(vehicule)
+    db.session.commit()
+    audit_log('vehicules', current_user, f"created vehicule #{vehicule.id} ({marque} {modele}, {numero_plaque})")
+    return jsonify(vehicule.to_dict()), 201
+
+
+@app.route('/api/vehicules/<int:vehicule_id>', methods=['GET', 'PUT', 'DELETE'])
+@token_required
+def vehicule_detail(current_user, vehicule_id):
+    vehicule = db.session.get(Vehicule, vehicule_id)
+    if not vehicule:
+        return jsonify({'error': 'Véhicule introuvable'}), 404
+
+    if request.method == 'GET':
+        entries = (VehiculeKmEntry.query.filter_by(vehicule_id=vehicule_id)
+                   .order_by(VehiculeKmEntry.date_entry.asc()).all())
+        data = vehicule.to_dict()
+        data['km_entries'] = [e.to_dict() for e in entries]
+        return jsonify(data)
+
+    # PUT/DELETE — admin only
+    if current_user.role != 'admin':
+        return jsonify({'error': 'Admin access required'}), 403
+
+    if request.method == 'DELETE':
+        db.session.delete(vehicule)
+        db.session.commit()
+        audit_log('vehicules', current_user,
+                   f"deleted vehicule #{vehicule.id} ({vehicule.marque} {vehicule.modele}, {vehicule.numero_plaque})")
+        return jsonify({'message': 'ok'})
+
+    # PUT
+    data = request.json or {}
+    if 'marque' in data:
+        marque = (data.get('marque') or '').strip()
+        if not marque:
+            return jsonify({'error': 'Marque requise'}), 400
+        vehicule.marque = marque
+    if 'modele' in data:
+        modele = (data.get('modele') or '').strip()
+        if not modele:
+            return jsonify({'error': 'Modèle requis'}), 400
+        vehicule.modele = modele
+    if 'numero_plaque' in data:
+        numero_plaque = (data.get('numero_plaque') or '').strip()
+        if not numero_plaque:
+            return jsonify({'error': 'Numéro de plaque requis'}), 400
+        existing = Vehicule.query.filter_by(numero_plaque=numero_plaque).first()
+        if existing and existing.id != vehicule.id:
+            return jsonify({'error': 'Un véhicule avec cette plaque existe déjà'}), 409
+        vehicule.numero_plaque = numero_plaque
+    if 'km_actuel' in data:
+        try:
+            km_actuel = float(data.get('km_actuel'))
+        except (TypeError, ValueError):
+            return jsonify({'error': 'km_actuel doit être un nombre'}), 400
+        if km_actuel < 0:
+            return jsonify({'error': 'km_actuel ne peut pas être négatif'}), 400
+        vehicule.km_actuel = km_actuel
+
+    db.session.commit()
+    audit_log('vehicules', current_user, f"edited vehicule #{vehicule.id}")
+    return jsonify(vehicule.to_dict())
+
+
+@app.route('/api/vehicules/<int:vehicule_id>/km-entries', methods=['POST'])
+@token_required
+def add_vehicule_km_entry(current_user, vehicule_id):
+    """Body: {km_actuel: <nouveau kilométrage total relevé sur le compteur>}
+    — PAS un delta. Revu suite au test live : le conducteur lit un chiffre
+    sur le compteur du véhicule, il ne calcule pas lui-même combien de km il
+    a fait depuis le dernier relevé. Le serveur calcule ce delta lui-même
+    (km_parcourus, stocké pour l'historique hebdo) et remplace
+    Vehicule.km_actuel par la valeur reçue (pas un +=)."""
+    vehicule = db.session.get(Vehicule, vehicule_id)
+    if not vehicule:
+        return jsonify({'error': 'Véhicule introuvable'}), 404
+
+    data = request.json or {}
+    try:
+        km_actuel_nouveau = float(data.get('km_actuel'))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'km_actuel est requis et doit être un nombre'}), 400
+    if km_actuel_nouveau < (vehicule.km_actuel or 0):
+        return jsonify({'error': 'Le kilométrage ne peut pas être inférieur au kilométrage actuel enregistré'}), 400
+
+    semaine_iso = _iso_week_str()
+
+    if VehiculeKmEntry.query.filter_by(vehicule_id=vehicule_id, user_id=current_user.id,
+                                        semaine_iso=semaine_iso).first():
+        return jsonify({'error': 'Relevé déjà soumis pour ce véhicule cette semaine'}), 409
+
+    km_parcourus = km_actuel_nouveau - (vehicule.km_actuel or 0)
+
+    entry = VehiculeKmEntry(
+        vehicule_id=vehicule_id,
+        user_id=current_user.id,
+        km_parcourus=km_parcourus,
+        semaine_iso=semaine_iso,
+    )
+    db.session.add(entry)
+    vehicule.km_actuel = km_actuel_nouveau
+    # Un relevé soumis (peu importe le véhicule) répond à la question du
+    # popup hebdo — lève le blocage "Oui" en attente s'il y en a un (voir
+    # _resolve_weekly_km_prompt).
+    _resolve_weekly_km_prompt(current_user.id)
+    db.session.commit()
+    audit_log('vehicules', current_user,
+              f"km entry on vehicule #{vehicule.id}: kilométrage mis à jour à {km_actuel_nouveau} "
+              f"(+{km_parcourus} km, semaine {semaine_iso})")
+    return jsonify(entry.to_dict()), 201
+
+
+def _resolve_weekly_km_prompt(user_id):
+    """Called right before committing a successful km entry: resolves
+    whatever weekly-km-prompt block is open for this user.
+
+    Looked up WITHOUT filtering by the current ISO week on purpose: a user
+    can click "Oui" on a Friday and only submit the km entry the following
+    Monday, which is already a different ISO week (ISO weeks run Mon-Sun) —
+    filtering by "this week" here would silently drop the block instead of
+    resolving it. See get_weekly_km_prompt_status for the matching lookup.
+
+    If no pending block exists (e.g. a km entry logged outside the popup
+    flow entirely), marks the CURRENT week as answered anyway — a real
+    entry already exists for this week, so Friday's popup asking again
+    would be redundant."""
+    pending_row = WeeklyKmPromptResponse.query.filter_by(
+        user_id=user_id, pending_km_entry=True, repondu=False
+    ).first()
+    now = datetime.datetime.now()
+    if pending_row:
+        pending_row.repondu = True
+        pending_row.pending_km_entry = False
+        pending_row.repondu_at = now
+        return
+
+    semaine_iso = _iso_week_str()
+    row = WeeklyKmPromptResponse.query.filter_by(user_id=user_id, semaine_iso=semaine_iso).first()
+    if not row:
+        row = WeeklyKmPromptResponse(user_id=user_id, semaine_iso=semaine_iso)
+        db.session.add(row)
+    row.repondu = True
+    row.pending_km_entry = False
+    row.repondu_at = now
+
+
+@app.route('/api/weekly-km-prompt/status', methods=['GET'])
+@token_required
+def get_weekly_km_prompt_status(current_user):
+    """What the app checks on open to decide: show the Oui/Non popup, force
+    the navigation block (already said Oui, km not yet logged), or neither.
+    Applies to every role — no admin exclusion (confirmed default, an admin
+    can drive a company vehicle too)."""
+    # Un blocage "Oui" en attente prime sur tout le reste, et ce quelle que
+    # soit la semaine où il a été ouvert (voir _resolve_weekly_km_prompt) —
+    # tant qu'il existe, jamais reproposer Oui/Non, seulement bloquer la
+    # navigation jusqu'à complétion.
+    pending_row = (WeeklyKmPromptResponse.query
+                   .filter_by(user_id=current_user.id, pending_km_entry=True, repondu=False)
+                   .order_by(WeeklyKmPromptResponse.id.desc()).first())
+    if pending_row:
+        return jsonify({
+            'semaine_iso': pending_row.semaine_iso,
+            'show_popup': False,
+            'pending_km_entry': True,
+        })
+
+    semaine_iso = _iso_week_str()
+    row = WeeklyKmPromptResponse.query.filter_by(user_id=current_user.id, semaine_iso=semaine_iso).first()
+    if row and row.repondu:
+        return jsonify({'semaine_iso': semaine_iso, 'show_popup': False, 'pending_km_entry': False})
+
+    # Déclenchement : vendredi, à partir de 10h00, heure du serveur (voir
+    # prompt initial — choisi pour rester cohérent pour tous, plutôt que
+    # l'heure locale du navigateur de chacun). weekday() : Monday=0 ... Friday=4.
+    now = datetime.datetime.now()
+    show_popup = now.weekday() == 4 and now.hour >= 10
+    return jsonify({'semaine_iso': semaine_iso, 'show_popup': show_popup, 'pending_km_entry': False})
+
+
+@app.route('/api/weekly-km-prompt/respond', methods=['POST'])
+@token_required
+def respond_weekly_km_prompt(current_user):
+    """"Non" closes the week immediately (repondu=True). "Oui" doesn't close
+    it — it opens the pending_km_entry block, only lifted by an actual km
+    entry (see _resolve_weekly_km_prompt), matching the prompt's "Oui
+    n'est complet qu'une fois les km soumis"."""
+    data = request.json or {}
+    reponse = data.get('reponse')
+    if reponse not in ('oui', 'non'):
+        return jsonify({'error': "reponse doit être 'oui' ou 'non'"}), 400
+
+    semaine_iso = _iso_week_str()
+    row = WeeklyKmPromptResponse.query.filter_by(user_id=current_user.id, semaine_iso=semaine_iso).first()
+    if not row:
+        row = WeeklyKmPromptResponse(user_id=current_user.id, semaine_iso=semaine_iso)
+        db.session.add(row)
+
+    if reponse == 'non':
+        row.repondu = True
+        row.pending_km_entry = False
+        row.repondu_at = datetime.datetime.now()
+    else:
+        row.repondu = False
+        row.pending_km_entry = True
+        row.repondu_at = None
+
+    db.session.commit()
+    audit_log('vehicules', current_user, f"weekly km prompt ({semaine_iso}): répondu '{reponse}'")
+    return jsonify(row.to_dict())
+
 
 # --- Module financier ---
 # Admin-only across the board — margins/costs are the most sensitive business
