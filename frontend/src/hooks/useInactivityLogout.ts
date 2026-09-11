@@ -10,11 +10,12 @@ import { useEffect, useRef } from 'react';
 const ACTIVITY_EVENTS = ['mousemove', 'mousedown', 'keydown', 'touchstart', 'scroll', 'click'];
 
 // Auto-logs out after `minutes` of no interaction anywhere in the app —
-// the session cookie itself stays valid for 24h, this is a separate
-// "someone walked away from an unlocked device" protection. Purely
-// client-side (no server round-trip on activity — only the eventual
-// logout call), so it resets cleanly on every navigation without needing
-// server state.
+// a separate "someone walked away from an unlocked device" protection,
+// independent of the session cookie's own expiry (see caller: App.tsx
+// passes a per-role value matching COOKIE_MAX_AGE_ADMIN/DEFAULT in
+// app.py). Purely client-side (no server round-trip on activity — only
+// the eventual logout call), so it resets cleanly on every navigation
+// without needing server state.
 export function useInactivityLogout(onTimeout: () => void, minutes = 20, enabled = true) {
     const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const onTimeoutRef = useRef(onTimeout);
