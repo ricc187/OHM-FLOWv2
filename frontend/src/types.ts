@@ -27,6 +27,10 @@ export interface Chantier {
     address_work?: string;
     address_billing?: string;
     remarque?: string;
+    // Champ libre, distinct de remarque — modifiable par admin ET depanneur
+    // (remarque reste admin-only, via la modale Modifier). Voir PUT
+    // /api/chantiers/<id>/materiel.
+    materiel?: string | null;
     status: ChantierStatus;
     archived?: boolean; // documents zipped + originals freed (set on close, cleared on reopen)
     numero?: string; // {AA}{NNNNN} nomenclature prefix, e.g. "2600347" — undefined on legacy chantiers

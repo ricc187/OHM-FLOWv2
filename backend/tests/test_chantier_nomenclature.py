@@ -314,5 +314,103 @@ class NoticesApiTestCase(unittest.TestCase):
         self.assertNotIn(notice_id, ids)
 
 
+class ChantierMaterielTestCase(unittest.TestCase):
+    """PUT /api/chantiers/<id>/materiel — champ texte libre, admin ET
+    depanneur (pas juste admin, contrairement au PUT /api/chantiers/<id>
+    principal), pas les 'user' simples."""
+
+    @classmethod
+    def setUpClass(cls):
+        with ohmapp.app.app_context():
+            admin = ohmapp.User.query.filter_by(username='Admin').first()
+            admin.must_change_password = False
+            admin.mfa_enabled = True
+            ohmapp.db.session.commit()
+            cls.admin_token = ohmapp.serializer.dumps({'user_id': admin.id})
+            cls.admin_id = admin.id
+
+            dep = ohmapp.User(username='MaterielDep', role='depanneur', must_change_password=False)
+            dep.set_pin('1234')
+            ohmapp.db.session.add(dep)
+            worker = ohmapp.User(username='MaterielWorker', role='user', must_change_password=False)
+            worker.set_pin('1234')
+            ohmapp.db.session.add(worker)
+            ohmapp.db.session.commit()
+            cls.dep_token = ohmapp.serializer.dumps({'user_id': dep.id})
+            cls.worker_token = ohmapp.serializer.dumps({'user_id': worker.id})
+
+    def _as_admin(self):
+        c = ohmapp.app.test_client()
+        c.set_cookie(ohmapp.COOKIE_NAME, self.admin_token)
+        return c
+
+    def _as_depanneur(self):
+        c = ohmapp.app.test_client()
+        c.set_cookie(ohmapp.COOKIE_NAME, self.dep_token)
+        return c
+
+    def _as_worker(self):
+        c = ohmapp.app.test_client()
+        c.set_cookie(ohmapp.COOKIE_NAME, self.worker_token)
+        return c
+
+    def _create_chantier(self, client, suffix):
+        res = client.post('/api/chantiers', json={
+            'annee': 2026, 'commune': f'Materiel{suffix}', 'client_repere': 'Test', 'referent_id': self.admin_id
+        })
+        self.assertEqual(res.status_code, 201, res.get_json())
+        return res.get_json()['id']
+
+    def test_admin_can_set_materiel(self):
+        chantier_id = self._create_chantier(self._as_admin(), 'A')
+        res = self._as_admin().put(f'/api/chantiers/{chantier_id}/materiel', json={'materiel': '20m câble 3G2.5'})
+        self.assertEqual(res.status_code, 200, res.get_json())
+        self.assertEqual(res.get_json()['materiel'], '20m câble 3G2.5')
+
+    def test_depanneur_can_set_materiel(self):
+        chantier_id = self._create_chantier(self._as_admin(), 'B')
+        res = self._as_depanneur().put(f'/api/chantiers/{chantier_id}/materiel', json={'materiel': '2x disjoncteurs 16A'})
+        self.assertEqual(res.status_code, 200, res.get_json())
+        self.assertEqual(res.get_json()['materiel'], '2x disjoncteurs 16A')
+
+    def test_plain_user_cannot_set_materiel(self):
+        chantier_id = self._create_chantier(self._as_admin(), 'C')
+        res = self._as_worker().put(f'/api/chantiers/{chantier_id}/materiel', json={'materiel': 'nope'})
+        self.assertEqual(res.status_code, 403)
+
+    def test_materiel_survives_in_get(self):
+        chantier_id = self._create_chantier(self._as_admin(), 'D')
+        self._as_depanneur().put(f'/api/chantiers/{chantier_id}/materiel', json={'materiel': 'Perceuse'})
+        res = self._as_worker().get(f'/api/chantiers/{chantier_id}')  # GET is open to any role
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.get_json()['materiel'], 'Perceuse')
+
+    def test_empty_materiel_stored_as_null(self):
+        chantier_id = self._create_chantier(self._as_admin(), 'E')
+        self._as_admin().put(f'/api/chantiers/{chantier_id}/materiel', json={'materiel': 'quelque chose'})
+        res = self._as_admin().put(f'/api/chantiers/{chantier_id}/materiel', json={'materiel': '   '})
+        self.assertEqual(res.status_code, 200, res.get_json())
+        self.assertIsNone(res.get_json()['materiel'])
+
+    def test_materiel_unknown_chantier_404(self):
+        res = self._as_admin().put('/api/chantiers/999999/materiel', json={'materiel': 'x'})
+        self.assertEqual(res.status_code, 404)
+
+    def test_materiel_endpoint_never_touches_other_fields(self):
+        """Regression guard: this endpoint must stay scoped to `materiel`
+        only — a depanneur must never be able to smuggle other field
+        changes (status, nom, referent...) through it."""
+        chantier_id = self._create_chantier(self._as_admin(), 'F')
+        before = self._as_admin().get(f'/api/chantiers/{chantier_id}').get_json()
+        res = self._as_depanneur().put(f'/api/chantiers/{chantier_id}/materiel', json={
+            'materiel': 'ok', 'status': 'DONE', 'nom': 'HACKED',
+        })
+        self.assertEqual(res.status_code, 200, res.get_json())
+        after = res.get_json()
+        self.assertEqual(after['status'], before['status'])
+        self.assertEqual(after['nom'], before['nom'])
+        self.assertEqual(after['materiel'], 'ok')
+
+
 if __name__ == '__main__':
     unittest.main()
