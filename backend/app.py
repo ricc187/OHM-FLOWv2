@@ -95,13 +95,25 @@ limiter = Limiter(get_remote_address, app=app, default_limits=["2000 per day"])
 db.init_app(app)
 
 COOKIE_NAME = 'ohm_token'
-COOKIE_MAX_AGE = 86400  # 24h
+# Session lifetime is role-dependent: admins re-type their password daily
+# (24h) since that role carries the most access; user/depanneur — mostly
+# field use via the PWA — stay signed in for 5 days so they aren't
+# re-prompted constantly. COOKIE_MAX_AGE_CEILING is the longest either
+# tier can be, used to bound the itsdangerous signature/timestamp check in
+# _resolve_session_cookie *before* the token's user (and so their role) is
+# known; the actual per-role cutoff is enforced there once it is.
+COOKIE_MAX_AGE_ADMIN = 86400          # 24h
+COOKIE_MAX_AGE_DEFAULT = 5 * 86400    # 5 days — user, depanneur
+COOKIE_MAX_AGE_CEILING = max(COOKIE_MAX_AGE_ADMIN, COOKIE_MAX_AGE_DEFAULT)
 
-def set_auth_cookie(response, token):
+def _session_max_age_for(user):
+    return COOKIE_MAX_AGE_ADMIN if user.role == 'admin' else COOKIE_MAX_AGE_DEFAULT
+
+def set_auth_cookie(response, token, max_age):
     response.set_cookie(
         COOKIE_NAME,
         token,
-        max_age=COOKIE_MAX_AGE,
+        max_age=max_age,
         httponly=True,  # not readable from JS — mitigates token theft via XSS
         secure=os.environ.get('FLASK_ENV') == 'production',  # HTTPS-only in prod
         samesite='Lax',  # blocks the cookie on cross-site POST/PUT/DELETE — CSRF mitigation
@@ -147,13 +159,21 @@ def _resolve_session_cookie(token):
     if not token:
         return None
     try:
-        data, issued_at = serializer.loads(token, max_age=COOKIE_MAX_AGE, return_timestamp=True)
+        data, issued_at = serializer.loads(token, max_age=COOKIE_MAX_AGE_CEILING, return_timestamp=True)
         if 'purpose' in data:
             return None
         user = db.session.get(User, data['user_id'])
         if not user:
             return None
-        if user.sessions_invalidated_at and issued_at.replace(tzinfo=None) <= user.sessions_invalidated_at:
+        # The itsdangerous max_age above only bounds age by the longest
+        # tier (COOKIE_MAX_AGE_CEILING) — a signature still valid at that
+        # length doesn't mean *this* user's own, shorter (admin) session
+        # hasn't expired, so re-check against their role's actual cutoff.
+        issued_at = issued_at.replace(tzinfo=None)
+        age_sec = (datetime.datetime.utcnow() - issued_at).total_seconds()
+        if age_sec > _session_max_age_for(user):
+            return None
+        if user.sessions_invalidated_at and issued_at <= user.sessions_invalidated_at:
             return None
         return user
     except Exception:
@@ -292,7 +312,7 @@ def decode_mfa_pending_token(token, expected_purpose):
 def _issue_session(user):
     token = serializer.dumps({'user_id': user.id})
     response = jsonify({'status': 'ok', **user.to_dict()})
-    set_auth_cookie(response, token)
+    set_auth_cookie(response, token, _session_max_age_for(user))
     return response
 
 
@@ -2068,8 +2088,18 @@ def manage_users(current_user):
         if error:
             return jsonify({'error': error}), 400
 
+        vacation_balance = 0.0
+        if 'vacation_balance' in data:
+            try:
+                vacation_balance = float(data.get('vacation_balance'))
+            except (TypeError, ValueError):
+                return jsonify({'error': 'Solde de vacances invalide'}), 400
+            if vacation_balance < 0:
+                return jsonify({'error': 'Solde de vacances invalide'}), 400
+
         new_user = User(
             username=username, role=role, must_change_password=True,
+            vacation_balance=vacation_balance,
             pin_hash=generate_password_hash(secrets.token_hex(16)),  # orphan legacy column, never used
         )
         new_user.set_password(password)
@@ -2119,6 +2149,15 @@ def user_operations(current_user, user_id):
             if new_role not in ['admin', 'user', 'depanneur']:
                 return jsonify({'error': 'Invalid role'}), 400
             user.role = new_role
+
+        if 'vacation_balance' in data:
+            try:
+                new_balance = float(data.get('vacation_balance'))
+            except (TypeError, ValueError):
+                return jsonify({'error': 'Solde de vacances invalide'}), 400
+            if new_balance < 0:
+                return jsonify({'error': 'Solde de vacances invalide'}), 400
+            user.vacation_balance = new_balance
 
         db.session.commit()
         return jsonify(user.to_dict())
@@ -3891,6 +3930,46 @@ def manage_vehicules(current_user):
     db.session.commit()
     audit_log('vehicules', current_user, f"created vehicule #{vehicule.id} ({marque} {modele}, {numero_plaque})")
     return jsonify(vehicule.to_dict()), 201
+
+
+@app.route('/api/vehicules/stats', methods=['GET'])
+@token_required
+def vehicules_stats(current_user):
+    """Aggregated fleet stats for the small charts atop the vehicule list —
+    read-only, same access as GET /api/vehicules (any authenticated role,
+    depanneurs included). km_par_vehicule uses km_actuel (the running
+    odometer total, source of truth on Vehicule); km_par_utilisateur sums
+    VehiculeKmEntry.km_parcourus (the per-week driven delta) grouped by
+    driver, since km_actuel alone can't say who did the driving."""
+    total_km_flotte = db.session.query(func.coalesce(func.sum(Vehicule.km_actuel), 0.0)).scalar()
+    vehicule_count = Vehicule.query.count()
+
+    vehicules = Vehicule.query.order_by(Vehicule.km_actuel.desc()).all()
+    km_par_vehicule = [
+        {
+            'id': v.id,
+            'label': f"{v.marque} {v.modele}",
+            'numero_plaque': v.numero_plaque,
+            'km_actuel': v.km_actuel,
+        }
+        for v in vehicules
+    ]
+
+    rows = (
+        db.session.query(User.id, User.username, func.sum(VehiculeKmEntry.km_parcourus).label('total_km'))
+        .join(VehiculeKmEntry, VehiculeKmEntry.user_id == User.id)
+        .group_by(User.id, User.username)
+        .order_by(func.sum(VehiculeKmEntry.km_parcourus).desc())
+        .all()
+    )
+    km_par_utilisateur = [{'user_id': r.id, 'username': r.username, 'total_km': r.total_km} for r in rows]
+
+    return jsonify({
+        'total_km_flotte': total_km_flotte,
+        'vehicule_count': vehicule_count,
+        'km_par_vehicule': km_par_vehicule,
+        'km_par_utilisateur': km_par_utilisateur,
+    })
 
 
 @app.route('/api/vehicules/<int:vehicule_id>', methods=['GET', 'PUT', 'DELETE'])

@@ -24,7 +24,8 @@ export const AdminUsers: React.FC<Props> = ({ currentUser }) => {
     const [formData, setFormData] = useState({
         username: '',
         password: '',
-        role: 'user' as 'admin' | 'user' | 'depanneur'
+        role: 'user' as 'admin' | 'user' | 'depanneur',
+        vacationBalance: '0'
     });
     const [formError, setFormError] = useState('');
 
@@ -58,14 +59,14 @@ export const AdminUsers: React.FC<Props> = ({ currentUser }) => {
 
     const handleOpenCreate = () => {
         setEditingUser(null);
-        setFormData({ username: '', password: '', role: 'user' });
+        setFormData({ username: '', password: '', role: 'user', vacationBalance: '0' });
         setFormError('');
         setShowModal(true);
     };
 
     const handleOpenEdit = (user: User) => {
         setEditingUser(user);
-        setFormData({ username: user.username, password: '', role: user.role });
+        setFormData({ username: user.username, password: '', role: user.role, vacationBalance: String(user.vacation_balance ?? 0) });
         setFormError('');
         setShowModal(true);
     };
@@ -81,9 +82,14 @@ export const AdminUsers: React.FC<Props> = ({ currentUser }) => {
             setFormError('Un mot de passe initial est requis');
             return;
         }
+        const vacationBalance = parseFloat(formData.vacationBalance.replace(',', '.'));
+        if (isNaN(vacationBalance) || vacationBalance < 0) {
+            setFormError('Solde de vacances invalide');
+            return;
+        }
 
         try {
-            const payload: any = { username: formData.username, role: formData.role };
+            const payload: any = { username: formData.username, role: formData.role, vacation_balance: vacationBalance };
             if (formData.password) payload.password = formData.password;
 
             const res = editingUser
@@ -203,6 +209,7 @@ export const AdminUsers: React.FC<Props> = ({ currentUser }) => {
                                 <th className="px-6 py-3">Nom / Username</th>
                                 <th className="px-6 py-3">Rôle</th>
                                 <th className="px-6 py-3">2FA</th>
+                                <th className="px-6 py-3">Solde vacances</th>
                                 <th className="px-6 py-3 text-right">Actions</th>
                             </tr>
                         </thead>
@@ -239,6 +246,9 @@ export const AdminUsers: React.FC<Props> = ({ currentUser }) => {
                                                 <ShieldAlert size={14} /> Requise — pas encore configurée
                                             </span>
                                         )}
+                                    </td>
+                                    <td className="px-6 py-4">
+                                        <span className="text-sm font-bold text-slate-700">{user.vacation_balance ?? 0} j</span>
                                     </td>
                                     <td className="px-6 py-4 text-right">
                                         <div className="flex items-center justify-end gap-2">
@@ -333,6 +343,18 @@ export const AdminUsers: React.FC<Props> = ({ currentUser }) => {
                                         { value: 'depanneur', label: 'Dépanneur' },
                                         { value: 'admin', label: 'Admin (2FA obligatoire)' }
                                     ]}
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-[10px] font-black uppercase text-slate-500 mb-2 tracking-widest">Solde de vacances (jours)</label>
+                                <input
+                                    type="number"
+                                    min="0"
+                                    step="0.5"
+                                    required
+                                    value={formData.vacationBalance}
+                                    onChange={(e) => setFormData({ ...formData, vacationBalance: e.target.value })}
+                                    className="w-full bg-white border border-slate-300 rounded-xl px-4 py-3 text-slate-900 focus:ring-2 focus:ring-ohm-primary/50 transition-all outline-none"
                                 />
                             </div>
                             {formError && <p className="text-red-500 text-sm font-bold">{formError}</p>}

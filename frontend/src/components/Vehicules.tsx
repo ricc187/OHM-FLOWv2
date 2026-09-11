@@ -1,10 +1,58 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Vehicule, VehiculeDetail, User } from '../types';
+import { Vehicule, VehiculeDetail, VehiculeStats, User } from '../types';
 import { Car, Plus, Pencil, Trash2, ArrowLeft, Gauge } from 'lucide-react';
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 import { api } from '../api';
 import { useConfirm } from '../hooks/useConfirm';
 import { ConfirmDialog } from './ConfirmDialog';
 import { useMountTransition } from '../hooks/useMountTransition';
+
+// Une seule teinte de marque (magnitude, pas identité — voir dataviz skill) :
+// même bleu que .card/.input-field ailleurs dans l'app, pas une palette
+// catégorielle puisque chaque graphique n'a qu'une seule série.
+const CHART_HUE = '#2563EB';
+
+// Tooltip minimal aux couleurs de l'app plutôt que le style recharts par
+// défaut — cohérent avec les autres cards (bg blanc, ombre, coins arrondis).
+const FleetTooltip: React.FC<any> = ({ active, payload, label }) => {
+    if (!active || !payload?.length) return null;
+    return (
+        <div className="bg-white border border-slate-200 rounded-lg shadow-lg px-3 py-2 text-xs">
+            <div className="font-bold text-slate-900">{label}</div>
+            <div className="text-slate-500">{Math.round(payload[0].value).toLocaleString('fr-CH')} km</div>
+        </div>
+    );
+};
+
+const StatTile: React.FC<{ label: string; value: string }> = ({ label, value }) => (
+    <div className="card p-4">
+        <div className="text-[10px] font-black uppercase text-slate-500 tracking-widest mb-1">{label}</div>
+        <div className="text-xl font-black text-slate-900 truncate">{value}</div>
+    </div>
+);
+
+const FleetChart: React.FC<{ title: string; data: { label: string; km: number }[] }> = ({ title, data }) => (
+    <div className="card p-4">
+        <div className="text-[10px] font-black uppercase text-slate-500 tracking-widest mb-3">{title}</div>
+        {data.length === 0 ? (
+            <div className="text-sm text-slate-400 italic py-8 text-center">Pas encore de données.</div>
+        ) : (
+            <ResponsiveContainer width="100%" height={Math.max(120, data.length * 34)}>
+                <BarChart data={data} layout="vertical" margin={{ top: 0, right: 16, bottom: 0, left: 0 }}>
+                    <XAxis type="number" hide />
+                    <YAxis
+                        type="category" dataKey="label" width={110} tickLine={false} axisLine={false}
+                        tick={{ fontSize: 11, fill: '#64748B' }}
+                    />
+                    <Tooltip content={<FleetTooltip />} cursor={{ fill: '#F1F5F9' }} />
+                    <Bar dataKey="km" radius={[0, 4, 4, 0]} maxBarSize={18}>
+                        {data.map((_, i) => <Cell key={i} fill={CHART_HUE} />)}
+                    </Bar>
+                </BarChart>
+            </ResponsiveContainer>
+        )}
+    </div>
+);
 
 interface Props {
     currentUser: User;
@@ -24,6 +72,7 @@ export const Vehicules: React.FC<Props> = ({ currentUser, forcedVehiculeId, onKm
 
     const [vehicules, setVehicules] = useState<Vehicule[]>([]);
     const [loading, setLoading] = useState(true);
+    const [stats, setStats] = useState<VehiculeStats | null>(null);
     const [selectedId, setSelectedId] = useState<number | null>(forcedVehiculeId ?? null);
     const [detail, setDetail] = useState<VehiculeDetail | null>(null);
     const [detailLoading, setDetailLoading] = useState(false);
@@ -51,7 +100,12 @@ export const Vehicules: React.FC<Props> = ({ currentUser, forcedVehiculeId, onKm
         setLoading(false);
     };
 
-    useEffect(() => { fetchList(); }, []);
+    const fetchStats = async () => {
+        const res = await api.get('/api/vehicules/stats');
+        if (res.ok) setStats(await res.json());
+    };
+
+    useEffect(() => { fetchList(); fetchStats(); }, []);
 
     const fetchDetail = async (id: number) => {
         setDetailLoading(true);
@@ -111,6 +165,7 @@ export const Vehicules: React.FC<Props> = ({ currentUser, forcedVehiculeId, onKm
             if (res.ok) {
                 setShowForm(null);
                 fetchList();
+                fetchStats();
                 if (detail) fetchDetail(detail.id);
             } else {
                 const data = await res.json().catch(() => ({}));
@@ -131,6 +186,7 @@ export const Vehicules: React.FC<Props> = ({ currentUser, forcedVehiculeId, onKm
         if (res.ok) {
             if (selectedId === v.id) setSelectedId(null);
             fetchList();
+            fetchStats();
         } else {
             const data = await res.json().catch(() => ({}));
             alert(data.error || 'Erreur lors de la suppression');
@@ -156,6 +212,7 @@ export const Vehicules: React.FC<Props> = ({ currentUser, forcedVehiculeId, onKm
             if (res.ok) {
                 await fetchDetail(detail.id);
                 fetchList();
+                fetchStats();
                 onKmEntrySubmitted?.();
             } else {
                 const data = await res.json().catch(() => ({}));
@@ -290,6 +347,31 @@ export const Vehicules: React.FC<Props> = ({ currentUser, forcedVehiculeId, onKm
                     </button>
                 )}
             </div>
+
+            {stats && (stats.vehicule_count > 0 || stats.km_par_utilisateur.length > 0) && (
+                <div className="space-y-4">
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                        <StatTile label="Km total flotte" value={`${Math.round(stats.total_km_flotte).toLocaleString('fr-CH')} km`} />
+                        <StatTile label="Véhicules" value={String(stats.vehicule_count)} />
+                        <StatTile
+                            label="Top conducteur"
+                            value={stats.km_par_utilisateur[0]
+                                ? `${stats.km_par_utilisateur[0].username} · ${Math.round(stats.km_par_utilisateur[0].total_km).toLocaleString('fr-CH')} km`
+                                : '—'}
+                        />
+                    </div>
+                    <div className="grid md:grid-cols-2 gap-4">
+                        <FleetChart
+                            title="Km au compteur par véhicule"
+                            data={stats.km_par_vehicule.slice(0, 8).map(v => ({ label: v.label, km: v.km_actuel }))}
+                        />
+                        <FleetChart
+                            title="Km parcourus par conducteur"
+                            data={stats.km_par_utilisateur.slice(0, 8).map(u => ({ label: u.username, km: u.total_km }))}
+                        />
+                    </div>
+                </div>
+            )}
 
             <div className="space-y-3">
                 {!loading && vehicules.length === 0 && (
