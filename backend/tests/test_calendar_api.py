@@ -249,6 +249,100 @@ class CalendarApiTestCase(unittest.TestCase):
             worker = ohmapp.User.query.get(self.worker_a_id)
             self.assertEqual(worker.vacation_balance, 9.0)  # 10 - 1 day, deducted exactly once
 
+    # --- Vacation balance guard: can't request/approve past what's left ---
+
+    def test_admin_leave_creation_rejected_when_balance_insufficient(self):
+        with ohmapp.app.app_context():
+            ohmapp.User.query.get(self.worker_a_id).vacation_balance = 1.0
+            ohmapp.db.session.commit()
+
+        # Mon-Tue, no Friday/weekend involved: 2.0 days, more than the 1.0 left.
+        res = self.admin_client.post('/api/calendar/leaves', json={
+            'user_ids': [self.worker_a_id], 'type': 'CONGE',
+            'date_debut': '2026-04-06', 'date_fin': '2026-04-07', 'toute_la_journee': True,
+        })
+        self.assertEqual(res.status_code, 400, res.get_json())
+        self.assertIn('Solde', res.get_json()['error'])
+
+        with ohmapp.app.app_context():
+            worker = ohmapp.User.query.get(self.worker_a_id)
+            self.assertEqual(worker.vacation_balance, 1.0)  # untouched
+            self.assertIsNone(ohmapp.Leave.query.filter_by(
+                user_id=self.worker_a_id, date_start='2026-04-06', date_end='2026-04-07').first())
+
+    def test_non_admin_leave_request_rejected_when_balance_insufficient(self):
+        """PENDING requests are blocked up front too, not just at approval —
+        a request that already can't be honored as filed shouldn't sit in
+        the admin's queue only to be refused later."""
+        with ohmapp.app.app_context():
+            ohmapp.User.query.get(self.worker_a_id).vacation_balance = 1.0
+            ohmapp.db.session.commit()
+
+        res = self.worker_a_client.post('/api/calendar/leaves', json={
+            'user_ids': [self.worker_a_id], 'type': 'CONGE',
+            'date_debut': '2026-04-13', 'date_fin': '2026-04-14', 'toute_la_journee': True,
+        })
+        self.assertEqual(res.status_code, 400, res.get_json())
+        self.assertIn('Solde', res.get_json()['error'])
+        with ohmapp.app.app_context():
+            self.assertIsNone(ohmapp.Leave.query.filter_by(
+                user_id=self.worker_a_id, date_start='2026-04-13', date_end='2026-04-14').first())
+
+    def test_exact_balance_match_is_allowed(self):
+        """Boundary: requesting exactly the remaining balance (not more) must
+        go through, not be off-by-epsilon rejected."""
+        with ohmapp.app.app_context():
+            ohmapp.User.query.get(self.worker_a_id).vacation_balance = 2.0
+            ohmapp.db.session.commit()
+
+        res = self.admin_client.post('/api/calendar/leaves', json={
+            'user_ids': [self.worker_a_id], 'type': 'CONGE',
+            'date_debut': '2026-04-20', 'date_fin': '2026-04-21', 'toute_la_journee': True,
+        })
+        self.assertEqual(res.status_code, 201, res.get_json())
+        with ohmapp.app.app_context():
+            self.assertEqual(ohmapp.User.query.get(self.worker_a_id).vacation_balance, 0.0)
+
+    def test_non_conge_type_never_blocked_by_balance(self):
+        """Only CONGE draws from vacation_balance — MALADIE/ABSENCE/etc. must
+        go through even at a zero (or negative) balance."""
+        with ohmapp.app.app_context():
+            ohmapp.User.query.get(self.worker_a_id).vacation_balance = 0.0
+            ohmapp.db.session.commit()
+
+        res = self.admin_client.post('/api/calendar/leaves', json={
+            'user_ids': [self.worker_a_id], 'type': 'MALADIE',
+            'date_debut': '2026-04-06', 'date_fin': '2026-04-10', 'toute_la_journee': True,
+        })
+        self.assertEqual(res.status_code, 201, res.get_json())
+
+    def test_approval_rejected_when_balance_dropped_below_pending_request_since_filed(self):
+        """The balance can move between filing (PENDING) and approval — e.g.
+        another CONGE approved in between. Approval must re-check, not just
+        trust that it was fine when the request was first filed."""
+        create = self.worker_a_client.post('/api/calendar/leaves', json={
+            'user_ids': [self.worker_a_id], 'type': 'CONGE',
+            'date_debut': '2026-04-27', 'date_fin': '2026-04-28', 'toute_la_journee': True,
+        })
+        self.assertEqual(create.status_code, 201, create.get_json())
+        leave_id = create.get_json()[0]['id']
+        self.assertEqual(create.get_json()[0]['status'], 'PENDING')
+
+        # Balance now too low for the 2.0-day request above, as if something
+        # else already consumed it in the meantime.
+        with ohmapp.app.app_context():
+            ohmapp.User.query.get(self.worker_a_id).vacation_balance = 1.0
+            ohmapp.db.session.commit()
+
+        res = self.admin_client.put(f'/api/leaves/{leave_id}/status', json={'status': 'APPROVED'})
+        self.assertEqual(res.status_code, 400, res.get_json())
+        self.assertIn('Solde', res.get_json()['error'])
+
+        with ohmapp.app.app_context():
+            leave = ohmapp.db.session.get(ohmapp.Leave, leave_id)
+            self.assertEqual(leave.status, 'PENDING')  # not flipped
+            self.assertEqual(ohmapp.User.query.get(self.worker_a_id).vacation_balance, 1.0)  # untouched
+
     def test_non_admin_leave_creation_stays_pending_no_deduction(self):
         res = self.worker_a_client.post('/api/calendar/leaves', json={
             'user_ids': [self.worker_a_id], 'type': 'ABSENCE',

@@ -3133,6 +3133,41 @@ def _chantier_color(chantier_id):
     return CHANTIER_COLOR_PALETTE[chantier_id % len(CHANTIER_COLOR_PALETTE)]
 
 
+# Float-equality slop for balance comparisons — days_count values are sums
+# of /9.0 divisions (see compute_days_count) that land exactly on binary
+# fractions in practice (0.5, 1.5, ...), but this guards against the
+# vanishingly unlikely rounding case still rejecting a balance that's
+# genuinely exactly enough.
+_BALANCE_EPS = 1e-9
+
+
+class InsufficientVacationBalance(Exception):
+    """Raised by _approve_leave/_approve_leave_if_pending (and checked
+    up front wherever a CONGE leave is created — see _assert_vacation_balance)
+    when days_count exceeds what `user` has left. Callers catch this and
+    turn it into a 400 — it's a user-facing rejection, not a bug."""
+    def __init__(self, user, days_count):
+        self.user = user
+        self.days_count = days_count
+        super().__init__(
+            f"Solde de vacances insuffisant pour {user.username} "
+            f"({user.vacation_balance:g}j restants, {days_count:g}j demandés)"
+        )
+
+
+def _assert_vacation_balance(user, leave_type, days_count):
+    """No-op for every leave type except CONGE (only CONGE draws from
+    vacation_balance — see _approve_leave) and for a missing user (callers
+    404 on that separately). Otherwise raises InsufficientVacationBalance
+    if `user` doesn't currently have days_count days left. Used both at
+    request time (a PENDING leave that already can't be approved as filed
+    is rejected up front, not just later at approval) and inside
+    _approve_leave/_approve_leave_if_pending (the balance can have moved
+    between filing and approval — another leave approved in between)."""
+    if leave_type == 'CONGE' and user is not None and user.vacation_balance < days_count - _BALANCE_EPS:
+        raise InsufficientVacationBalance(user, days_count)
+
+
 def _approve_leave(leave):
     """Marks a leave APPROVED and deducts the vacation balance for CONGE —
     the one piece of business logic behind "approving a leave", shared by
@@ -3142,12 +3177,17 @@ def _approve_leave(leave):
     /api/leaves/<id> — via _approve_leave_if_pending, which wraps this for
     that case. Only safe to call on a leave that has never been approved
     before — e.g. a brand-new in-memory Leave, not yet committed, as at the
-    calendar call site above. Do not duplicate this elsewhere."""
-    leave.status = 'APPROVED'
+    calendar call site above. Do not duplicate this elsewhere.
+
+    Raises InsufficientVacationBalance (leaving `leave` untouched) instead
+    of approving a CONGE leave past what the user has left."""
+    user = None
     if leave.type == 'CONGE':
         user = db.session.get(User, leave.user_id)
-        if user:
-            user.vacation_balance -= leave.days_count
+        _assert_vacation_balance(user, leave.type, leave.days_count)
+    leave.status = 'APPROVED'
+    if user:
+        user.vacation_balance -= leave.days_count
 
 
 def _approve_leave_if_pending(leave):
@@ -3171,7 +3211,16 @@ def _approve_leave_if_pending(leave):
     rows, and returns False here — no re-deduction, no lost update.
 
     Returns True if this call actually approved it, False if it was already
-    APPROVED (caller should report that as a 409, not silently no-op)."""
+    APPROVED (caller should report that as a 409, not silently no-op).
+    Raises InsufficientVacationBalance (leaving `leave` untouched, status
+    not flipped) instead of approving a CONGE leave past what the user has
+    left — checked before the atomic UPDATE below, so an insufficient
+    balance never flips the status at all."""
+    user = None
+    if leave.type == 'CONGE':
+        user = db.session.get(User, leave.user_id)
+        _assert_vacation_balance(user, leave.type, leave.days_count)
+
     rowcount = Leave.query.filter(
         Leave.id == leave.id, Leave.status != 'APPROVED'
     ).update({'status': 'APPROVED'}, synchronize_session=False)
@@ -3182,10 +3231,8 @@ def _approve_leave_if_pending(leave):
     # bypassed the ORM's normal attribute-setting) so leave.to_dict() below
     # reflects it without an extra round-trip.
     leave.status = 'APPROVED'
-    if leave.type == 'CONGE':
-        user = db.session.get(User, leave.user_id)
-        if user:
-            user.vacation_balance -= leave.days_count
+    if user:
+        user.vacation_balance -= leave.days_count
     return True
 
 
@@ -3243,7 +3290,8 @@ def manage_leaves(current_user):
         # Same rule as entries: only admin can file a leave request for someone else.
         if target_user_id != current_user.id and current_user.role != 'admin':
             return jsonify({'error': 'Cannot create a leave request for another user'}), 403
-        if not db.session.get(User, target_user_id):
+        target_user = db.session.get(User, target_user_id)
+        if not target_user:
             return jsonify({'error': 'User not found'}), 404
 
         leave_type = data.get('type')
@@ -3254,6 +3302,13 @@ def manage_leaves(current_user):
             days_count = compute_days_count(data['date_start'], data['date_end'])
         except (KeyError, ValueError) as e:
             return jsonify({'error': f'Invalid dates: {e}'}), 400
+
+        # A request that already can't be approved as filed is rejected up
+        # front, not just later at approval time — see _assert_vacation_balance.
+        try:
+            _assert_vacation_balance(target_user, leave_type, days_count)
+        except InsufficientVacationBalance as e:
+            return jsonify({'error': str(e)}), 400
 
         new_leave = Leave(
             user_id=target_user_id,
@@ -3283,8 +3338,11 @@ def update_leave_status(current_user, leave_id):
         return jsonify({'error': 'Invalid status'}), 400
 
     if status == 'APPROVED':
-        if not _approve_leave_if_pending(leave):
-            return jsonify({'error': 'Ce congé est déjà approuvé'}), 409
+        try:
+            if not _approve_leave_if_pending(leave):
+                return jsonify({'error': 'Ce congé est déjà approuvé'}), 409
+        except InsufficientVacationBalance as e:
+            return jsonify({'error': str(e)}), 400
     else:
         leave.status = status
 
@@ -3370,8 +3428,11 @@ def manage_single_leave(current_user, leave_id):
             leave.admin_note = data['admin_note']
         if is_admin and 'status' in data:
             if data['status'] == 'APPROVED':
-                if not _approve_leave_if_pending(leave):
-                    return jsonify({'error': 'Ce congé est déjà approuvé'}), 409
+                try:
+                    if not _approve_leave_if_pending(leave):
+                        return jsonify({'error': 'Ce congé est déjà approuvé'}), 409
+                except InsufficientVacationBalance as e:
+                    return jsonify({'error': str(e)}), 400
             else:
                 leave.status = data['status']
 
@@ -3694,24 +3755,36 @@ def create_calendar_leaves(current_user):
     is_admin = current_user.role == 'admin'
 
     created = []
-    for uid in user_ids:
-        leave = Leave(
-            user_id=uid,
-            type=leave_type,
-            date_start=period['date_debut'],
-            date_end=period['date_fin'],
-            heure_debut=period['heure_debut'],
-            heure_fin=period['heure_fin'],
-            toute_la_journee=period['toute_la_journee'],
-            description=data.get('description'),
-            days_count=days_count,
-            status='PENDING',
-            created_by_id=current_user.id,
-        )
-        db.session.add(leave)
-        if is_admin:
-            _approve_leave(leave)
-        created.append(leave)
+    try:
+        for uid in user_ids:
+            leave = Leave(
+                user_id=uid,
+                type=leave_type,
+                date_start=period['date_debut'],
+                date_end=period['date_fin'],
+                heure_debut=period['heure_debut'],
+                heure_fin=period['heure_fin'],
+                toute_la_journee=period['toute_la_journee'],
+                description=data.get('description'),
+                days_count=days_count,
+                status='PENDING',
+                created_by_id=current_user.id,
+            )
+            if is_admin:
+                # Raises InsufficientVacationBalance if this uid doesn't have
+                # days_count left — checked here too (not just PENDING below),
+                # since this path also flips straight to APPROVED.
+                _approve_leave(leave)
+            else:
+                # Not auto-approved, but still rejected up front if it
+                # already can't be approved as filed — see manage_leaves'
+                # POST /api/leaves for the same rule.
+                _assert_vacation_balance(db.session.get(User, uid), leave_type, days_count)
+            db.session.add(leave)
+            created.append(leave)
+    except InsufficientVacationBalance as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 400
     db.session.commit()
     return jsonify([l.to_dict() for l in created]), 201
 
