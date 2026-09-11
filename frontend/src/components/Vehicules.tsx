@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Vehicule, VehiculeDetail, VehiculeStats, User } from '../types';
-import { Car, Plus, Pencil, Trash2, ArrowLeft, Gauge } from 'lucide-react';
+import { Vehicule, VehiculeDetail, VehiculeReparation, VehiculeStats, User } from '../types';
+import { Car, Plus, Pencil, Trash2, ArrowLeft, Gauge, Wrench } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 import { api } from '../api';
 import { useConfirm } from '../hooks/useConfirm';
@@ -14,12 +14,14 @@ const CHART_HUE = '#2563EB';
 
 // Tooltip minimal aux couleurs de l'app plutôt que le style recharts par
 // défaut — cohérent avec les autres cards (bg blanc, ombre, coins arrondis).
-const FleetTooltip: React.FC<any> = ({ active, payload, label }) => {
+// `unit` distingue "km" (kilométrage) de "CHF" (coût réparations) — même
+// composant pour les deux familles de charts ci-dessous.
+const FleetTooltip: React.FC<any> = ({ active, payload, label, unit }) => {
     if (!active || !payload?.length) return null;
     return (
         <div className="bg-white border border-slate-200 rounded-lg shadow-lg px-3 py-2 text-xs">
             <div className="font-bold text-slate-900">{label}</div>
-            <div className="text-slate-500">{Math.round(payload[0].value).toLocaleString('fr-CH')} km</div>
+            <div className="text-slate-500">{Math.round(payload[0].value).toLocaleString('fr-CH')} {unit}</div>
         </div>
     );
 };
@@ -31,7 +33,7 @@ const StatTile: React.FC<{ label: string; value: string }> = ({ label, value }) 
     </div>
 );
 
-const FleetChart: React.FC<{ title: string; data: { label: string; km: number }[] }> = ({ title, data }) => (
+const FleetChart: React.FC<{ title: string; unit: string; data: { label: string; value: number }[] }> = ({ title, unit, data }) => (
     <div className="card p-4">
         <div className="text-[10px] font-black uppercase text-slate-500 tracking-widest mb-3">{title}</div>
         {data.length === 0 ? (
@@ -44,8 +46,8 @@ const FleetChart: React.FC<{ title: string; data: { label: string; km: number }[
                         type="category" dataKey="label" width={110} tickLine={false} axisLine={false}
                         tick={{ fontSize: 11, fill: '#64748B' }}
                     />
-                    <Tooltip content={<FleetTooltip />} cursor={{ fill: '#F1F5F9' }} />
-                    <Bar dataKey="km" radius={[0, 4, 4, 0]} maxBarSize={18}>
+                    <Tooltip content={<FleetTooltip unit={unit} />} cursor={{ fill: '#F1F5F9' }} />
+                    <Bar dataKey="value" radius={[0, 4, 4, 0]} maxBarSize={18}>
                         {data.map((_, i) => <Cell key={i} fill={CHART_HUE} />)}
                     </Bar>
                 </BarChart>
@@ -94,6 +96,12 @@ export const Vehicules: React.FC<Props> = ({ currentUser, forcedVehiculeId, onKm
     const [kmError, setKmError] = useState('');
     const [kmSubmitting, setKmSubmitting] = useState(false);
 
+    const [reparations, setReparations] = useState<VehiculeReparation[]>([]);
+    const [showReparationForm, setShowReparationForm] = useState(false);
+    const [reparationForm, setReparationForm] = useState({ nom: '', montant: '' });
+    const [reparationError, setReparationError] = useState('');
+    const [reparationSubmitting, setReparationSubmitting] = useState(false);
+
     const fetchList = async () => {
         const res = await api.get('/api/vehicules');
         if (res.ok) setVehicules(await res.json());
@@ -114,9 +122,17 @@ export const Vehicules: React.FC<Props> = ({ currentUser, forcedVehiculeId, onKm
         setDetailLoading(false);
     };
 
+    const fetchReparations = async (id: number) => {
+        const res = await api.get(`/api/vehicules/${id}/reparations`);
+        if (res.ok) setReparations(await res.json());
+    };
+
     useEffect(() => {
-        if (selectedId != null) fetchDetail(selectedId);
-        else setDetail(null);
+        if (selectedId != null) { fetchDetail(selectedId); fetchReparations(selectedId); }
+        else { setDetail(null); setReparations([]); }
+        setShowReparationForm(false);
+        setReparationForm({ nom: '', montant: '' });
+        setReparationError('');
     }, [selectedId]);
 
     // Pré-remplit avec le kilométrage actuel — l'utilisateur lit un chiffre
@@ -223,6 +239,53 @@ export const Vehicules: React.FC<Props> = ({ currentUser, forcedVehiculeId, onKm
         }
     };
 
+    const handleSubmitReparation = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!detail) return;
+        setReparationError('');
+        const nom = reparationForm.nom.trim();
+        const montant = Number(reparationForm.montant);
+        if (!nom) {
+            setReparationError('Le nom de la réparation est requis');
+            return;
+        }
+        if (reparationForm.montant === '' || Number.isNaN(montant) || montant < 0) {
+            setReparationError('Entrez un montant de facture valide');
+            return;
+        }
+        setReparationSubmitting(true);
+        try {
+            const res = await api.post(`/api/vehicules/${detail.id}/reparations`, { nom, montant });
+            if (res.ok) {
+                setReparationForm({ nom: '', montant: '' });
+                setShowReparationForm(false);
+                fetchReparations(detail.id);
+                fetchStats();
+            } else {
+                const data = await res.json().catch(() => ({}));
+                setReparationError(data.error || 'Erreur lors de l\'enregistrement');
+            }
+        } finally {
+            setReparationSubmitting(false);
+        }
+    };
+
+    const handleDeleteReparation = async (r: VehiculeReparation) => {
+        const ok = await confirm({
+            title: 'Supprimer cette réparation ?',
+            message: `« ${r.nom} » (${r.montant.toLocaleString('fr-CH')} CHF) sera définitivement supprimée.`,
+        });
+        if (!ok) return;
+        const res = await api.delete(`/api/vehicules/reparations/${r.id}`);
+        if (res.ok) {
+            if (detail) fetchReparations(detail.id);
+            fetchStats();
+        } else {
+            const data = await res.json().catch(() => ({}));
+            alert(data.error || 'Erreur lors de la suppression');
+        }
+    };
+
     const formatDate = (iso: string | null) =>
         iso ? new Date(iso).toLocaleDateString('fr-CH', { day: 'numeric', month: 'long', year: 'numeric' }) : '—';
 
@@ -318,6 +381,80 @@ export const Vehicules: React.FC<Props> = ({ currentUser, forcedVehiculeId, onKm
                                 </div>
                             )}
                         </div>
+
+                        <div>
+                            <div className="flex items-center justify-between mb-3">
+                                <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest">Réparations</h3>
+                                {canManage && (
+                                    <button
+                                        onClick={() => { setReparationError(''); setShowReparationForm(v => !v); }}
+                                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-ohm-primary text-ohm-bg hover:bg-yellow-300 transition-all text-xs font-bold"
+                                    >
+                                        <Plus size={14} /> Ajouter
+                                    </button>
+                                )}
+                            </div>
+
+                            {showReparationForm && (
+                                <form onSubmit={handleSubmitReparation} className="card p-4 sm:p-6 space-y-3 mb-3">
+                                    <div className="grid sm:grid-cols-2 gap-3">
+                                        <div>
+                                            <label className="text-[10px] font-black uppercase text-slate-500 tracking-widest block mb-1.5">Nom de la réparation</label>
+                                            <input
+                                                type="text" autoFocus
+                                                className="input-field"
+                                                value={reparationForm.nom}
+                                                onChange={e => setReparationForm({ ...reparationForm, nom: e.target.value })}
+                                                placeholder="Ex: Plaquettes de frein"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="text-[10px] font-black uppercase text-slate-500 tracking-widest block mb-1.5">Facture (CHF)</label>
+                                            <input
+                                                type="number" min={0} step="0.05"
+                                                className="input-field"
+                                                value={reparationForm.montant}
+                                                onChange={e => setReparationForm({ ...reparationForm, montant: e.target.value })}
+                                                placeholder="0.00"
+                                            />
+                                        </div>
+                                    </div>
+                                    {reparationError && <p className="text-red-500 text-sm font-bold">{reparationError}</p>}
+                                    <div className="flex gap-2">
+                                        <button type="submit" disabled={reparationSubmitting} className="px-5 py-2 rounded-lg bg-ohm-primary text-ohm-bg hover:bg-yellow-300 transition-all text-sm font-bold disabled:opacity-50">
+                                            Enregistrer
+                                        </button>
+                                        <button type="button" onClick={() => setShowReparationForm(false)} className="px-5 py-2 rounded-lg bg-slate-100 text-slate-600 hover:bg-slate-200 transition-all text-sm font-bold">
+                                            Annuler
+                                        </button>
+                                    </div>
+                                </form>
+                            )}
+
+                            {reparations.length === 0 ? (
+                                <div className="card p-8 text-center text-slate-400 italic">Aucune réparation enregistrée.</div>
+                            ) : (
+                                <div className="space-y-2">
+                                    {reparations.map(r => (
+                                        <div key={r.id} className="card p-3 flex items-center gap-3">
+                                            <div className="w-9 h-9 rounded-xl bg-ohm-primary/15 flex items-center justify-center shrink-0">
+                                                <Wrench className="text-ohm-primary" size={16} />
+                                            </div>
+                                            <div className="flex-1 min-w-0">
+                                                <div className="text-sm font-bold text-slate-900 truncate">{r.nom}</div>
+                                                <div className="text-[10px] text-slate-400">{formatDate(r.date_reparation)} · {r.created_by || '—'}</div>
+                                            </div>
+                                            <div className="text-sm font-black text-slate-900 shrink-0">{r.montant.toLocaleString('fr-CH')} CHF</div>
+                                            {canManage && (
+                                                <button onClick={() => handleDeleteReparation(r)} className="p-2 rounded-lg text-red-400 hover:bg-red-500/10 transition-all shrink-0" title="Supprimer">
+                                                    <Trash2 size={16} />
+                                                </button>
+                                            )}
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
                     </>
                 )}
 
@@ -350,7 +487,7 @@ export const Vehicules: React.FC<Props> = ({ currentUser, forcedVehiculeId, onKm
 
             {stats && (stats.vehicule_count > 0 || stats.km_par_utilisateur.length > 0) && (
                 <div className="space-y-4">
-                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                         <StatTile label="Km total flotte" value={`${Math.round(stats.total_km_flotte).toLocaleString('fr-CH')} km`} />
                         <StatTile label="Véhicules" value={String(stats.vehicule_count)} />
                         <StatTile
@@ -359,15 +496,23 @@ export const Vehicules: React.FC<Props> = ({ currentUser, forcedVehiculeId, onKm
                                 ? `${stats.km_par_utilisateur[0].username} · ${Math.round(stats.km_par_utilisateur[0].total_km).toLocaleString('fr-CH')} km`
                                 : '—'}
                         />
+                        <StatTile label="Réparations (total)" value={`${Math.round(stats.total_reparations_cout).toLocaleString('fr-CH')} CHF`} />
                     </div>
                     <div className="grid md:grid-cols-2 gap-4">
                         <FleetChart
                             title="Km au compteur par véhicule"
-                            data={stats.km_par_vehicule.slice(0, 8).map(v => ({ label: v.label, km: v.km_actuel }))}
+                            unit="km"
+                            data={stats.km_par_vehicule.slice(0, 8).map(v => ({ label: v.label, value: v.km_actuel }))}
                         />
                         <FleetChart
                             title="Km parcourus par conducteur"
-                            data={stats.km_par_utilisateur.slice(0, 8).map(u => ({ label: u.username, km: u.total_km }))}
+                            unit="km"
+                            data={stats.km_par_utilisateur.slice(0, 8).map(u => ({ label: u.username, value: u.total_km }))}
+                        />
+                        <FleetChart
+                            title="Coût réparations par véhicule"
+                            unit="CHF"
+                            data={stats.reparations_par_vehicule.slice(0, 8).map(r => ({ label: r.label, value: r.total_montant }))}
                         />
                     </div>
                 </div>

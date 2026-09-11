@@ -323,6 +323,87 @@ class VehiculesApiTestCase(unittest.TestCase):
         after = admin.get('/api/stats/absenteeism?start=2026-01-01&end=2026-01-31').get_json()['headcount']
         self.assertEqual(after, before, 'a vehicule-role account inflated the absenteeism headcount denominator')
 
+    # --- Réparations : nom + montant, admin/vehicule write, tout le monde lit ---
+
+    def test_non_admin_can_list_reparations_but_not_create(self):
+        admin = self._admin_client()
+        res = admin.post('/api/vehicules', json={
+            'marque': 'Renault', 'modele': 'Kangoo', 'numero_plaque': 'REP-1111',
+        })
+        vehicule_id = res.get_json()['id']
+        res = admin.post(f'/api/vehicules/{vehicule_id}/reparations', json={'nom': 'Pneus', 'montant': 400})
+        self.assertEqual(res.status_code, 201, res.get_json())
+
+        worker = self._user_client()
+        res = worker.get(f'/api/vehicules/{vehicule_id}/reparations')
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(len(res.get_json()), 1)
+        self.assertEqual(res.get_json()[0]['nom'], 'Pneus')
+        self.assertEqual(res.get_json()[0]['montant'], 400)
+
+        res = worker.post(f'/api/vehicules/{vehicule_id}/reparations', json={'nom': 'Vidange', 'montant': 100})
+        self.assertEqual(res.status_code, 403)
+
+    def test_vehicule_role_can_create_and_delete_reparation(self):
+        garagiste = self._vehicule_role_client()
+        res = garagiste.post('/api/vehicules', json={
+            'marque': 'Renault', 'modele': 'Kangoo', 'numero_plaque': 'REP-2222',
+        })
+        vehicule_id = res.get_json()['id']
+
+        res = garagiste.post(f'/api/vehicules/{vehicule_id}/reparations', json={'nom': 'Freins', 'montant': 250.5})
+        self.assertEqual(res.status_code, 201, res.get_json())
+        reparation_id = res.get_json()['id']
+
+        res = garagiste.delete(f'/api/vehicules/reparations/{reparation_id}')
+        self.assertEqual(res.status_code, 200, res.get_json())
+
+        res = garagiste.get(f'/api/vehicules/{vehicule_id}/reparations')
+        self.assertEqual(res.get_json(), [])
+
+    def test_reparation_requires_nom_and_montant(self):
+        admin = self._admin_client()
+        res = admin.post('/api/vehicules', json={
+            'marque': 'Renault', 'modele': 'Kangoo', 'numero_plaque': 'REP-3333',
+        })
+        vehicule_id = res.get_json()['id']
+
+        res = admin.post(f'/api/vehicules/{vehicule_id}/reparations', json={'nom': '', 'montant': 100})
+        self.assertEqual(res.status_code, 400)
+        res = admin.post(f'/api/vehicules/{vehicule_id}/reparations', json={'nom': 'Pneus'})
+        self.assertEqual(res.status_code, 400)
+        res = admin.post(f'/api/vehicules/{vehicule_id}/reparations', json={'nom': 'Pneus', 'montant': -10})
+        self.assertEqual(res.status_code, 400)
+
+    def test_reparation_unknown_vehicule_404(self):
+        admin = self._admin_client()
+        res = admin.post('/api/vehicules/999999/reparations', json={'nom': 'Pneus', 'montant': 100})
+        self.assertEqual(res.status_code, 404)
+        res = admin.get('/api/vehicules/999999/reparations')
+        self.assertEqual(res.status_code, 404)
+
+    def test_reparation_delete_unknown_404(self):
+        admin = self._admin_client()
+        res = admin.delete('/api/vehicules/reparations/999999')
+        self.assertEqual(res.status_code, 404)
+
+    def test_stats_include_reparations_totals(self):
+        admin = self._admin_client()
+        res = admin.post('/api/vehicules', json={
+            'marque': 'Peugeot', 'modele': 'Partner', 'numero_plaque': 'REP-4444',
+        })
+        vehicule_id = res.get_json()['id']
+        admin.post(f'/api/vehicules/{vehicule_id}/reparations', json={'nom': 'Pneus', 'montant': 300})
+        admin.post(f'/api/vehicules/{vehicule_id}/reparations', json={'nom': 'Vidange', 'montant': 150})
+
+        res = admin.get('/api/vehicules/stats')
+        self.assertEqual(res.status_code, 200, res.get_json())
+        body = res.get_json()
+        self.assertGreaterEqual(body['total_reparations_cout'], 450)
+        entry = next((r for r in body['reparations_par_vehicule'] if r['numero_plaque'] == 'REP-4444'), None)
+        self.assertIsNotNone(entry)
+        self.assertEqual(entry['total_montant'], 450)
+
 
 if __name__ == '__main__':
     unittest.main()
