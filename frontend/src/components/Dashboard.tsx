@@ -258,7 +258,9 @@ export const Dashboard: React.FC<Props> = ({ currentUser, onSelectChantier }) =>
             <div className="grid grid-cols-2 sm:flex gap-2 sm:gap-0 p-2 bg-white/40 backdrop-blur-2xl border border-black/5 rounded-2xl w-full md:w-auto self-start shadow-glass relative">
                 {(currentUser.role === 'admin'
                     ? (['EN_COURS', 'NON_PLANIFIE', 'TERMINE', 'ALL'] as DashboardFilter[])
-                    : (['EN_COURS', 'ALL'] as DashboardFilter[])
+                    : currentUser.role === 'depanneur'
+                        ? (['EN_COURS', 'NON_PLANIFIE', 'ALL'] as DashboardFilter[])
+                        : (['EN_COURS', 'ALL'] as DashboardFilter[])
                 ).map(status => (
                     <button
                         key={status}

@@ -285,6 +285,15 @@ export interface VehiculeDetail extends Vehicule {
     km_entries: VehiculeKmEntry[]; // triées par date_entry croissant
 }
 
+// GET /api/vehicules/stats — agrégats flotte pour les mini-graphiques en
+// haut de la page Véhicules (voir app.py vehicules_stats).
+export interface VehiculeStats {
+    total_km_flotte: number;
+    vehicule_count: number;
+    km_par_vehicule: { id: number; label: string; numero_plaque: string; km_actuel: number }[];
+    km_par_utilisateur: { user_id: number; username: string; total_km: number }[];
+}
+
 // GET/POST /api/weekly-km-prompt/* — voir app.py get_weekly_km_prompt_status.
 export interface WeeklyKmPromptStatus {
     semaine_iso: string;

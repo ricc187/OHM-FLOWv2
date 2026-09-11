@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { Logo, OhmIcon } from './Icons';
 import { LoginResult, User } from '../types';
 import { api } from '../api';
-import { Zap } from 'lucide-react';
+import { Zap, Eye, EyeOff } from 'lucide-react';
 
 interface Props {
     onLoginSuccess: (user: User) => void;
@@ -113,6 +113,7 @@ const MfaCodeStep: React.FC<{ mfaToken: string; onDone: (user: User) => void }> 
 export const Login: React.FC<Props> = ({ onLoginSuccess }) => {
     const [username, setUsername] = useState('');
     const [password, setPassword] = useState('');
+    const [showPassword, setShowPassword] = useState(false);
     const [error, setError] = useState('');
     const [busy, setBusy] = useState(false);
     // 'mfa_enroll_required' no longer comes back from /api/login — an admin
@@ -173,12 +174,21 @@ export const Login: React.FC<Props> = ({ onLoginSuccess }) => {
 
                     <label className="block">
                         <span className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-2 block">Mot de passe</span>
-                        <div className={`t-input-wrap ${error ? 'is-error' : ''}`}>
+                        <div className={`t-input-wrap relative ${error ? 'is-error' : ''}`}>
                             <input
-                                type="password" required autoComplete="current-password"
-                                className={`t-input input-field ${error ? 'is-shaking' : ''}`}
+                                type={showPassword ? 'text' : 'password'} required autoComplete="current-password"
+                                className={`t-input input-field pr-11 ${error ? 'is-shaking' : ''}`}
                                 value={password} onChange={e => setPassword(e.target.value)}
                             />
+                            <button
+                                type="button"
+                                onClick={() => setShowPassword(v => !v)}
+                                tabIndex={-1}
+                                aria-label={showPassword ? 'Masquer le mot de passe' : 'Afficher le mot de passe'}
+                                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors"
+                            >
+                                {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                            </button>
                             <p className="t-error-msg text-red-500 text-sm font-bold mt-1">{error}</p>
                         </div>
                     </label>
