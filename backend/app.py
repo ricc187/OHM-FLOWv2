@@ -2114,13 +2114,23 @@ def change_password(current_user):
 @app.route('/api/users', methods=['GET', 'POST', 'DELETE'])
 @token_required
 def manage_users(current_user):
-    # Only Admin can manage users
-    if current_user.role != 'admin':
-         return jsonify({'error': 'Admin access required'}), 403
-
     if request.method == 'GET':
         users = User.query.all()
-        return jsonify([u.to_dict() for u in users])  # to_dict() never includes a secret — no masking needed
+        if current_user.role == 'admin':
+            return jsonify([u.to_dict() for u in users])  # to_dict() never includes a secret — no masking needed
+        # Non-admin (user/depanneur — 'vehicule' never reaches here at all,
+        # see _VEHICULE_ROLE_ALLOWED_ENDPOINTS): minimal id+username shape
+        # only. Needed so a depanneur creating a chantier can populate the
+        # "référent" dropdown (Dashboard.tsx fetches this same route) —
+        # bug fixed 2026-09-11, this GET used to 403 for anyone but admin,
+        # silently leaving that dropdown empty. Full to_dict() (role,
+        # vacation_balance, mfa_enabled, must_change_password) stays
+        # admin-only — no reason to expose colleagues' details that far.
+        return jsonify([{'id': u.id, 'username': u.username} for u in users])
+
+    # Only Admin can manage users (create/etc. below)
+    if current_user.role != 'admin':
+         return jsonify({'error': 'Admin access required'}), 403
 
     if request.method == 'POST':
         data = request.json or {}
