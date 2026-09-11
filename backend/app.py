@@ -3043,12 +3043,23 @@ def manage_entry(current_user, entry_id):
         return jsonify(entry.to_dict())
 
 def compute_days_count(date_start, date_end):
-    """Calendar-day count, inclusive, computed server-side (never trust client input)."""
+    """Leave-day count charged against vacation_balance, computed server-side
+    (never trust client input). Weighted by the real work schedule, not a
+    plain calendar-day count: WORKDAY_HOURS (defined further below, but
+    resolved at call time — every route's request has already run past that
+    definition by the time this is called, so the forward reference is
+    fine) says Fri is a 4.5h half-day (Lun-Jeu 9h) and weekends are never
+    worked — so each Fri in the range only costs 0.5 day, and weekend days
+    cost nothing. A jeudi->vendredi leave is 1 + 0.5 = 1.5 day, not 2 (bug
+    fixed 2026-09-11: it was over-charging every leave that touched a
+    Friday, since a full calendar day was deducted for an afternoon nobody
+    works anyway)."""
     start = datetime.datetime.strptime(date_start, "%Y-%m-%d").date()
     end = datetime.datetime.strptime(date_end, "%Y-%m-%d").date()
     if end < start:
         raise ValueError("date_end is before date_start")
-    return float((end - start).days + 1)
+    full_day_hours = max(WORKDAY_HOURS.values())  # 9.0 — Lun-Jeu
+    return sum(WORKDAY_HOURS[d.weekday()] / full_day_hours for d in _iter_business_days(start, end))
 
 # --- Horaire de travail — Statistiques RH & Planning (absentéisme, heures
 # planifié vs réel). Lun-Jeu 7h30-12h + 13h-17h30 (9h/jour), Ven 7h30-12h

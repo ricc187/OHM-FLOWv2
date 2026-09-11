@@ -538,5 +538,35 @@ class CalendarApiTestCase(unittest.TestCase):
         self.assertEqual(res.status_code, 400)
 
 
+class ComputeDaysCountTestCase(unittest.TestCase):
+    """Regression coverage for the 2026-09-11 fix: compute_days_count used to
+    be a plain inclusive calendar-day count, which over-charged any leave
+    touching a Friday (a company half-day, 4.5h vs 9h Mon-Thu — see
+    WORKDAY_HOURS) or a weekend. A pure function, no DB/app_context needed."""
+
+    def test_thursday_to_friday_is_one_and_a_half_days(self):
+        # 2026-09-10 = Thursday, 2026-09-11 = Friday
+        self.assertEqual(ohmapp.compute_days_count('2026-09-10', '2026-09-11'), 1.5)
+
+    def test_friday_alone_is_half_a_day(self):
+        self.assertEqual(ohmapp.compute_days_count('2026-09-11', '2026-09-11'), 0.5)
+
+    def test_full_work_week_is_four_and_a_half_days(self):
+        # Monday 2026-09-07 through Friday 2026-09-11
+        self.assertEqual(ohmapp.compute_days_count('2026-09-07', '2026-09-11'), 4.5)
+
+    def test_monday_to_tuesday_still_two_full_days(self):
+        # Unaffected case — no Friday/weekend in range — must not regress.
+        self.assertEqual(ohmapp.compute_days_count('2026-09-07', '2026-09-08'), 2.0)
+
+    def test_weekend_inside_range_is_not_charged(self):
+        # Friday 2026-09-11 through Monday 2026-09-14: 0.5 (Fri) + 0 (Sat/Sun) + 1 (Mon)
+        self.assertEqual(ohmapp.compute_days_count('2026-09-11', '2026-09-14'), 1.5)
+
+    def test_end_before_start_raises(self):
+        with self.assertRaises(ValueError):
+            ohmapp.compute_days_count('2026-09-11', '2026-09-10')
+
+
 if __name__ == '__main__':
     unittest.main()
