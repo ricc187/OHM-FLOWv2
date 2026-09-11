@@ -513,6 +513,47 @@ class AuthTestCase(unittest.TestCase):
         finally:
             ohmapp.limiter.enabled = False
 
+    # --- GET /api/users: role-shaped, not admin-only anymore -------------
+
+    def test_depanneur_can_list_users_minimal_shape(self):
+        """Used to 403 for anyone but admin, leaving the "référent" dropdown
+        on chantier creation empty for a depanneur (Dashboard.tsx fetches
+        this same route). Fixed 2026-09-11: non-admin now gets id+username
+        only — role/vacation_balance/mfa_enabled stay admin-only."""
+        self._create_user('other_worker', 'user')
+        self._create_user('dep1', 'depanneur')
+        self._login('dep1', STRONG_PASSWORD)
+        res = self.client.get('/api/users')
+        self.assertEqual(res.status_code, 200, res.get_json())
+        body = res.get_json()
+        self.assertGreaterEqual(len(body), 2)
+        for row in body:
+            self.assertEqual(set(row.keys()), {'id', 'username'})
+
+    def test_plain_user_role_can_list_users_minimal_shape(self):
+        self._create_user('u1', 'user')
+        self._login('u1', STRONG_PASSWORD)
+        res = self.client.get('/api/users')
+        self.assertEqual(res.status_code, 200, res.get_json())
+        self.assertEqual(set(res.get_json()[0].keys()), {'id', 'username'})
+
+    def test_admin_still_gets_full_user_shape(self):
+        # Direct token mint, not _login: role='admin' + mfa_enabled=True
+        # means /api/login would stop at 'mfa_required' (no session cookie
+        # issued yet) — same pattern as this file's other admin-role tests
+        # (e.g. test_admin_reset_requires_own_password) for an already-
+        # fully-onboarded admin session.
+        admin_id = self._create_user('admin_full', 'admin')
+        token = ohmapp.serializer.dumps({'user_id': admin_id})
+        self.client.set_cookie(ohmapp.COOKIE_NAME, token)
+
+        res = self.client.get('/api/users')
+        self.assertEqual(res.status_code, 200, res.get_json())
+        row = next(r for r in res.get_json() if r['username'] == 'admin_full')
+        self.assertIn('role', row)
+        self.assertIn('vacation_balance', row)
+        self.assertIn('mfa_enabled', row)
+
 
 if __name__ == '__main__':
     unittest.main()
