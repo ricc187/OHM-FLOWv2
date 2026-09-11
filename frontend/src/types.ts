@@ -279,6 +279,18 @@ export interface Vehicule {
     created_at: string | null;
 }
 
+// GET /api/vehicules/<id>/reparations — nom + montant (facture, CHF), pas
+// de fichier joint (voir app.py VehiculeReparation).
+export interface VehiculeReparation {
+    id: number;
+    vehicule_id: number;
+    nom: string;
+    montant: number;
+    date_reparation: string | null; // ISO
+    created_by: string | null;
+    created_at: string | null;
+}
+
 // GET /api/vehicules/<id> uniquement — la liste (GET /api/vehicules) renvoie
 // des Vehicule simples, sans historique.
 export interface VehiculeDetail extends Vehicule {
@@ -292,6 +304,8 @@ export interface VehiculeStats {
     vehicule_count: number;
     km_par_vehicule: { id: number; label: string; numero_plaque: string; km_actuel: number }[];
     km_par_utilisateur: { user_id: number; username: string; total_km: number }[];
+    total_reparations_cout: number;
+    reparations_par_vehicule: { id: number; label: string; numero_plaque: string; total_montant: number }[];
 }
 
 // GET/POST /api/weekly-km-prompt/* — voir app.py get_weekly_km_prompt_status.

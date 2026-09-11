@@ -147,6 +147,7 @@ _ONBOARDING_SAFE_ENDPOINTS = {'get_me', 'change_password'}
 # before any per-route admin/role check even runs.
 _VEHICULE_ROLE_ALLOWED_ENDPOINTS = _ONBOARDING_SAFE_ENDPOINTS | {
     'manage_vehicules', 'vehicules_stats', 'vehicule_detail', 'add_vehicule_km_entry',
+    'manage_vehicule_reparations', 'delete_vehicule_reparation',
 }
 
 def _resolve_session_cookie(token):
@@ -735,6 +736,35 @@ class VehiculeKmEntry(db.Model):
             'km_parcourus': self.km_parcourus,
             'date_entry': self.date_entry.isoformat() if self.date_entry else None,
             'semaine_iso': self.semaine_iso,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+class VehiculeReparation(db.Model):
+    """One repair/maintenance entry logged against a vehicle — nom (what was
+    done) + montant (invoice amount, CHF). Read/write access: admin or the
+    'vehicule' role (external garagiste, see VALID_ROLES) — same gate as the
+    rest of fleet management (manage_vehicules/vehicule_detail)."""
+    __tablename__ = 'vehicule_reparations'
+    id = db.Column(db.Integer, primary_key=True)
+    vehicule_id = db.Column(db.Integer, db.ForeignKey('vehicules.id'), nullable=False)
+    nom = db.Column(db.String(200), nullable=False)
+    montant = db.Column(db.Float, nullable=False)
+    date_reparation = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+    created_by_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+
+    vehicule = db.relationship('Vehicule', foreign_keys=[vehicule_id])
+    created_by = db.relationship('User', foreign_keys=[created_by_id])
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'vehicule_id': self.vehicule_id,
+            'nom': self.nom,
+            'montant': self.montant,
+            'date_reparation': self.date_reparation.isoformat() if self.date_reparation else None,
+            'created_by': self.created_by.username if self.created_by else None,
             'created_at': self.created_at.isoformat() if self.created_at else None,
         }
 
@@ -4045,7 +4075,10 @@ def vehicules_stats(current_user):
     depanneurs included). km_par_vehicule uses km_actuel (the running
     odometer total, source of truth on Vehicule); km_par_utilisateur sums
     VehiculeKmEntry.km_parcourus (the per-week driven delta) grouped by
-    driver, since km_actuel alone can't say who did the driving."""
+    driver, since km_actuel alone can't say who did the driving.
+    total_reparations_cout / reparations_par_vehicule sum
+    VehiculeReparation.montant, all-time (no date range — same "since ever"
+    scope as the km stats above)."""
     total_km_flotte = db.session.query(func.coalesce(func.sum(Vehicule.km_actuel), 0.0)).scalar()
     vehicule_count = Vehicule.query.count()
 
@@ -4069,11 +4102,27 @@ def vehicules_stats(current_user):
     )
     km_par_utilisateur = [{'user_id': r.id, 'username': r.username, 'total_km': r.total_km} for r in rows]
 
+    total_reparations_cout = db.session.query(func.coalesce(func.sum(VehiculeReparation.montant), 0.0)).scalar()
+    reparation_rows = (
+        db.session.query(Vehicule.id, Vehicule.marque, Vehicule.modele, Vehicule.numero_plaque,
+                         func.sum(VehiculeReparation.montant).label('total_montant'))
+        .join(VehiculeReparation, VehiculeReparation.vehicule_id == Vehicule.id)
+        .group_by(Vehicule.id, Vehicule.marque, Vehicule.modele, Vehicule.numero_plaque)
+        .order_by(func.sum(VehiculeReparation.montant).desc())
+        .all()
+    )
+    reparations_par_vehicule = [
+        {'id': r.id, 'label': f"{r.marque} {r.modele}", 'numero_plaque': r.numero_plaque, 'total_montant': r.total_montant}
+        for r in reparation_rows
+    ]
+
     return jsonify({
         'total_km_flotte': total_km_flotte,
         'vehicule_count': vehicule_count,
         'km_par_vehicule': km_par_vehicule,
         'km_par_utilisateur': km_par_utilisateur,
+        'total_reparations_cout': total_reparations_cout,
+        'reparations_par_vehicule': reparations_par_vehicule,
     })
 
 
@@ -4182,6 +4231,68 @@ def add_vehicule_km_entry(current_user, vehicule_id):
               f"km entry on vehicule #{vehicule.id}: kilométrage mis à jour à {km_actuel_nouveau} "
               f"(+{km_parcourus} km, semaine {semaine_iso})")
     return jsonify(entry.to_dict()), 201
+
+
+@app.route('/api/vehicules/<int:vehicule_id>/reparations', methods=['GET', 'POST'])
+@token_required
+def manage_vehicule_reparations(current_user, vehicule_id):
+    """GET: read-only, open to any authenticated role — same convention as
+    the rest of the vehicule detail (km_entries, stats). POST: admin or
+    'vehicule' role only, same gate as every other fleet-management write
+    (manage_vehicules/vehicule_detail)."""
+    vehicule = db.session.get(Vehicule, vehicule_id)
+    if not vehicule:
+        return jsonify({'error': 'Véhicule introuvable'}), 404
+
+    if request.method == 'GET':
+        reparations = (VehiculeReparation.query.filter_by(vehicule_id=vehicule_id)
+                       .order_by(VehiculeReparation.date_reparation.desc()).all())
+        return jsonify([r.to_dict() for r in reparations])
+
+    # POST
+    if current_user.role not in ('admin', 'vehicule'):
+        return jsonify({'error': 'Admin access required'}), 403
+
+    data = request.json or {}
+    nom = (data.get('nom') or '').strip()
+    if not nom:
+        return jsonify({'error': 'Le nom de la réparation est requis'}), 400
+    try:
+        montant = float(data.get('montant'))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Le montant de la facture est requis et doit être un nombre'}), 400
+    if montant < 0:
+        return jsonify({'error': 'Le montant ne peut pas être négatif'}), 400
+
+    reparation = VehiculeReparation(
+        vehicule_id=vehicule_id,
+        nom=nom,
+        montant=montant,
+        created_by_id=current_user.id,
+    )
+    db.session.add(reparation)
+    db.session.commit()
+    audit_log('vehicules', current_user,
+              f"added reparation on vehicule #{vehicule.id}: {nom} ({montant:g} CHF)")
+    return jsonify(reparation.to_dict()), 201
+
+
+@app.route('/api/vehicules/reparations/<int:reparation_id>', methods=['DELETE'])
+@token_required
+def delete_vehicule_reparation(current_user, reparation_id):
+    """Admin or 'vehicule' role only — same gate as creating one. Deleting
+    (typo/wrong amount, no edit endpoint) is the correction path."""
+    if current_user.role not in ('admin', 'vehicule'):
+        return jsonify({'error': 'Admin access required'}), 403
+    reparation = db.session.get(VehiculeReparation, reparation_id)
+    if not reparation:
+        return jsonify({'error': 'Réparation introuvable'}), 404
+    audit_log('vehicules', current_user,
+              f"deleted reparation #{reparation.id} on vehicule #{reparation.vehicule_id}: "
+              f"{reparation.nom} ({reparation.montant:g} CHF)")
+    db.session.delete(reparation)
+    db.session.commit()
+    return jsonify({'message': 'ok'})
 
 
 def _resolve_weekly_km_prompt(user_id):
