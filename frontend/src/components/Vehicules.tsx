@@ -67,7 +67,7 @@ interface Props {
 const emptyForm = { marque: '', modele: '', numero_plaque: '', km_actuel: '' };
 
 export const Vehicules: React.FC<Props> = ({ currentUser, forcedVehiculeId, onKmEntrySubmitted }) => {
-    const isAdmin = currentUser.role === 'admin';
+    const canManage = currentUser.role === 'admin' || currentUser.role === 'vehicule';
     const { confirm, confirmDialogProps } = useConfirm();
 
     const [vehicules, setVehicules] = useState<Vehicule[]>([]);
@@ -256,7 +256,7 @@ export const Vehicules: React.FC<Props> = ({ currentUser, forcedVehiculeId, onKm
                                     </div>
                                     <div className="text-xs text-slate-400 uppercase tracking-widest">Kilométrage actuel</div>
                                 </div>
-                                {isAdmin && (
+                                {canManage && (
                                     <div className="flex items-center gap-1 shrink-0">
                                         <button onClick={() => openEdit(detail)} className="p-2 rounded-lg bg-slate-50 text-slate-500 hover:bg-slate-100 transition-all" title="Modifier">
                                             <Pencil size={16} />
@@ -338,7 +338,7 @@ export const Vehicules: React.FC<Props> = ({ currentUser, forcedVehiculeId, onKm
                     </h2>
                     <p className="text-slate-500 mt-1">Parc de véhicules de l'entreprise et relevés kilométriques.</p>
                 </div>
-                {isAdmin && (
+                {canManage && (
                     <button
                         onClick={openCreate}
                         className="flex items-center gap-2 px-4 py-2 rounded-lg bg-ohm-primary text-ohm-bg hover:bg-yellow-300 transition-all font-bold text-sm"
@@ -391,7 +391,7 @@ export const Vehicules: React.FC<Props> = ({ currentUser, forcedVehiculeId, onKm
                         <div className="text-right shrink-0">
                             <div className="font-black text-slate-900">{v.km_actuel.toLocaleString('fr-CH')} km</div>
                         </div>
-                        {isAdmin && (
+                        {canManage && (
                             <div className="flex items-center gap-1 shrink-0">
                                 <button onClick={() => openEdit(v)} className="p-2 rounded-lg bg-slate-50 text-slate-500 hover:bg-slate-100 transition-all" title="Modifier">
                                     <Pencil size={16} />

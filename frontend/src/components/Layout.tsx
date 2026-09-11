@@ -30,8 +30,10 @@ const NAV_ITEMS = [
     { path: 'agenda', view: 'agenda' as View, icon: CalendarDays, label: 'Agenda' },
     { path: 'mes-conges', view: 'mes-conges' as View, icon: CalendarCheck, label: 'Mes congés' },
     { path: 'pot-a-chantier', view: 'pot-a-chantier' as View, icon: Inbox, label: 'Pot à chantier' },
-    // Visible à tous (consultation) — CRUD limité aux admins à l'intérieur
-    // de l'écran lui-même, même convention que "Pot à chantier" ci-dessus.
+    // Visible à tous (consultation) — CRUD limité aux admins et au rôle
+    // 'vehicule' (garagiste externe, verrouillé à cet écran uniquement —
+    // voir visibleNavItems plus bas) à l'intérieur de l'écran lui-même,
+    // même convention que "Pot à chantier" ci-dessus.
     { path: 'vehicules', view: 'vehicules' as View, icon: Car, label: 'Véhicules' },
 ];
 
@@ -112,7 +114,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, activeView, onLo
     // compte pour un role='user' qui ne verra jamais le badge.
     const [potCount, setPotCount] = useState(0);
     useEffect(() => {
-        if (user?.role === 'user') return;
+        if (user?.role === 'user' || user?.role === 'vehicule') return;
         const fetchPotCount = async () => {
             const res = await api.get('/api/chantiers?has_assignments=false');
             if (res.ok) setPotCount((await res.json()).length);
@@ -189,7 +191,14 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, activeView, onLo
     // chantiers pas encore assignés). Filtré ici plutôt que de le sortir de
     // NAV_ITEMS vers ADMIN_NAV_ITEMS : ce dernier est admin-only, ça
     // exclurait aussi les dépanneurs qui doivent le garder.
-    const visibleNavItems = NAV_ITEMS.filter(item => item.path !== 'pot-a-chantier' || user?.role !== 'user');
+    //
+    // 'vehicule' (garagiste externe) : verrouillé à Véhicules uniquement —
+    // le backend bloque déjà tout le reste (voir token_required/
+    // _VEHICULE_ROLE_ALLOWED_ENDPOINTS dans app.py), ceci n'affiche juste
+    // pas de lien mort vers une page qui 403 de toute façon.
+    const visibleNavItems = user?.role === 'vehicule'
+        ? NAV_ITEMS.filter(item => item.path === 'vehicules')
+        : NAV_ITEMS.filter(item => item.path !== 'pot-a-chantier' || user?.role !== 'user');
 
     return (
         <div className="flex h-[100dvh] bg-background text-text overflow-hidden relative selection:bg-primary/30">
