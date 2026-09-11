@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Chantier, Entry, User } from '../types';
-import { Plus, Minus, X, ArrowLeft, Clock, User as UserIcon, Info, Pencil, Download, Camera, FolderOpen, Lock, Unlock, Loader2, AlertTriangle, Wallet, CalendarClock, FileText, Eye, Gauge } from 'lucide-react';
+import { Plus, Minus, X, ArrowLeft, Clock, User as UserIcon, Info, Pencil, Download, Camera, FolderOpen, Lock, Unlock, Loader2, AlertTriangle, Wallet, CalendarClock, FileText, Eye, Gauge, Wrench } from 'lucide-react';
 import { StatusBadge } from './StatusBadge';
 import { chantierPhase } from '../chantierPhase';
 import { deadlineSeverity, deadlineDaysLabel, DEADLINE_TEXT_CLASSES } from '../deadlineSeverity';
@@ -24,12 +24,26 @@ interface Props {
     onBack: () => void;
 }
 
-type Tab = 'SUIVI' | 'INFO' | 'FINANCES';
+type Tab = 'SUIVI' | 'INFO' | 'MATERIEL' | 'FINANCES';
+
+// admin et depanneur seulement — même granularité que "peut créer un
+// chantier" ailleurs dans l'app (Dashboard.tsx), pas les 'user' simples.
+const canEditMateriel = (role: string) => role === 'admin' || role === 'depanneur';
 
 export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, currentUser, onBack }) => {
     const { confirm, confirmDialogProps } = useConfirm();
     const [chantier, setChantier] = useState(initialChantier);
     const [activeTab, setActiveTab] = useState<Tab>('SUIVI');
+    // Matériel : simple champ texte libre, modifiable à tout moment par
+    // admin/depanneur (PUT /api/chantiers/<id>/materiel — endpoint dédié,
+    // séparé du PUT principal qui reste admin-only). Un seul mount par
+    // chantier (voir onBack dans App.tsx : ChantierDetail est démonté, pas
+    // juste re-propsé, en changeant de chantier), donc l'initialiser une
+    // fois ici est sûr — pas besoin de le re-synchroniser sur un changement
+    // de prop qui n'arrive jamais en pratique.
+    const [materielDraft, setMaterielDraft] = useState(initialChantier.materiel ?? '');
+    const [materielSaving, setMaterielSaving] = useState(false);
+    const [materielError, setMaterielError] = useState('');
     const [entries, setEntries] = useState<Entry[]>([]);
     // Popup "lire la description" — juste la ligne d'entry en cours de lecture.
     const [readingEntry, setReadingEntry] = useState<Entry | null>(null);
@@ -253,9 +267,26 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
 
     const totalHeures = entries.reduce((acc, curr) => acc + curr.heures, 0);
 
+    const handleSaveMateriel = async () => {
+        setMaterielSaving(true);
+        setMaterielError('');
+        try {
+            const res = await api.put(`/api/chantiers/${chantier.id}/materiel`, { materiel: materielDraft });
+            if (res.ok) {
+                setChantier(await res.json());
+            } else {
+                const data = await res.json().catch(() => ({}));
+                setMaterielError(data.error || 'Erreur lors de l\'enregistrement');
+            }
+        } finally {
+            setMaterielSaving(false);
+        }
+    };
+
     const visibleTabs: { id: Tab; icon: React.ReactNode; label: string }[] = [
         { id: 'SUIVI', icon: <Clock size={16} />, label: 'Suivi' },
         { id: 'INFO', icon: <Info size={16} />, label: 'Infos' },
+        ...(canEditMateriel(currentUser.role) ? [{ id: 'MATERIEL' as const, icon: <Wrench size={16} />, label: 'Matériel' }] : []),
         ...(currentUser.role === 'admin' ? [{ id: 'FINANCES' as const, icon: <Wallet size={16} />, label: 'Finances' }] : []),
     ];
 
@@ -529,6 +560,33 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
                                 </div>
                             </div>
                         </div>
+                    </div>
+                )}
+
+                {/* MATERIEL TAB — admin + depanneur, mirrors the backend's own check
+                    on PUT /api/chantiers/<id>/materiel. Simple free-text field, saved
+                    explicitly (not auto-save on blur) so a fat-fingered tab-away never
+                    silently commits a half-typed edit. */}
+                {activeTab === 'MATERIEL' && canEditMateriel(currentUser.role) && (
+                    <div className="card space-y-4 animate-slide-up">
+                        <div>
+                            <label className="text-xs font-bold text-slate-400 uppercase">Matériel</label>
+                            <p className="text-xs text-slate-400 mt-1">Liste libre du matériel nécessaire ou utilisé sur ce chantier — modifiable à tout moment.</p>
+                        </div>
+                        <textarea
+                            className="input-field w-full min-h-[240px] resize-y"
+                            value={materielDraft}
+                            onChange={e => setMaterielDraft(e.target.value)}
+                            placeholder="Ex: 20m câble 3G2.5, 2x disjoncteurs 16A, ..."
+                        />
+                        {materielError && <p className="text-red-500 text-sm font-bold">{materielError}</p>}
+                        <button
+                            onClick={handleSaveMateriel}
+                            disabled={materielSaving || materielDraft === (chantier.materiel ?? '')}
+                            className="px-5 py-2 rounded-lg bg-ohm-primary text-ohm-bg hover:bg-yellow-300 transition-all text-sm font-bold disabled:opacity-50"
+                        >
+                            {materielSaving ? 'Enregistrement…' : 'Enregistrer'}
+                        </button>
                     </div>
                 )}
 

@@ -532,6 +532,12 @@ class Chantier(db.Model):
     # comparer "où on en est vraiment" vs "où on en est côté budget".
     avancement_declare = db.Column(db.Float, nullable=True)
 
+    # Liste libre du matériel nécessaire/utilisé — distinct de remarque
+    # (admin-only, via la modale Modifier). Éditable par admin ET depanneur,
+    # à tout moment, via son propre endpoint (voir manage_chantier_materiel)
+    # plutôt que le PUT /api/chantiers/<id> principal, qui reste admin-only.
+    materiel = db.Column(db.Text, nullable=True)
+
     # Relationships
     members = db.relationship('User', secondary=chantier_members, lazy='subquery',
         backref=db.backref('chantiers', lazy=True))
@@ -557,6 +563,7 @@ class Chantier(db.Model):
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'deadline': self.deadline,
             'avancement_declare': self.avancement_declare,
+            'materiel': self.materiel,
             'hours_total': round(self._get_hours_total(), 2),
             'members': [u.id for u in self.members],
             'has_assignments': self._get_has_assignments(),
@@ -1534,6 +1541,7 @@ def init_db():
                     'created_at': "DATETIME",
                     'deadline': "VARCHAR(20)",
                     'avancement_declare': "FLOAT",
+                    'materiel': "TEXT",
                 }
                 for col_name, col_type in new_cols.items():
                     if col_name not in cols:
@@ -2525,6 +2533,28 @@ def chantier_detail(current_user, chantier_id):
 
         db.session.commit()
         return jsonify(chantier.to_dict())
+
+
+@app.route('/api/chantiers/<int:chantier_id>/materiel', methods=['PUT'])
+@token_required
+def manage_chantier_materiel(current_user, chantier_id):
+    """Dédié, séparé du PUT /api/chantiers/<id> principal (admin-only) : un
+    depanneur doit pouvoir modifier ce champ à tout moment sans avoir accès
+    au reste de l'édition (nom, dates, statut, référent, etc.). Pas de
+    validation de contenu — texte libre, vide autorisé (vide = "rien de
+    noté", pas une erreur)."""
+    if current_user.role not in ('admin', 'depanneur'):
+        return jsonify({'error': 'Admin ou dépanneur requis'}), 403
+    chantier = db.session.get(Chantier, chantier_id)
+    if not chantier:
+        return jsonify({'error': 'Chantier not found'}), 404
+
+    data = request.json or {}
+    chantier.materiel = (data.get('materiel') or '').strip() or None
+    db.session.commit()
+    audit_log('chantiers', current_user, f"updated materiel on chantier #{chantier.id}")
+    return jsonify(chantier.to_dict())
+
 
 def _process_photo(file_storage):
     """Compress an uploaded photo for storage: correct EXIF rotation, cap the
