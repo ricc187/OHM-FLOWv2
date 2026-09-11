@@ -24,7 +24,7 @@ export const AdminUsers: React.FC<Props> = ({ currentUser }) => {
     const [formData, setFormData] = useState({
         username: '',
         password: '',
-        role: 'user' as 'admin' | 'user' | 'depanneur',
+        role: 'user' as 'admin' | 'user' | 'depanneur' | 'vehicule',
         vacationBalance: '0'
     });
     const [formError, setFormError] = useState('');
@@ -229,9 +229,11 @@ export const AdminUsers: React.FC<Props> = ({ currentUser }) => {
                                                 ? 'bg-ohm-primary/20 text-ohm-primary border border-ohm-primary/30'
                                                 : user.role === 'depanneur'
                                                     ? 'bg-status-active/20 text-status-active border border-status-active/30'
-                                                    : 'bg-slate-100 text-slate-400'
+                                                    : user.role === 'vehicule'
+                                                        ? 'bg-amber-500/20 text-amber-600 border border-amber-500/30'
+                                                        : 'bg-slate-100 text-slate-400'
                                             }`}>
-                                            {user.role === 'admin' ? 'Admin' : user.role === 'depanneur' ? 'Dépanneur' : 'Employé'}
+                                            {user.role === 'admin' ? 'Admin' : user.role === 'depanneur' ? 'Dépanneur' : user.role === 'vehicule' ? 'Garagiste' : 'Employé'}
                                         </span>
                                     </td>
                                     <td className="px-6 py-4">
@@ -337,26 +339,29 @@ export const AdminUsers: React.FC<Props> = ({ currentUser }) => {
                                 <label className="block text-[10px] font-black uppercase text-slate-500 mb-2 tracking-widest">Rôle</label>
                                 <AwesomeSelect
                                     value={formData.role}
-                                    onChange={(val) => setFormData({ ...formData, role: val as 'user' | 'admin' | 'depanneur' })}
+                                    onChange={(val) => setFormData({ ...formData, role: val as 'user' | 'admin' | 'depanneur' | 'vehicule' })}
                                     options={[
                                         { value: 'user', label: 'Utilisateur' },
                                         { value: 'depanneur', label: 'Dépanneur' },
+                                        { value: 'vehicule', label: 'Garagiste (véhicules uniquement)' },
                                         { value: 'admin', label: 'Admin (2FA obligatoire)' }
                                     ]}
                                 />
                             </div>
-                            <div>
-                                <label className="block text-[10px] font-black uppercase text-slate-500 mb-2 tracking-widest">Solde de vacances (jours)</label>
-                                <input
-                                    type="number"
-                                    min="0"
-                                    step="0.5"
-                                    required
-                                    value={formData.vacationBalance}
-                                    onChange={(e) => setFormData({ ...formData, vacationBalance: e.target.value })}
-                                    className="w-full bg-white border border-slate-300 rounded-xl px-4 py-3 text-slate-900 focus:ring-2 focus:ring-ohm-primary/50 transition-all outline-none"
-                                />
-                            </div>
+                            {formData.role !== 'vehicule' && (
+                                <div>
+                                    <label className="block text-[10px] font-black uppercase text-slate-500 mb-2 tracking-widest">Solde de vacances (jours)</label>
+                                    <input
+                                        type="number"
+                                        min="0"
+                                        step="0.5"
+                                        required
+                                        value={formData.vacationBalance}
+                                        onChange={(e) => setFormData({ ...formData, vacationBalance: e.target.value })}
+                                        className="w-full bg-white border border-slate-300 rounded-xl px-4 py-3 text-slate-900 focus:ring-2 focus:ring-ohm-primary/50 transition-all outline-none"
+                                    />
+                                </div>
+                            )}
                             {formError && <p className="text-red-500 text-sm font-bold">{formError}</p>}
                             <button
                                 type="submit"

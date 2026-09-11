@@ -242,6 +242,87 @@ class VehiculesApiTestCase(unittest.TestCase):
         res = worker.post('/api/vehicules/999999/km-entries', json={'km_actuel': 10})
         self.assertEqual(res.status_code, 404)
 
+    # --- 'vehicule' role: external garagiste, fleet-management CRUD, ------
+    # locked out of everything else (see VALID_ROLES / token_required) -----
+
+    def _vehicule_role_client(self):
+        username = self._unique_username('garagiste')
+        self._create_user(username, 'vehicule')
+        self._login(username)
+        return self.client
+
+    def test_vehicule_role_can_create_update_delete(self):
+        garagiste = self._vehicule_role_client()
+        res = garagiste.post('/api/vehicules', json={
+            'marque': 'Renault', 'modele': 'Kangoo', 'numero_plaque': 'VS-7777', 'km_actuel': 500,
+        })
+        self.assertEqual(res.status_code, 201, res.get_json())
+        vehicule_id = res.get_json()['id']
+
+        res = garagiste.put(f'/api/vehicules/{vehicule_id}', json={'marque': 'Fiat'})
+        self.assertEqual(res.status_code, 200, res.get_json())
+        self.assertEqual(res.get_json()['marque'], 'Fiat')
+
+        res = garagiste.delete(f'/api/vehicules/{vehicule_id}')
+        self.assertEqual(res.status_code, 200, res.get_json())
+
+    def test_vehicule_role_can_submit_km_entry_and_read_stats(self):
+        garagiste = self._vehicule_role_client()
+        res = garagiste.post('/api/vehicules', json={
+            'marque': 'Renault', 'modele': 'Kangoo', 'numero_plaque': 'VS-8888', 'km_actuel': 100,
+        })
+        vehicule_id = res.get_json()['id']
+
+        res = garagiste.post(f'/api/vehicules/{vehicule_id}/km-entries', json={'km_actuel': 150})
+        self.assertEqual(res.status_code, 201, res.get_json())
+
+        res = garagiste.get('/api/vehicules/stats')
+        self.assertEqual(res.status_code, 200, res.get_json())
+
+    def test_vehicule_role_locked_out_of_everything_else(self):
+        """The whole point of this role: an external garagiste must not be
+        able to reach chantiers/entries/leaves/users/financier data, even
+        though most of those routes are otherwise open to any authenticated
+        role (see 'Everyone sees all chantiers now' in manage_chantiers)."""
+        garagiste = self._vehicule_role_client()
+        for path in ('/api/chantiers', '/api/leaves', '/api/users', '/api/entries/pending'):
+            res = garagiste.get(path)
+            self.assertEqual(res.status_code, 403, f'{path}: {res.get_json()}')
+
+    def test_vehicule_role_can_still_reach_own_profile_and_change_password(self):
+        """Onboarding-safe endpoints stay reachable — a garagiste account
+        must still be able to see who it is and change a temp password."""
+        garagiste = self._vehicule_role_client()
+        res = garagiste.get('/api/me')
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.get_json()['role'], 'vehicule')
+
+    def test_vehicule_role_excluded_from_headcount(self):
+        """An external garagiste is not a field employee — must not appear
+        in the HR headcount breakdown (see get_headcount_stats, scoped to
+        ['user', 'depanneur'])."""
+        self._vehicule_role_client()  # just needs to exist in the DB
+        admin = self._admin_client()
+        res = admin.get('/api/stats/headcount')
+        self.assertEqual(res.status_code, 200, res.get_json())
+        roles_counted = {row['role'] for row in res.get_json()['by_role']}
+        self.assertNotIn('vehicule', roles_counted)
+
+    def test_vehicule_role_excluded_from_absenteeism_denominator(self):
+        """Same fix, the other endpoint: creating a vehicule-role account
+        must not shift the absenteeism headcount denominator (see
+        get_absenteeism_stats, same ['user', 'depanneur'] scope).
+
+        Only creates the account (_create_user), doesn't log in as it —
+        logging in would overwrite self.client's cookie (shared with
+        `admin` below, same test_client instance) out from under the
+        admin session used for both calls."""
+        admin = self._admin_client()
+        before = admin.get('/api/stats/absenteeism?start=2026-01-01&end=2026-01-31').get_json()['headcount']
+        self._create_user(self._unique_username('garagiste'), 'vehicule')
+        after = admin.get('/api/stats/absenteeism?start=2026-01-01&end=2026-01-31').get_json()['headcount']
+        self.assertEqual(after, before, 'a vehicule-role account inflated the absenteeism headcount denominator')
+
 
 if __name__ == '__main__':
     unittest.main()

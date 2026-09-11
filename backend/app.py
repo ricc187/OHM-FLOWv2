@@ -139,6 +139,16 @@ def clear_auth_cookie(response):
 # endpoint directly, bypassing the "change it first" requirement entirely.
 _ONBOARDING_SAFE_ENDPOINTS = {'get_me', 'change_password'}
 
+# 'vehicule' (external garagiste, manages the fleet only — see VALID_ROLES)
+# is locked out of every other endpoint: onboarding still applies to it
+# (own profile / password change), plus fleet management itself. Every
+# other route in the app — chantiers, entries, leaves, users, financier,
+# stats, etc. — 403s for this role, checked in token_required below,
+# before any per-route admin/role check even runs.
+_VEHICULE_ROLE_ALLOWED_ENDPOINTS = _ONBOARDING_SAFE_ENDPOINTS | {
+    'manage_vehicules', 'vehicules_stats', 'vehicule_detail', 'add_vehicule_km_entry',
+}
+
 def _resolve_session_cookie(token):
     """Decodes and validates a session-cookie token: not an MFA pending
     ticket (see issue_mfa_pending_token — a stolen in-flight login-step
@@ -191,6 +201,9 @@ def token_required(f):
         if not current_user:
             return jsonify({'error': 'Token is invalid or expired'}), 401
 
+        if current_user.role == 'vehicule' and f.__name__ not in _VEHICULE_ROLE_ALLOWED_ENDPOINTS:
+            return jsonify({'error': 'Accès réservé à la gestion des véhicules'}), 403
+
         if f.__name__ not in _ONBOARDING_SAFE_ENDPOINTS:
             # Password first, then 2FA — checked in that order so an admin
             # with both pending can't skip straight to MFA enrollment.
@@ -234,6 +247,14 @@ def token_required(f):
 # admin's TOTP code) still happens pre-session, unchanged — only
 # enrollment moved.
 MFA_REQUIRED_ROLES = ('admin',)
+
+# Single source of truth for role validation (POST/PUT /api/users) — 'vehicule'
+# is the external garagiste role (see _VEHICULE_ROLE_ALLOWED_ENDPOINTS below):
+# locked out of everything except the vehicule-management routes, not an
+# "employee" for headcount/absenteeism purposes (see get_headcount_stats /
+# get_absenteeism_stats, which scope to ['user', 'depanneur'] explicitly
+# rather than != 'admin', precisely so a vehicule account never counts there).
+VALID_ROLES = ['admin', 'user', 'depanneur', 'vehicule']
 
 # Account lockout after repeated bad password/2FA-code attempts (mirrors a
 # sliding-window count over LoginAttempt, not a live counter — see
@@ -2079,7 +2100,7 @@ def manage_users(current_user):
 
         if not username:
             return jsonify({'error': 'Username is required'}), 400
-        if role not in ['admin', 'user', 'depanneur']:
+        if role not in VALID_ROLES:
             return jsonify({'error': 'Invalid role'}), 400
         if User.query.filter_by(username=username).first():
              return jsonify({'error': 'Username exists'}), 400
@@ -2146,7 +2167,7 @@ def user_operations(current_user, user_id):
             audit_log('auth', current_user, f"reset password for {user.username} (id={user.id})")
 
         if new_role:
-            if new_role not in ['admin', 'user', 'depanneur']:
+            if new_role not in VALID_ROLES:
                 return jsonify({'error': 'Invalid role'}), 400
             user.role = new_role
 
@@ -3982,8 +4003,8 @@ def manage_vehicules(current_user):
         vehicules = Vehicule.query.order_by(Vehicule.marque, Vehicule.modele).all()
         return jsonify([v.to_dict() for v in vehicules])
 
-    # POST
-    if current_user.role != 'admin':
+    # POST — admin or the fleet-management garagiste role, same as PUT/DELETE below
+    if current_user.role not in ('admin', 'vehicule'):
         return jsonify({'error': 'Admin access required'}), 403
 
     data = request.json or {}
@@ -4070,8 +4091,8 @@ def vehicule_detail(current_user, vehicule_id):
         data['km_entries'] = [e.to_dict() for e in entries]
         return jsonify(data)
 
-    # PUT/DELETE — admin only
-    if current_user.role != 'admin':
+    # PUT/DELETE — admin or the fleet-management garagiste role
+    if current_user.role not in ('admin', 'vehicule'):
         return jsonify({'error': 'Admin access required'}), 403
 
     if request.method == 'DELETE':
@@ -5521,7 +5542,10 @@ def get_absenteeism_stats(current_user):
         return jsonify({'error': 'end must be >= start'}), 400
 
     working_days_period = sum(1 for _ in _iter_business_days(start, end))
-    non_admin_users = User.query.filter(User.role != 'admin').all()
+    # Field employees only — role != 'admin' used to also sweep in
+    # 'vehicule' (external garagiste, not an employee) once that role
+    # existed; explicit list instead.
+    non_admin_users = User.query.filter(User.role.in_(['user', 'depanneur'])).all()
     headcount = len(non_admin_users)
 
     if headcount == 0:
@@ -5587,7 +5611,8 @@ def get_headcount_stats(current_user):
 
     from collections import defaultdict
 
-    non_admin = User.query.filter(User.role != 'admin').all()
+    # Field employees only — see get_absenteeism_stats' identical fix.
+    non_admin = User.query.filter(User.role.in_(['user', 'depanneur'])).all()
     by_role = defaultdict(int)
     for u in non_admin:
         by_role[u.role] += 1

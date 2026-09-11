@@ -256,6 +256,7 @@ function App() {
         // force Véhicules quoi qu'il arrive) — ce guard n'est là que pour ne
         // pas laisser l'URL dériver vers autre chose pendant ce temps.
         if (kmPending && path !== 'vehicules') return;
+        if (user?.role === 'vehicule' && path !== 'vehicules') return;
         setSelectedChantier(null);
         setSelectedChantierId(null);
         let next: View = 'dashboard';
@@ -334,8 +335,13 @@ function App() {
     // Volontaire : c'est un rappel hebdomadaire, pas une frontière de
     // sécurité/permissions — si ça devait un jour le devenir, il faudrait
     // ajouter un check équivalent dans token_required, pas seulement ici.
-    const effectiveView: View = kmPending ? 'vehicules' : view;
-    const effectiveChantier = kmPending ? null : selectedChantier;
+    // 'vehicule' (garagiste externe) locked to Véhicules, same forcing
+    // pattern as kmPending above — the backend already 403s everything
+    // else for this role (token_required), this just avoids ever trying
+    // to render a page that would immediately fail to load.
+    const lockedToVehicules = kmPending || user.role === 'vehicule';
+    const effectiveView: View = lockedToVehicules ? 'vehicules' : view;
+    const effectiveChantier = lockedToVehicules ? null : selectedChantier;
 
     return (
         <Layout

@@ -1,7 +1,7 @@
 export interface User {
     id: number;
     username: string;
-    role: 'admin' | 'user' | 'depanneur';
+    role: 'admin' | 'user' | 'depanneur' | 'vehicule';
     vacation_balance: number;
     must_change_password: boolean;
     mfa_enabled: boolean;
