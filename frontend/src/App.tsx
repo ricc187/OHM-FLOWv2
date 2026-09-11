@@ -129,11 +129,16 @@ function App() {
         return () => window.removeEventListener(ONBOARDING_REQUIRED_EVENT, onOnboardingRequired);
     }, []);
 
-    // Auto-logout after 20 minutes with no interaction anywhere in the app
-    // (mouse/keyboard/touch/scroll) — an unattended unlocked device stops
-    // being a live session on its own, without waiting for the cookie's
-    // full 24h lifetime.
-    useInactivityLogout(handleLogout, 20, !!user);
+    // Auto-logout after no interaction anywhere in the app (mouse/keyboard/
+    // touch/scroll) — matches the session cookie's own per-role lifetime
+    // (see COOKIE_MAX_AGE_ADMIN/COOKIE_MAX_AGE_DEFAULT in app.py, kept in
+    // sync manually): 24h for admin, 5 days for user/depanneur/vehicule.
+    // Was a flat 20 minutes; bumped at the user's explicit request (an
+    // admin got logged out mid-away-from-keyboard and found 20min too
+    // aggressive) — the cookie's own expiry is now effectively the only
+    // backstop, this no longer catches "stepped away for a few minutes".
+    const inactivityMinutes = user?.role === 'admin' ? 24 * 60 : 5 * 24 * 60;
+    useInactivityLogout(handleLogout, inactivityMinutes, !!user);
 
     // Flush any offline-queued entries: on load (in case we started this
     // session already back online with leftovers), whenever the browser
