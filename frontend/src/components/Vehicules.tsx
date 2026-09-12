@@ -1,11 +1,12 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { Vehicule, VehiculeDetail, VehiculeReparation, VehiculeStats, User } from '../types';
-import { Car, Plus, Pencil, Trash2, ArrowLeft, Gauge, Wrench } from 'lucide-react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Vehicule, VehiculeDetail, VehiculeReparation, VehiculeCoutCategorie, VehiculeStats, User } from '../types';
+import { Car, Plus, Pencil, Trash2, ArrowLeft, Gauge, Wrench, Fuel, ChevronLeft, ChevronRight, Wallet } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 import { api } from '../api';
 import { useConfirm } from '../hooks/useConfirm';
 import { ConfirmDialog } from './ConfirmDialog';
 import { useMountTransition } from '../hooks/useMountTransition';
+import { SlidingTabs } from './ui/SlidingTabs';
 
 // Une seule teinte de marque (magnitude, pas identité — voir dataviz skill) :
 // même bleu que .card/.input-field ailleurs dans l'app, pas une palette
@@ -66,7 +67,91 @@ interface Props {
     onKmEntrySubmitted?: () => void;
 }
 
-const emptyForm = { marque: '', modele: '', numero_plaque: '', km_actuel: '' };
+const emptyForm = { marque: '', modele: '', numero_plaque: '', km_actuel: '', leasing_mensuel: '' };
+
+const CATEGORIE_LABELS: Record<VehiculeCoutCategorie, string> = { entretien: 'Entretien', energie: 'Énergie' };
+const CATEGORIE_ICONS: Record<VehiculeCoutCategorie, React.ElementType> = { entretien: Wrench, energie: Fuel };
+
+const todayStr = () => new Date().toISOString().split('T')[0];
+const emptyReparationForm = { nom: '', montant: '', categorie: 'entretien' as VehiculeCoutCategorie, date: todayStr() };
+
+// --- Coût journalier/hebdomadaire d'un véhicule ---------------------------
+// Formule donnée : (leasing + entretien(pneus, mécanique) + énergie(gazole,
+// essence ou électricité)) / 365 ou / 52. Leasing est saisi mensuel (voir
+// Vehicule.leasing_mensuel) donc annualisé ici (*12) ; entretien/énergie
+// sont les totaux de VehiculeReparation.montant pour l'année choisie
+// (`year`, pas all-time — un coût par jour n'a de sens que rapporté à une
+// période, pas au cumul depuis l'achat du véhicule).
+const VehiculeCostSummary: React.FC<{ vehicule: Vehicule; reparations: VehiculeReparation[] }> = ({ vehicule, reparations }) => {
+    const [year, setYear] = useState(new Date().getFullYear());
+
+    const totals = useMemo(() => {
+        const inYear = reparations.filter(r => r.date_reparation && r.date_reparation.slice(0, 4) === String(year));
+        const entretien = inYear.filter(r => r.categorie === 'entretien').reduce((s, r) => s + r.montant, 0);
+        const energie = inYear.filter(r => r.categorie === 'energie').reduce((s, r) => s + r.montant, 0);
+        return { entretien, energie };
+    }, [reparations, year]);
+
+    const leasingAnnuel = vehicule.leasing_mensuel * 12;
+    const totalAnnuel = leasingAnnuel + totals.entretien + totals.energie;
+    const coutJour = totalAnnuel / 365;
+    const coutSemaine = totalAnnuel / 52;
+    const fmt = (v: number) => `${v.toLocaleString('fr-CH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} CHF`;
+
+    return (
+        <div className="card p-4 sm:p-6 space-y-4">
+            <div className="flex items-center justify-between flex-wrap gap-3">
+                <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest flex items-center gap-1.5">
+                    <Wallet size={14} className="text-ohm-primary" /> Coût du véhicule
+                </h3>
+                <div className="flex items-center gap-1 bg-slate-50 rounded-lg p-1">
+                    <button onClick={() => setYear(y => y - 1)} className="w-7 h-7 flex items-center justify-center rounded-md text-slate-500 hover:text-slate-900 hover:bg-white transition-all" aria-label="Année précédente">
+                        <ChevronLeft size={14} />
+                    </button>
+                    <span className="px-1 text-xs font-bold text-slate-900 min-w-[3rem] text-center">{year}</span>
+                    <button onClick={() => setYear(y => y + 1)} className="w-7 h-7 flex items-center justify-center rounded-md text-slate-500 hover:text-slate-900 hover:bg-white transition-all" aria-label="Année suivante">
+                        <ChevronRight size={14} />
+                    </button>
+                </div>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-sm">
+                <div>
+                    <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wide">Leasing (année)</div>
+                    <div className="font-bold text-slate-900">{fmt(leasingAnnuel)}</div>
+                </div>
+                <div>
+                    <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wide">Entretien ({year})</div>
+                    <div className="font-bold text-slate-900">{fmt(totals.entretien)}</div>
+                </div>
+                <div>
+                    <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wide">Énergie ({year})</div>
+                    <div className="font-bold text-slate-900">{fmt(totals.energie)}</div>
+                </div>
+            </div>
+
+            <div className="pt-3 border-t border-slate-100 grid grid-cols-3 gap-3">
+                <div>
+                    <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wide">Total annuel</div>
+                    <div className="font-black text-slate-900">{fmt(totalAnnuel)}</div>
+                </div>
+                <div>
+                    <div className="text-[10px] font-bold text-ohm-primary uppercase tracking-wide">Coût / jour</div>
+                    <div className="font-black text-ohm-primary">{fmt(coutJour)}</div>
+                </div>
+                <div>
+                    <div className="text-[10px] font-bold text-ohm-primary uppercase tracking-wide">Coût / semaine</div>
+                    <div className="font-black text-ohm-primary">{fmt(coutSemaine)}</div>
+                </div>
+            </div>
+            {vehicule.leasing_mensuel === 0 && (
+                <p className="text-[11px] text-slate-400 italic">
+                    Leasing à 0 CHF/mois — renseignez-le via "Modifier" si ce véhicule est en leasing.
+                </p>
+            )}
+        </div>
+    );
+};
 
 export const Vehicules: React.FC<Props> = ({ currentUser, forcedVehiculeId, onKmEntrySubmitted }) => {
     const canManage = currentUser.role === 'admin' || currentUser.role === 'vehicule';
@@ -95,10 +180,16 @@ export const Vehicules: React.FC<Props> = ({ currentUser, forcedVehiculeId, onKm
     const [kmInput, setKmInput] = useState('');
     const [kmError, setKmError] = useState('');
     const [kmSubmitting, setKmSubmitting] = useState(false);
+    // "sous-comptage hebdomadaire ou mensuel" — bascule l'historique entre
+    // le relevé brut par semaine (déjà ce qu'enregistre chaque relevé, voir
+    // VehiculeKmEntry) et une agrégation par mois calendaire (voir
+    // monthlyKmEntries plus bas) — purement une autre vue des mêmes
+    // données déjà chargées, pas un nouvel appel serveur.
+    const [kmView, setKmView] = useState<'semaine' | 'mois'>('semaine');
 
     const [reparations, setReparations] = useState<VehiculeReparation[]>([]);
     const [showReparationForm, setShowReparationForm] = useState(false);
-    const [reparationForm, setReparationForm] = useState({ nom: '', montant: '' });
+    const [reparationForm, setReparationForm] = useState(emptyReparationForm);
     const [reparationError, setReparationError] = useState('');
     const [reparationSubmitting, setReparationSubmitting] = useState(false);
 
@@ -131,8 +222,9 @@ export const Vehicules: React.FC<Props> = ({ currentUser, forcedVehiculeId, onKm
         if (selectedId != null) { fetchDetail(selectedId); fetchReparations(selectedId); }
         else { setDetail(null); setReparations([]); }
         setShowReparationForm(false);
-        setReparationForm({ nom: '', montant: '' });
+        setReparationForm(emptyReparationForm);
         setReparationError('');
+        setKmView('semaine');
     }, [selectedId]);
 
     // Pré-remplit avec le kilométrage actuel — l'utilisateur lit un chiffre
@@ -157,7 +249,7 @@ export const Vehicules: React.FC<Props> = ({ currentUser, forcedVehiculeId, onKm
     };
 
     const openEdit = (v: Vehicule) => {
-        setForm({ marque: v.marque, modele: v.modele, numero_plaque: v.numero_plaque, km_actuel: String(v.km_actuel) });
+        setForm({ marque: v.marque, modele: v.modele, numero_plaque: v.numero_plaque, km_actuel: String(v.km_actuel), leasing_mensuel: String(v.leasing_mensuel) });
         setFormError('');
         setShowForm('edit');
     };
@@ -174,6 +266,7 @@ export const Vehicules: React.FC<Props> = ({ currentUser, forcedVehiculeId, onKm
                 modele: form.modele.trim(),
                 numero_plaque: form.numero_plaque.trim(),
                 km_actuel: form.km_actuel === '' ? undefined : Number(form.km_actuel),
+                leasing_mensuel: form.leasing_mensuel === '' ? undefined : Number(form.leasing_mensuel),
             };
             const res = showForm === 'edit' && detail
                 ? await api.put(`/api/vehicules/${detail.id}`, payload)
@@ -255,9 +348,11 @@ export const Vehicules: React.FC<Props> = ({ currentUser, forcedVehiculeId, onKm
         }
         setReparationSubmitting(true);
         try {
-            const res = await api.post(`/api/vehicules/${detail.id}/reparations`, { nom, montant });
+            const res = await api.post(`/api/vehicules/${detail.id}/reparations`, {
+                nom, montant, categorie: reparationForm.categorie, date: reparationForm.date,
+            });
             if (res.ok) {
-                setReparationForm({ nom: '', montant: '' });
+                setReparationForm(emptyReparationForm);
                 setShowReparationForm(false);
                 fetchReparations(detail.id);
                 fetchStats();
@@ -292,6 +387,26 @@ export const Vehicules: React.FC<Props> = ({ currentUser, forcedVehiculeId, onKm
     // --- Vue détail ---
     if (selectedId != null) {
         const maxKm = detail ? Math.max(1, ...detail.km_entries.map(e => e.km_parcourus)) : 1;
+        // Agrégation mensuelle — même donnée que km_entries (semaine_iso +
+        // km_parcourus), juste regroupée par mois calendaire de date_entry
+        // au lieu d'être listée semaine par semaine. Triée la plus récente
+        // en premier, comme la vue hebdomadaire (voir [...].reverse() ci-dessous).
+        const monthlyKmEntries = detail
+            ? Object.values(
+                detail.km_entries.reduce((acc, e) => {
+                    const key = (e.date_entry || '').slice(0, 7); // "YYYY-MM"
+                    if (!key) return acc;
+                    if (!acc[key]) acc[key] = { key, km_parcourus: 0 };
+                    acc[key].km_parcourus += e.km_parcourus;
+                    return acc;
+                }, {} as Record<string, { key: string; km_parcourus: number }>)
+            ).sort((a, b) => b.key.localeCompare(a.key))
+            : [];
+        const maxMonthlyKm = Math.max(1, ...monthlyKmEntries.map(m => m.km_parcourus));
+        const formatMonth = (key: string) => {
+            const [y, m] = key.split('-').map(Number);
+            return new Date(y, m - 1, 1).toLocaleDateString('fr-CH', { month: 'long', year: 'numeric' });
+        };
         return (
             <div className="space-y-6 animate-fade-in pb-12">
                 <button
@@ -332,6 +447,8 @@ export const Vehicules: React.FC<Props> = ({ currentUser, forcedVehiculeId, onKm
                             </div>
                         </div>
 
+                        <VehiculeCostSummary vehicule={detail} reparations={reparations} />
+
                         {/* Ouvert à tout user connecté — pas juste admin, voir POST
                             /api/vehicules/<id>/km-entries. C'est aussi ce qui débloque
                             la navigation quand on arrive ici depuis le popup hebdo
@@ -355,10 +472,17 @@ export const Vehicules: React.FC<Props> = ({ currentUser, forcedVehiculeId, onKm
                         </form>
 
                         <div>
-                            <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-3">Historique hebdomadaire</h3>
+                            <div className="flex items-center justify-between flex-wrap gap-3 mb-3">
+                                <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest">Historique kilométrique</h3>
+                                <SlidingTabs
+                                    tabs={[{ id: 'semaine', label: 'Semaine' }, { id: 'mois', label: 'Mois' }]}
+                                    active={kmView}
+                                    onChange={setKmView}
+                                />
+                            </div>
                             {detail.km_entries.length === 0 ? (
                                 <div className="card p-8 text-center text-slate-400 italic">Aucun relevé pour l'instant.</div>
-                            ) : (
+                            ) : kmView === 'semaine' ? (
                                 <div className="space-y-2">
                                     {[...detail.km_entries].reverse().map(entry => (
                                         <div key={entry.id} className="card p-3 flex items-center gap-3">
@@ -379,12 +503,29 @@ export const Vehicules: React.FC<Props> = ({ currentUser, forcedVehiculeId, onKm
                                         </div>
                                     ))}
                                 </div>
+                            ) : (
+                                <div className="space-y-2">
+                                    {monthlyKmEntries.map(m => (
+                                        <div key={m.key} className="card p-3 flex items-center gap-3">
+                                            <div className="w-32 shrink-0 text-xs font-bold text-slate-700 capitalize truncate">{formatMonth(m.key)}</div>
+                                            <div className="flex-1 min-w-0">
+                                                <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+                                                    <div
+                                                        className="h-full bg-ohm-primary rounded-full"
+                                                        style={{ width: `${Math.max(4, (m.km_parcourus / maxMonthlyKm) * 100)}%` }}
+                                                    />
+                                                </div>
+                                            </div>
+                                            <div className="w-20 shrink-0 text-right text-sm font-bold text-slate-900">{Math.round(m.km_parcourus)} km</div>
+                                        </div>
+                                    ))}
+                                </div>
                             )}
                         </div>
 
                         <div>
                             <div className="flex items-center justify-between mb-3">
-                                <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest">Réparations</h3>
+                                <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest">Coûts (entretien &amp; énergie)</h3>
                                 {canManage && (
                                     <button
                                         onClick={() => { setReparationError(''); setShowReparationForm(v => !v); }}
@@ -397,15 +538,35 @@ export const Vehicules: React.FC<Props> = ({ currentUser, forcedVehiculeId, onKm
 
                             {showReparationForm && (
                                 <form onSubmit={handleSubmitReparation} className="card p-4 sm:p-6 space-y-3 mb-3">
-                                    <div className="grid sm:grid-cols-2 gap-3">
-                                        <div>
-                                            <label className="text-[10px] font-black uppercase text-slate-500 tracking-widest block mb-1.5">Nom de la réparation</label>
+                                    <div>
+                                        <label className="text-[10px] font-black uppercase text-slate-500 tracking-widest block mb-1.5">Catégorie</label>
+                                        <div className="flex gap-2">
+                                            {(['entretien', 'energie'] as VehiculeCoutCategorie[]).map(cat => {
+                                                const Icon = CATEGORIE_ICONS[cat];
+                                                const active = reparationForm.categorie === cat;
+                                                return (
+                                                    <button
+                                                        key={cat} type="button"
+                                                        onClick={() => setReparationForm({ ...reparationForm, categorie: cat })}
+                                                        className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-sm font-bold transition-all ${active ? 'bg-ohm-primary text-ohm-bg' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}
+                                                    >
+                                                        <Icon size={14} /> {CATEGORIE_LABELS[cat]}
+                                                    </button>
+                                                );
+                                            })}
+                                        </div>
+                                    </div>
+                                    <div className="grid sm:grid-cols-3 gap-3">
+                                        <div className="sm:col-span-2">
+                                            <label className="text-[10px] font-black uppercase text-slate-500 tracking-widest block mb-1.5">
+                                                {reparationForm.categorie === 'energie' ? 'Description (ex: Plein diesel)' : 'Nom de la réparation'}
+                                            </label>
                                             <input
                                                 type="text" autoFocus
                                                 className="input-field"
                                                 value={reparationForm.nom}
                                                 onChange={e => setReparationForm({ ...reparationForm, nom: e.target.value })}
-                                                placeholder="Ex: Plaquettes de frein"
+                                                placeholder={reparationForm.categorie === 'energie' ? 'Ex: Plein diesel' : 'Ex: Plaquettes de frein'}
                                             />
                                         </div>
                                         <div>
@@ -418,6 +579,15 @@ export const Vehicules: React.FC<Props> = ({ currentUser, forcedVehiculeId, onKm
                                                 placeholder="0.00"
                                             />
                                         </div>
+                                    </div>
+                                    <div>
+                                        <label className="text-[10px] font-black uppercase text-slate-500 tracking-widest block mb-1.5">Date de la dépense</label>
+                                        <input
+                                            type="date"
+                                            className="input-field"
+                                            value={reparationForm.date}
+                                            onChange={e => setReparationForm({ ...reparationForm, date: e.target.value })}
+                                        />
                                     </div>
                                     {reparationError && <p className="text-red-500 text-sm font-bold">{reparationError}</p>}
                                     <div className="flex gap-2">
@@ -432,26 +602,34 @@ export const Vehicules: React.FC<Props> = ({ currentUser, forcedVehiculeId, onKm
                             )}
 
                             {reparations.length === 0 ? (
-                                <div className="card p-8 text-center text-slate-400 italic">Aucune réparation enregistrée.</div>
+                                <div className="card p-8 text-center text-slate-400 italic">Aucun coût enregistré.</div>
                             ) : (
                                 <div className="space-y-2">
-                                    {reparations.map(r => (
-                                        <div key={r.id} className="card p-3 flex items-center gap-3">
-                                            <div className="w-9 h-9 rounded-xl bg-ohm-primary/15 flex items-center justify-center shrink-0">
-                                                <Wrench className="text-ohm-primary" size={16} />
+                                    {reparations.map(r => {
+                                        const Icon = CATEGORIE_ICONS[r.categorie];
+                                        return (
+                                            <div key={r.id} className="card p-3 flex items-center gap-3">
+                                                <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${r.categorie === 'energie' ? 'bg-blue-500/15' : 'bg-ohm-primary/15'}`}>
+                                                    <Icon className={r.categorie === 'energie' ? 'text-blue-600' : 'text-ohm-primary'} size={16} />
+                                                </div>
+                                                <div className="flex-1 min-w-0">
+                                                    <div className="flex items-center gap-2">
+                                                        <div className="text-sm font-bold text-slate-900 truncate">{r.nom}</div>
+                                                        <span className={`shrink-0 px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-wide ${r.categorie === 'energie' ? 'bg-blue-500/15 text-blue-600' : 'bg-slate-100 text-slate-500'}`}>
+                                                            {CATEGORIE_LABELS[r.categorie]}
+                                                        </span>
+                                                    </div>
+                                                    <div className="text-[10px] text-slate-400">{formatDate(r.date_reparation)} · {r.created_by || '—'}</div>
+                                                </div>
+                                                <div className="text-sm font-black text-slate-900 shrink-0">{r.montant.toLocaleString('fr-CH')} CHF</div>
+                                                {canManage && (
+                                                    <button onClick={() => handleDeleteReparation(r)} className="p-2 rounded-lg text-red-400 hover:bg-red-500/10 transition-all shrink-0" title="Supprimer">
+                                                        <Trash2 size={16} />
+                                                    </button>
+                                                )}
                                             </div>
-                                            <div className="flex-1 min-w-0">
-                                                <div className="text-sm font-bold text-slate-900 truncate">{r.nom}</div>
-                                                <div className="text-[10px] text-slate-400">{formatDate(r.date_reparation)} · {r.created_by || '—'}</div>
-                                            </div>
-                                            <div className="text-sm font-black text-slate-900 shrink-0">{r.montant.toLocaleString('fr-CH')} CHF</div>
-                                            {canManage && (
-                                                <button onClick={() => handleDeleteReparation(r)} className="p-2 rounded-lg text-red-400 hover:bg-red-500/10 transition-all shrink-0" title="Supprimer">
-                                                    <Trash2 size={16} />
-                                                </button>
-                                            )}
-                                        </div>
-                                    ))}
+                                        );
+                                    })}
                                 </div>
                             )}
                         </div>
@@ -609,6 +787,18 @@ export const Vehicules: React.FC<Props> = ({ currentUser, forcedVehiculeId, onKm
                                 onChange={e => setForm({ ...form, km_actuel: e.target.value })}
                                 className="input-field"
                                 placeholder="0"
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-[10px] font-black uppercase text-slate-500 mb-2 tracking-widest">
+                                Leasing mensuel (CHF/mois)
+                            </label>
+                            <input
+                                type="number" min={0} step="0.05"
+                                value={form.leasing_mensuel}
+                                onChange={e => setForm({ ...form, leasing_mensuel: e.target.value })}
+                                className="input-field"
+                                placeholder="0 (véhicule acheté comptant)"
                             />
                         </div>
                         {formError && <p className="text-red-500 text-sm font-bold">{formError}</p>}
