@@ -695,6 +695,12 @@ class Vehicule(db.Model):
     modele = db.Column(db.String(80), nullable=False)
     numero_plaque = db.Column(db.String(20), unique=True, nullable=False)
     km_actuel = db.Column(db.Float, nullable=False, default=0.0)
+    # Coût de leasing mensuel (CHF/mois) — 0 pour un véhicule acheté comptant
+    # (pas de leasing). Entre dans le calcul du coût journalier/hebdomadaire
+    # de la fiche véhicule côté frontend (Vehicules.tsx) : leasing_mensuel*12
+    # + total entretien (année) + total énergie (année), jamais recalculé/
+    # stocké ici — ce champ n'est que l'un des trois termes de la formule.
+    leasing_mensuel = db.Column(db.Float, nullable=False, default=0.0)
     created_by_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
 
@@ -707,6 +713,7 @@ class Vehicule(db.Model):
             'modele': self.modele,
             'numero_plaque': self.numero_plaque,
             'km_actuel': self.km_actuel,
+            'leasing_mensuel': self.leasing_mensuel,
             'created_by': self.created_by.username if self.created_by else None,
             'created_at': self.created_at.isoformat() if self.created_at else None,
         }
@@ -747,16 +754,30 @@ class VehiculeKmEntry(db.Model):
         }
 
 
+VEHICULE_COUT_CATEGORIES = ('entretien', 'energie')
+
 class VehiculeReparation(db.Model):
-    """One repair/maintenance entry logged against a vehicle — nom (what was
-    done) + montant (invoice amount, CHF). Read/write access: admin or the
-    'vehicule' role (external garagiste, see VALID_ROLES) — same gate as the
-    rest of fleet management (manage_vehicules/vehicule_detail)."""
+    """One cost entry logged against a vehicle — nom (what it was) + montant
+    (invoice amount, CHF). Despite the model's name (kept for backward
+    compatibility — retitled "Coûts" in the UI, not "Réparations"), also
+    covers energy costs (fuel/electricity) since `categorie` was added:
+    'entretien' (tyres, mechanics — the original scope) or 'energie'. Feeds
+    the fiche véhicule's cost-per-day/week summary alongside
+    Vehicule.leasing_mensuel (see Vehicules.tsx). Read/write access: admin or
+    the 'vehicule' role (external garagiste, see VALID_ROLES) — same gate as
+    the rest of fleet management (manage_vehicules/vehicule_detail)."""
     __tablename__ = 'vehicule_reparations'
     id = db.Column(db.Integer, primary_key=True)
     vehicule_id = db.Column(db.Integer, db.ForeignKey('vehicules.id'), nullable=False)
     nom = db.Column(db.String(200), nullable=False)
     montant = db.Column(db.Float, nullable=False)
+    categorie = db.Column(db.String(20), nullable=False, default='entretien')
+    # Business date of the expense (a fuel receipt dated last week, say) —
+    # user-settable at creation (see manage_vehicule_reparations), unlike
+    # created_at below which is always "when this row was entered". Kept as
+    # DateTime (not a YYYY-MM-DD string like Acompte.date/AchatMateriel.date)
+    # since it already existed as one before `categorie`/settable-date were
+    # added — not worth a column-type migration for this.
     date_reparation = db.Column(db.DateTime, default=datetime.datetime.utcnow)
     created_by_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
@@ -770,6 +791,7 @@ class VehiculeReparation(db.Model):
             'vehicule_id': self.vehicule_id,
             'nom': self.nom,
             'montant': self.montant,
+            'categorie': self.categorie,
             'date_reparation': self.date_reparation.isoformat() if self.date_reparation else None,
             'created_by': self.created_by.username if self.created_by else None,
             'created_at': self.created_at.isoformat() if self.created_at else None,
@@ -898,6 +920,15 @@ class Leave(db.Model):
     updated_by_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
     updated_at = db.Column(db.DateTime, nullable=True)
 
+    # Weekly recurrence (Agenda "Récurrence" checkbox, create-time only) —
+    # every occurrence created from the same submission shares this id, only
+    # set when there's more than one (a single, non-recurring leave keeps
+    # this None, same convention as ChantierAssignment.proposal_group_id).
+    # Lets "supprimer cette date et les suivantes" (see manage_single_leave)
+    # target the rest of the series without touching a different user's
+    # occurrences from the same batch — always scoped by user_id there too.
+    recurrence_group_id = db.Column(db.String(36), nullable=True, index=True)
+
     user = db.relationship('User', foreign_keys=[user_id], backref='leaves')
     created_by = db.relationship('User', foreign_keys=[created_by_id])
     updated_by = db.relationship('User', foreign_keys=[updated_by_id])
@@ -922,6 +953,7 @@ class Leave(db.Model):
             'updated_by_id': self.updated_by_id,
             'updated_by_name': self.updated_by.username if self.updated_by else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+            'recurrence_group_id': self.recurrence_group_id,
         }
 
 
@@ -947,6 +979,13 @@ class ChantierAssignment(db.Model):
     description = db.Column(db.Text, nullable=True)
     statut = db.Column(db.String(20), nullable=False, default='confirme')  # 'confirme' | 'proposition'
     proposal_group_id = db.Column(db.String(36), nullable=True, index=True)
+    # Weekly recurrence (Agenda "Récurrence" checkbox, create-time only) —
+    # separate from proposal_group_id above (a different concept: candidate
+    # dates not yet picked, vs already-confirmed repeating occurrences).
+    # Shared across every row from the same submission, only set when
+    # there's more than one occurrence. See Leave.recurrence_group_id for
+    # the same field on the absence side.
+    recurrence_group_id = db.Column(db.String(36), nullable=True, index=True)
     created_by_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
     updated_by_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
@@ -973,6 +1012,7 @@ class ChantierAssignment(db.Model):
             'description': self.description,
             'statut': self.statut,
             'proposal_group_id': self.proposal_group_id,
+            'recurrence_group_id': self.recurrence_group_id,
             'created_by_id': self.created_by_id,
             'created_by_name': self.created_by.username if self.created_by else None,
             'created_at': self.created_at.isoformat() if self.created_at else None,
@@ -1589,6 +1629,7 @@ def init_db():
                     'description': 'TEXT',
                     'updated_by_id': 'INTEGER REFERENCES users(id)',
                     'updated_at': 'DATETIME',
+                    'recurrence_group_id': 'VARCHAR(36)',
                 }
                 for col_name, col_type in leave_new_cols.items():
                     if col_name not in cols:
@@ -1624,6 +1665,10 @@ def init_db():
                     logger.info("Migrating chantier_assignments: adding proposal_group_id")
                     conn.execute(text("ALTER TABLE chantier_assignments ADD COLUMN proposal_group_id VARCHAR(36)"))
                     conn.commit()
+                if 'recurrence_group_id' not in cols:
+                    logger.info("Migrating chantier_assignments: adding recurrence_group_id")
+                    conn.execute(text("ALTER TABLE chantier_assignments ADD COLUMN recurrence_group_id VARCHAR(36)"))
+                    conn.commit()
 
             # 5. Acomptes Table — heures facturées en face de ce versement
             # (repéré côté frontend quand c'est resté à 0 alors qu'un montant a été noté)
@@ -1632,6 +1677,26 @@ def init_db():
                 if 'heures' not in cols:
                     logger.info("Migrating acomptes: adding heures")
                     conn.execute(text("ALTER TABLE acomptes ADD COLUMN heures FLOAT DEFAULT 0"))
+                    conn.commit()
+
+            # 5b. Vehicules / VehiculeReparation — coût journalier/hebdomadaire
+            # (leasing + entretien + énergie), voir Vehicule.leasing_mensuel /
+            # VehiculeReparation.categorie.
+            if 'vehicules' in existing_tables:
+                cols = [c['name'] for c in inspector.get_columns('vehicules')]
+                if 'leasing_mensuel' not in cols:
+                    logger.info("Migrating vehicules: adding leasing_mensuel")
+                    conn.execute(text("ALTER TABLE vehicules ADD COLUMN leasing_mensuel FLOAT NOT NULL DEFAULT 0"))
+                    conn.commit()
+            if 'vehicule_reparations' in existing_tables:
+                cols = [c['name'] for c in inspector.get_columns('vehicule_reparations')]
+                if 'categorie' not in cols:
+                    logger.info("Migrating vehicule_reparations: adding categorie")
+                    # Existing rows predate the entretien/energie split — they
+                    # were all maintenance-style entries (the column's whole
+                    # reason for existing before this), so 'entretien' is the
+                    # correct backfill, not an arbitrary default.
+                    conn.execute(text("ALTER TABLE vehicule_reparations ADD COLUMN categorie VARCHAR(20) NOT NULL DEFAULT 'entretien'"))
                     conn.commit()
 
             # 6. ChantierFinancier — montant_adjuge/heures_adjugees/montant_regie/
@@ -3363,6 +3428,40 @@ def _validate_period(payload):
     }, None
 
 
+def _generate_weekly_occurrences(date_debut, date_fin, until):
+    """Agenda "Récurrence" checkbox — weekly recurrence, the only pattern
+    offered (see prompt discussion: same weekday as date_debut, every week,
+    until an end date — covers "tous les mardis jusqu'à fin juin" exactly,
+    nothing more configurable was asked for).
+
+    Repeats the [date_debut, date_fin] span (same weekday, same span length)
+    every 7 days, up to and including `until`. Returns a list of
+    {'date_debut', 'date_fin'} dicts (YYYY-MM-DD strings), starting with the
+    original occurrence itself — always at least one element once validated.
+    Raises ValueError (never a raw exception) on a malformed `until` or one
+    before date_debut (nothing to repeat), for the caller to turn into a 400."""
+    try:
+        d1 = datetime.datetime.strptime(date_debut, '%Y-%m-%d').date()
+        d2 = datetime.datetime.strptime(date_fin, '%Y-%m-%d').date()
+        until_date = datetime.datetime.strptime(until, '%Y-%m-%d').date()
+    except (TypeError, ValueError):
+        raise ValueError('recurrence.until doit être au format YYYY-MM-DD')
+    if until_date < d1:
+        raise ValueError('recurrence.until doit être après la date de début')
+
+    span = (d2 - d1).days
+    one_week = datetime.timedelta(days=7)
+    occurrences = []
+    cursor = d1
+    while cursor <= until_date:
+        occurrences.append({
+            'date_debut': cursor.isoformat(),
+            'date_fin': (cursor + datetime.timedelta(days=span)).isoformat(),
+        })
+        cursor += one_week
+    return occurrences
+
+
 @app.route('/api/leaves', methods=['GET', 'POST'])
 @token_required
 def manage_leaves(current_user):
@@ -3458,6 +3557,20 @@ def manage_single_leave(current_user, leave_id):
         return jsonify({'error': 'Admin access required'}), 403
 
     if request.method == 'DELETE':
+        # scope=this_and_following (Agenda "Récurrence" series) — only ever
+        # deletes THIS user's occurrences from THIS submission's group, from
+        # this date onward. Without the user_id filter, deleting one
+        # employee's occurrence would also wipe out a different employee's
+        # rows created in the same recurring submission (recurrence_group_id
+        # is shared across every user in the batch — see create_calendar_leaves).
+        if request.args.get('scope') == 'this_and_following' and leave.recurrence_group_id:
+            Leave.query.filter(
+                Leave.recurrence_group_id == leave.recurrence_group_id,
+                Leave.user_id == leave.user_id,
+                Leave.date_start >= leave.date_start,
+            ).delete(synchronize_session=False)
+            db.session.commit()
+            return jsonify({'message': 'Leaves deleted'})
         db.session.delete(leave)
         db.session.commit()
         return jsonify({'message': 'Leave deleted'})
@@ -3574,6 +3687,7 @@ def get_calendar(current_user):
             'status': l.status,
             'statut': None,  # leaves have no confirme/proposition concept — chantier-only
             'proposal_group_id': None,
+            'recurrence_group_id': l.recurrence_group_id,
             'couleur': LEAVE_TYPE_COLORS.get(l.type, '#94A3B8'),
         })
     for a in assignments_q.all():
@@ -3600,6 +3714,7 @@ def get_calendar(current_user):
             # entry, not a different color needing its own lookup here.
             'statut': a.statut,
             'proposal_group_id': a.proposal_group_id,
+            'recurrence_group_id': a.recurrence_group_id,
             'couleur': _chantier_color(a.chantier_id),
         })
     return jsonify(items)
@@ -3619,6 +3734,9 @@ def create_chantier_assignments(current_user):
     found_ids = {u.id for u in User.query.filter(User.id.in_(user_ids)).all()}
     if found_ids != set(user_ids):
         return jsonify({'error': 'One or more user_id not found'}), 404
+
+    if data.get('a_planifier') and data.get('recurrence'):
+        return jsonify({'error': 'a_planifier et recurrence ne peuvent pas être combinés'}), 400
 
     # "Chantier à planifier" — several candidate date ranges the client
     # hasn't picked between yet. Every (employee × candidate) row is created
@@ -3659,17 +3777,40 @@ def create_chantier_assignments(current_user):
     if err:
         return err
 
+    # Weekly recurrence (Agenda "Récurrence" checkbox) — repeats this same
+    # range every 7 days up to recurrence.until. Every (employee × occurrence)
+    # row shares one recurrence_group_id, so "supprimer cette date et les
+    # suivantes" (see manage_chantier_assignment) can target the rest of the
+    # series later. A single occurrence (no recurrence, or until == date_debut)
+    # behaves exactly like before — no group id set.
+    recurrence = data.get('recurrence')
+    if recurrence:
+        if not isinstance(recurrence, dict) or not recurrence.get('until'):
+            return jsonify({'error': 'recurrence.until is required when recurrence is set'}), 400
+        try:
+            occurrences = _generate_weekly_occurrences(period['date_debut'], period['date_fin'], recurrence['until'])
+        except ValueError as e:
+            return jsonify({'error': str(e)}), 400
+    else:
+        occurrences = [period]
+
+    group_id = uuid.uuid4().hex if len(occurrences) > 1 else None
+
     created = []
     for uid in user_ids:
-        a = ChantierAssignment(
-            chantier_id=chantier.id,
-            user_id=uid,
-            description=data.get('description'),
-            created_by_id=current_user.id,
-            **period,
-        )
-        db.session.add(a)
-        created.append(a)
+        for occ in occurrences:
+            a = ChantierAssignment(
+                chantier_id=chantier.id,
+                user_id=uid,
+                description=data.get('description'),
+                created_by_id=current_user.id,
+                recurrence_group_id=group_id,
+                date_debut=occ['date_debut'], date_fin=occ['date_fin'],
+                heure_debut=period['heure_debut'], heure_fin=period['heure_fin'],
+                toute_la_journee=period['toute_la_journee'],
+            )
+            db.session.add(a)
+            created.append(a)
     db.session.commit()
     return jsonify([a.to_dict() for a in created]), 201
 
@@ -3770,6 +3911,18 @@ def manage_chantier_assignment(current_user, assignment_id):
         return jsonify({'error': 'Assignment not found'}), 404
 
     if request.method == 'DELETE':
+        # scope=this_and_following — same "Récurrence" series semantics as
+        # manage_single_leave's DELETE: scoped to THIS user_id too, since
+        # recurrence_group_id is shared across every employee in the batch
+        # (see create_chantier_assignments).
+        if request.args.get('scope') == 'this_and_following' and a.recurrence_group_id:
+            ChantierAssignment.query.filter(
+                ChantierAssignment.recurrence_group_id == a.recurrence_group_id,
+                ChantierAssignment.user_id == a.user_id,
+                ChantierAssignment.date_debut >= a.date_debut,
+            ).delete(synchronize_session=False)
+            db.session.commit()
+            return jsonify({'message': 'Assignments deleted'})
         db.session.delete(a)
         db.session.commit()
         return jsonify({'message': 'Assignment deleted'})
@@ -3835,10 +3988,31 @@ def create_calendar_leaves(current_user):
     period, err = _validate_period(data)
     if err:
         return err
+
+    # Weekly recurrence (Agenda "Récurrence" checkbox) — repeats this same
+    # range every 7 days up to recurrence.until. Every (employee × occurrence)
+    # row shares one recurrence_group_id, so "supprimer cette date et les
+    # suivantes" (see manage_single_leave) can target the rest of the series
+    # later. A single occurrence (no recurrence) behaves exactly like
+    # before — no group id set.
+    recurrence = data.get('recurrence')
+    if recurrence:
+        if not isinstance(recurrence, dict) or not recurrence.get('until'):
+            return jsonify({'error': 'recurrence.until is required when recurrence is set'}), 400
+        try:
+            occurrences = _generate_weekly_occurrences(period['date_debut'], period['date_fin'], recurrence['until'])
+        except ValueError as e:
+            return jsonify({'error': str(e)}), 400
+    else:
+        occurrences = [period]
+
     try:
-        days_count = compute_days_count(period['date_debut'], period['date_fin'])
+        for occ in occurrences:
+            compute_days_count(occ['date_debut'], occ['date_fin'])
     except ValueError as e:
         return jsonify({'error': f'Invalid dates: {e}'}), 400
+
+    group_id = uuid.uuid4().hex if len(occurrences) > 1 else None
 
     # Admin-authored leaves are auto-approved immediately (new rule — see
     # _approve_leave); anyone else's request goes through the existing
@@ -3848,31 +4022,51 @@ def create_calendar_leaves(current_user):
     created = []
     try:
         for uid in user_ids:
-            leave = Leave(
-                user_id=uid,
-                type=leave_type,
-                date_start=period['date_debut'],
-                date_end=period['date_fin'],
-                heure_debut=period['heure_debut'],
-                heure_fin=period['heure_fin'],
-                toute_la_journee=period['toute_la_journee'],
-                description=data.get('description'),
-                days_count=days_count,
-                status='PENDING',
-                created_by_id=current_user.id,
-            )
-            if is_admin:
-                # Raises InsufficientVacationBalance if this uid doesn't have
-                # days_count left — checked here too (not just PENDING below),
-                # since this path also flips straight to APPROVED.
-                _approve_leave(leave)
-            else:
-                # Not auto-approved, but still rejected up front if it
-                # already can't be approved as filed — see manage_leaves'
-                # POST /api/leaves for the same rule.
-                _assert_vacation_balance(db.session.get(User, uid), leave_type, days_count)
-            db.session.add(leave)
-            created.append(leave)
+            # Non-admin CONGE requests aren't deducted yet (they stay
+            # PENDING) — but several occurrences from the same recurring
+            # submission all eventually draw from the same balance once
+            # approved, so track a running total per user across this
+            # batch rather than only checking each occurrence in isolation
+            # (which would let an otherwise-individually-fine batch
+            # collectively exceed what's left).
+            reserved = 0.0
+            for occ in occurrences:
+                days_count = compute_days_count(occ['date_debut'], occ['date_fin'])
+                leave = Leave(
+                    user_id=uid,
+                    type=leave_type,
+                    date_start=occ['date_debut'],
+                    date_end=occ['date_fin'],
+                    heure_debut=occ['heure_debut'],
+                    heure_fin=occ['heure_fin'],
+                    toute_la_journee=occ['toute_la_journee'],
+                    description=data.get('description'),
+                    days_count=days_count,
+                    status='PENDING',
+                    created_by_id=current_user.id,
+                    recurrence_group_id=group_id,
+                )
+                if is_admin:
+                    # Raises InsufficientVacationBalance if this uid doesn't
+                    # have days_count left — checked here too (not just
+                    # PENDING below), since this path also flips straight to
+                    # APPROVED. Sequential across occurrences: _approve_leave
+                    # deducts the same in-session User row each time, so a
+                    # later occurrence in this same batch correctly sees the
+                    # balance already spent by an earlier one.
+                    _approve_leave(leave)
+                else:
+                    # Not auto-approved, but still rejected up front if it
+                    # already can't be approved as filed — see manage_leaves'
+                    # POST /api/leaves for the same rule, extended here with
+                    # `reserved` for the recurring case above.
+                    if leave_type == 'CONGE':
+                        target_user = db.session.get(User, uid)
+                        if target_user is not None and target_user.vacation_balance < reserved + days_count - _BALANCE_EPS:
+                            raise InsufficientVacationBalance(target_user, reserved + days_count)
+                        reserved += days_count
+                db.session.add(leave)
+                created.append(leave)
     except InsufficientVacationBalance as e:
         db.session.rollback()
         return jsonify({'error': str(e)}), 400
@@ -4094,11 +4288,19 @@ def manage_vehicules(current_user):
     if km_actuel < 0:
         return jsonify({'error': 'km_actuel ne peut pas être négatif'}), 400
 
+    try:
+        leasing_mensuel = float(data.get('leasing_mensuel', 0) or 0)
+    except (TypeError, ValueError):
+        return jsonify({'error': 'leasing_mensuel doit être un nombre'}), 400
+    if leasing_mensuel < 0:
+        return jsonify({'error': 'leasing_mensuel ne peut pas être négatif'}), 400
+
     vehicule = Vehicule(
         marque=marque,
         modele=modele,
         numero_plaque=numero_plaque,
         km_actuel=km_actuel,
+        leasing_mensuel=leasing_mensuel,
         created_by_id=current_user.id,
     )
     db.session.add(vehicule)
@@ -4219,6 +4421,14 @@ def vehicule_detail(current_user, vehicule_id):
         if km_actuel < 0:
             return jsonify({'error': 'km_actuel ne peut pas être négatif'}), 400
         vehicule.km_actuel = km_actuel
+    if 'leasing_mensuel' in data:
+        try:
+            leasing_mensuel = float(data.get('leasing_mensuel'))
+        except (TypeError, ValueError):
+            return jsonify({'error': 'leasing_mensuel doit être un nombre'}), 400
+        if leasing_mensuel < 0:
+            return jsonify({'error': 'leasing_mensuel ne peut pas être négatif'}), 400
+        vehicule.leasing_mensuel = leasing_mensuel
 
     db.session.commit()
     audit_log('vehicules', current_user, f"edited vehicule #{vehicule.id}")
@@ -4304,16 +4514,31 @@ def manage_vehicule_reparations(current_user, vehicule_id):
     if montant < 0:
         return jsonify({'error': 'Le montant ne peut pas être négatif'}), 400
 
+    categorie = data.get('categorie', 'entretien')
+    if categorie not in VEHICULE_COUT_CATEGORIES:
+        return jsonify({'error': f'categorie must be one of {VEHICULE_COUT_CATEGORIES}'}), 400
+
+    # Business date of the expense (a fuel receipt dated last week, say) —
+    # optional, defaults to now (unchanged behavior) when absent.
+    date_reparation = datetime.datetime.utcnow()
+    if data.get('date'):
+        try:
+            date_reparation = datetime.datetime.strptime(data['date'], '%Y-%m-%d')
+        except (TypeError, ValueError):
+            return jsonify({'error': 'date must be an ISO date (YYYY-MM-DD)'}), 400
+
     reparation = VehiculeReparation(
         vehicule_id=vehicule_id,
         nom=nom,
         montant=montant,
+        categorie=categorie,
+        date_reparation=date_reparation,
         created_by_id=current_user.id,
     )
     db.session.add(reparation)
     db.session.commit()
     audit_log('vehicules', current_user,
-              f"added reparation on vehicule #{vehicule.id}: {nom} ({montant:g} CHF)")
+              f"added reparation on vehicule #{vehicule.id}: {nom} ({montant:g} CHF, {categorie})")
     return jsonify(reparation.to_dict()), 201
 
 

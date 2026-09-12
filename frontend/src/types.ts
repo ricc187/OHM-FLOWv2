@@ -72,6 +72,12 @@ export interface CalendarItem {
     // (leaves never carry this — always null there).
     statut: 'confirme' | 'proposition' | null;
     proposal_group_id: string | null;
+    // Agenda "Récurrence" checkbox — set (shared across every occurrence AND
+    // every employee from the same submission) only when the event was
+    // created as a repeating weekly series; null for a one-off entry. Lets
+    // the detail panel offer "supprimer cette date et les suivantes" (see
+    // backend manage_single_leave / manage_chantier_assignment).
+    recurrence_group_id: string | null;
 }
 
 export interface AdminNotice {
@@ -279,18 +285,28 @@ export interface Vehicule {
     modele: string;
     numero_plaque: string;
     km_actuel: number; // running total — incrémenté par chaque relevé, jamais ressaisi en absolu
+    // Coût de leasing mensuel (CHF/mois), 0 si le véhicule n'est pas en
+    // leasing (achat comptant) — entre dans le calcul du coût journalier/
+    // hebdomadaire de la fiche véhicule (voir VehiculeCostSummary dans
+    // Vehicules.tsx) : leasing_mensuel*12 + entretien(année) + énergie(année).
+    leasing_mensuel: number;
     created_by: string | null;
     created_at: string | null;
 }
 
+export type VehiculeCoutCategorie = 'entretien' | 'energie';
+
 // GET /api/vehicules/<id>/reparations — nom + montant (facture, CHF), pas
-// de fichier joint (voir app.py VehiculeReparation).
+// de fichier joint (voir app.py VehiculeReparation). Malgré son nom (hérité),
+// couvre aussi les factures d'énergie (carburant/électricité) depuis l'ajout
+// de `categorie` — la fiche véhicule les affiche ensemble sous "Coûts".
 export interface VehiculeReparation {
     id: number;
     vehicule_id: number;
     nom: string;
     montant: number;
-    date_reparation: string | null; // ISO
+    categorie: VehiculeCoutCategorie;
+    date_reparation: string | null; // ISO — date de la dépense (saisissable), pas juste "créé le"
     created_by: string | null;
     created_at: string | null;
 }
