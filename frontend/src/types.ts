@@ -26,6 +26,10 @@ export interface Chantier {
     plan_pdf_path?: string; // New PDF
     address_work?: string;
     address_billing?: string;
+    // Auto-complété depuis le dataset statique CH quand une localité
+    // reconnue est tapée dans address_work (voir chLocalities.ts /
+    // NpaField) — reste éditable à la main, jamais verrouillé.
+    npa?: string | null;
     remarque?: string;
     // Champ libre, distinct de remarque — modifiable par admin ET depanneur
     // (remarque reste admin-only, via la modale Modifier). Voir PUT
@@ -127,6 +131,9 @@ export interface ChantierFinancierPrevu {
     charge_materiel_prevue: number;
     taux_horaire: number;
     pct_petites_fournitures: number;
+    // null = heures_prevues (voir FinancierPayload) reste la somme des
+    // ca_lignes ; une valeur = override manuel saisi via le crayon Personnel.
+    heures_prevues_manuel: number | null;
     created_at?: string;
     updated_at?: string;
 }
@@ -260,11 +267,11 @@ export interface VoltaSyncStatusGlobal {
     estimated_hours: number;
 }
 
-// CONGE/MALADIE/ABSENCE/ARMEE/CONGE_PAT_MAT/DEMENAGEMENT mirror the backend
-// Leave.type enum (renamed from VACATION/SICKNESS/OTHER — see app.py's
+// CONGE/MALADIE/ABSENCE/ARMEE/CONGE_PAT_MAT/DEMENAGEMENT/FORMATION mirror the
+// backend Leave.type enum (renamed from VACATION/SICKNESS/OTHER — see app.py's
 // leaves type migration). HOLIDAY is frontend-only (synthetic calendar entries,
 // see Planning.tsx's CalendarView), never sent to/from the API.
-export type LeaveType = 'CONGE' | 'MALADIE' | 'ABSENCE' | 'ARMEE' | 'CONGE_PAT_MAT' | 'DEMENAGEMENT' | 'HOLIDAY';
+export type LeaveType = 'CONGE' | 'MALADIE' | 'ABSENCE' | 'ARMEE' | 'CONGE_PAT_MAT' | 'DEMENAGEMENT' | 'FORMATION' | 'HOLIDAY';
 
 // --- Module Véhicules ---
 
@@ -354,5 +361,16 @@ export interface Leave {
     updated_by_id?: number;
     updated_by_name?: string;
     updated_at?: string;
+}
+
+// Fiche détail utilisateur — GET /api/users/<id>/detail (voir UserDetail.tsx).
+// chantiers_en_cours : distinct, statut='confirme', chantier non DONE/non
+// archivé, sans filtre de date (interprétation validée — voir app.py).
+export interface UserDetailPayload {
+    user: User;
+    chantiers_en_cours: { id: number; nom: string }[];
+    chantiers_en_cours_count: number;
+    total_heures: number;
+    leaves: Leave[];
 }
 
