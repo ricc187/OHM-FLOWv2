@@ -6,6 +6,7 @@ import { chantierPhase } from '../chantierPhase';
 import { deadlineSeverity, deadlineDaysLabel, DEADLINE_TEXT_CLASSES } from '../deadlineSeverity';
 import { AwesomeDatePicker } from './ui/AwesomeDatePicker';
 import { AwesomeSelect } from './ui/AwesomeSelect';
+import { NpaField } from './ui/NpaField';
 import { DocumentExplorer } from './DocumentExplorer';
 import { FinancesTab } from './FinancesTab';
 import { api } from '../api';
@@ -538,7 +539,9 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
                             </div>
                             <div>
                                 <label className="text-xs font-bold text-slate-400 uppercase">Adresse Travaux</label>
-                                <div className="mt-2 text-slate-900">{chantier.address_work || '-'}</div>
+                                <div className="mt-2 text-slate-900">
+                                    {chantier.address_work || '-'}{chantier.npa ? ` (${chantier.npa})` : ''}
+                                </div>
                             </div>
                             <div>
                                 <label className="text-xs font-bold text-slate-400 uppercase">Adresse Facturation</label>
@@ -770,7 +773,10 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                 <div>
                                     <label className="text-xs font-bold text-slate-400 uppercase">Adresse Travaux</label>
-                                    <input type="text" className="input-field mt-1" value={editForm.address_work || ''} onChange={e => setEditForm({ ...editForm, address_work: e.target.value })} />
+                                    <div className="flex gap-2 mt-1">
+                                        <input type="text" className="input-field flex-1" value={editForm.address_work || ''} onChange={e => setEditForm({ ...editForm, address_work: e.target.value })} />
+                                        <NpaField addressWork={editForm.address_work || ''} value={editForm.npa || ''} onChange={npa => setEditForm({ ...editForm, npa })} />
+                                    </div>
                                 </div>
                                 <div>
                                     <label className="text-xs font-bold text-slate-400 uppercase">Adresse Facturation</label>
