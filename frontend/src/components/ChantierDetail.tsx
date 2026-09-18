@@ -731,7 +731,15 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
                                     </div>
                                     <div>
                                         <label className="text-xs font-bold text-slate-400 uppercase">Commune</label>
-                                        <input type="text" required autoFocus className="input-field mt-1" value={editForm.commune || ''} onChange={e => setEditForm({ ...editForm, commune: e.target.value })} />
+                                        <div className="flex gap-2 mt-1">
+                                            <input type="text" required autoFocus className="input-field flex-1" value={editForm.commune || ''} onChange={e => setEditForm({ ...editForm, commune: e.target.value })} />
+                                            <NpaField
+                                                city={editForm.commune || ''}
+                                                onCityChange={commune => setEditForm({ ...editForm, commune })}
+                                                value={editForm.npa || ''}
+                                                onChange={npa => setEditForm({ ...editForm, npa })}
+                                            />
+                                        </div>
                                     </div>
                                     <div>
                                         <label className="text-xs font-bold text-slate-400 uppercase">Client / Repère</label>
@@ -739,9 +747,18 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
                                     </div>
                                 </div>
                             ) : (
-                                <div>
-                                    <label className="text-xs font-bold text-slate-400 uppercase">Nom</label>
-                                    <input type="text" required autoFocus className="input-field mt-1" value={editForm.nom} onChange={e => setEditForm({ ...editForm, nom: e.target.value })} />
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                    <div className="md:col-span-2">
+                                        <label className="text-xs font-bold text-slate-400 uppercase">Nom</label>
+                                        <input type="text" required autoFocus className="input-field mt-1" value={editForm.nom} onChange={e => setEditForm({ ...editForm, nom: e.target.value })} />
+                                    </div>
+                                    <div>
+                                        {/* Chantier legacy (pas de numéro) : pas de champ Commune ici pour
+                                            lier le NPA bidirectionnellement — champ NPA simple, éditable
+                                            à la main comme avant. */}
+                                        <label className="text-xs font-bold text-slate-400 uppercase">NPA</label>
+                                        <input type="text" maxLength={10} className="input-field mt-1" value={editForm.npa || ''} onChange={e => setEditForm({ ...editForm, npa: e.target.value })} />
+                                    </div>
                                 </div>
                             )}
                             <div className="max-w-[calc(50%-0.5rem)]">
@@ -773,10 +790,7 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                 <div>
                                     <label className="text-xs font-bold text-slate-400 uppercase">Adresse Travaux</label>
-                                    <div className="flex gap-2 mt-1">
-                                        <input type="text" className="input-field flex-1" value={editForm.address_work || ''} onChange={e => setEditForm({ ...editForm, address_work: e.target.value })} />
-                                        <NpaField addressWork={editForm.address_work || ''} value={editForm.npa || ''} onChange={npa => setEditForm({ ...editForm, npa })} />
-                                    </div>
+                                    <input type="text" className="input-field mt-1" value={editForm.address_work || ''} onChange={e => setEditForm({ ...editForm, address_work: e.target.value })} />
                                 </div>
                                 <div>
                                     <label className="text-xs font-bold text-slate-400 uppercase">Adresse Facturation</label>

@@ -33,15 +33,6 @@ async function load(): Promise<ChLocality[]> {
     return loading;
 }
 
-// Extrait la localité candidate d'une adresse en une ligne du type
-// "Rue de la Gare 12, Leytron" (convention du placeholder du champ) : le
-// dernier segment après la dernière virgule, ou la chaîne entière si pas de
-// virgule (adresse saisie comme juste un nom de ville).
-export function extractLocalityCandidate(addressWork: string): string {
-    const parts = addressWork.split(',');
-    return parts[parts.length - 1].trim();
-}
-
 // Suggestions pour un dropdown d'auto-complétion — préfixe, insensible à la
 // casse, 8 résultats max. Chaîne vide/trop courte -> aucune suggestion (évite
 // de proposer les 4300 entrées au premier caractère tapé).
@@ -70,4 +61,19 @@ export async function exactNpaMatch(query: string): Promise<ChLocality | null> {
     const data = await load();
     const matches = data.filter(e => e.v.toLowerCase() === q);
     return matches.length === 1 ? matches[0] : null;
+}
+
+// Sens inverse (NPA -> ville), même philosophie de prudence : un NPA
+// n'existe presque toujours qu'avec un seul nom de localité (même quand une
+// grande ville a plusieurs NPA, chaque NPA précis reste associé à un seul
+// nom) — mais si jamais le dataset en liait plusieurs, on laisse le champ
+// ville intact plutôt que d'imposer un nom qui pourrait être le mauvais.
+export async function localityByNpa(npa: string): Promise<ChLocality | null> {
+    const q = npa.trim();
+    if (!q) return null;
+    const data = await load();
+    const matches = data.filter(e => e.n === q);
+    if (matches.length === 0) return null;
+    const distinctNames = new Set(matches.map(m => m.v));
+    return distinctNames.size === 1 ? matches[0] : null;
 }

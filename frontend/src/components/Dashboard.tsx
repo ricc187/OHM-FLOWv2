@@ -372,15 +372,23 @@ export const Dashboard: React.FC<Props> = ({ currentUser, onSelectChantier }) =>
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                             <div>
                                 <label className="text-xs font-bold text-primary/80 uppercase tracking-widest mb-2 block">Commune / Localité</label>
-                                <input
-                                    type="text"
-                                    autoFocus
-                                    className="input-field"
-                                    value={newChantier.commune}
-                                    onChange={e => setNewChantier({ ...newChantier, commune: e.target.value })}
-                                    required
-                                    placeholder="Ex: Martigny"
-                                />
+                                <div className="flex gap-2">
+                                    <input
+                                        type="text"
+                                        autoFocus
+                                        className="input-field flex-1"
+                                        value={newChantier.commune}
+                                        onChange={e => setNewChantier({ ...newChantier, commune: e.target.value })}
+                                        required
+                                        placeholder="Ex: Martigny"
+                                    />
+                                    <NpaField
+                                        city={newChantier.commune}
+                                        onCityChange={commune => setNewChantier({ ...newChantier, commune })}
+                                        value={newChantier.npa}
+                                        onChange={npa => setNewChantier({ ...newChantier, npa })}
+                                    />
+                                </div>
                             </div>
                             <div>
                                 <label className="text-xs font-bold text-primary/80 uppercase tracking-widest mb-2 block">Client / Repère</label>
@@ -435,10 +443,7 @@ export const Dashboard: React.FC<Props> = ({ currentUser, onSelectChantier }) =>
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                             <div>
                                 <label className="text-xs font-bold text-primary/80 uppercase tracking-widest mb-2 block">Adresse Travaux</label>
-                                <div className="flex gap-2">
-                                    <input type="text" className="input-field flex-1" value={newChantier.address_work} onChange={e => setNewChantier({ ...newChantier, address_work: e.target.value })} placeholder="Rue, Ville..." />
-                                    <NpaField addressWork={newChantier.address_work} value={newChantier.npa} onChange={npa => setNewChantier({ ...newChantier, npa })} />
-                                </div>
+                                <input type="text" className="input-field" value={newChantier.address_work} onChange={e => setNewChantier({ ...newChantier, address_work: e.target.value })} placeholder="Rue, Ville..." />
                             </div>
                             <div>
                                 <label className="text-xs font-bold text-primary/80 uppercase tracking-widest mb-2 block">Adresse Facturation</label>

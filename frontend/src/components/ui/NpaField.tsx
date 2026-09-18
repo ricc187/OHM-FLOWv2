@@ -1,29 +1,38 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ChLocality, exactNpaMatch, extractLocalityCandidate, suggestLocalities } from '../../chLocalities';
+import { ChLocality, exactNpaMatch, localityByNpa, suggestLocalities } from '../../chLocalities';
 
 interface Props {
-    // Adresse complète du chantier (le champ "Rue, Ville...") — la localité
-    // candidate est extraite du dernier segment après la dernière virgule
-    // (voir extractLocalityCandidate).
-    addressWork: string;
+    // Nom de ville tel quel (champ "Commune / Localité") — contrairement à
+    // "Adresse Travaux", ce n'est pas une adresse composée, donc comparé
+    // directement au dataset, sans en extraire un segment.
+    city: string;
+    onCityChange: (city: string) => void;
     value: string;
     onChange: (npa: string) => void;
 }
 
-// Petit champ NPA à côté du champ adresse existant : se remplit tout seul
-// dès qu'une localité suisse reconnue sans ambiguïté est tapée (dataset
-// statique, voir chLocalities.ts), sinon propose une liste de suggestions
-// cliquables. Reste un champ texte normal, éditable à la main à tout moment
-// (le dataset ne couvre que les localités officielles, pas les hameaux).
-export const NpaField: React.FC<Props> = ({ addressWork, value, onChange }) => {
+// Petit champ NPA à côté de "Commune / Localité", bidirectionnel :
+// - ville tapée -> NPA auto-rempli si la localité est reconnue sans
+//   ambiguïté (dataset statique, voir chLocalities.ts) ;
+// - NPA tapé directement -> nom de ville auto-rempli, même principe de
+//   prudence.
+// Sinon propose une liste de suggestions cliquables. Reste un champ texte
+// normal, éditable à la main à tout moment (le dataset ne couvre que les
+// localités officielles, pas les hameaux).
+export const NpaField: React.FC<Props> = ({ city, onCityChange, value, onChange }) => {
     const [suggestions, setSuggestions] = useState<ChLocality[]>([]);
     const [showSuggestions, setShowSuggestions] = useState(false);
     // Ne jamais écraser un NPA que l'admin vient lui-même de taper à la main
-    // dans CE champ — seule la frappe dans l'adresse déclenche l'auto-fill.
-    const lastAutoFilled = useRef<string | null>(null);
+    // dans CE champ — seule la frappe de la ville déclenche l'auto-fill.
+    const lastAutoFilledNpa = useRef<string | null>(null);
+    // Même garde dans l'autre sens : ne jamais écraser une ville déjà tapée
+    // à la main — seule la frappe du NPA (quand la ville est encore vide,
+    // ou vaut ce qu'on y a nous-même écrit) déclenche l'auto-fill.
+    const lastAutoFilledCity = useRef<string | null>(null);
 
+    // Ville -> NPA
     useEffect(() => {
-        const candidate = extractLocalityCandidate(addressWork);
+        const candidate = city.trim();
         let cancelled = false;
         if (candidate.length < 2) {
             setSuggestions([]);
@@ -32,9 +41,9 @@ export const NpaField: React.FC<Props> = ({ addressWork, value, onChange }) => {
         (async () => {
             const exact = await exactNpaMatch(candidate);
             if (cancelled) return;
-            if (exact && (value === '' || value === lastAutoFilled.current)) {
+            if (exact && (value === '' || value === lastAutoFilledNpa.current)) {
                 onChange(exact.n);
-                lastAutoFilled.current = exact.n;
+                lastAutoFilledNpa.current = exact.n;
                 setSuggestions([]);
                 return;
             }
@@ -43,11 +52,26 @@ export const NpaField: React.FC<Props> = ({ addressWork, value, onChange }) => {
         })();
         return () => { cancelled = true; };
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [addressWork]);
+    }, [city]);
+
+    // NPA -> ville (sens inverse)
+    useEffect(() => {
+        const candidate = city.trim();
+        if (candidate !== '' && candidate !== lastAutoFilledCity.current) return;
+        let cancelled = false;
+        (async () => {
+            const loc = await localityByNpa(value);
+            if (cancelled || !loc || loc.v === candidate) return;
+            onCityChange(loc.v);
+            lastAutoFilledCity.current = loc.v;
+        })();
+        return () => { cancelled = true; };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [value]);
 
     const pick = (loc: ChLocality) => {
         onChange(loc.n);
-        lastAutoFilled.current = loc.n;
+        lastAutoFilledNpa.current = loc.n;
         setSuggestions([]);
         setShowSuggestions(false);
     };
@@ -60,7 +84,7 @@ export const NpaField: React.FC<Props> = ({ addressWork, value, onChange }) => {
                 placeholder="NPA"
                 maxLength={10}
                 value={value}
-                onChange={e => { lastAutoFilled.current = null; onChange(e.target.value); }}
+                onChange={e => { lastAutoFilledNpa.current = null; onChange(e.target.value); }}
                 onFocus={() => setShowSuggestions(true)}
                 onBlur={() => setTimeout(() => setShowSuggestions(false), 150)}
             />
