@@ -484,6 +484,10 @@ class Chantier(db.Model):
     # New fields
     address_work = db.Column(db.String(200), nullable=True)
     address_billing = db.Column(db.String(200), nullable=True)
+    # NPA suisse — saisi manuellement ou auto-complété côté frontend depuis
+    # un dataset statique de localités CH (voir chLocalities.ts), jamais
+    # dérivé/validé côté backend : un simple champ texte comme les autres.
+    npa = db.Column(db.String(10), nullable=True)
     # date_start/date_end existent encore en base (convention du repo : une
     # colonne n'est jamais supprimée par migration) mais ne sont plus lus ni
     # écrits par l'app — la période chantier n'existe plus côté produit.
@@ -552,6 +556,7 @@ class Chantier(db.Model):
             'pdf_path': self.pdf_path,
             'address_work': self.address_work,
             'address_billing': self.address_billing,
+            'npa': self.npa,
             'remarque': self.remarque,
             'status': self.status,
             'archived': bool(self.archived),
@@ -1134,6 +1139,11 @@ class ChantierFinancier(db.Model):
     charge_materiel_prevue = db.Column(db.Float, nullable=False, default=0.0)
     taux_horaire = db.Column(db.Float, nullable=False, default=0.0)
     pct_petites_fournitures = db.Column(db.Float, nullable=False, default=0.0)
+    # None (par défaut) = heures_prevues reste la somme des ca_lignes_prevues.
+    # Une valeur = override manuel saisi via le crayon "Personnel" du
+    # frontend (voir financier_calculs.compute_financier), sans avoir à
+    # redécouper les lignes CA une à une.
+    heures_prevues_manuel = db.Column(db.Float, nullable=True)
 
     created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
@@ -1147,6 +1157,7 @@ class ChantierFinancier(db.Model):
             'charge_materiel_prevue': self.charge_materiel_prevue,
             'taux_horaire': self.taux_horaire,
             'pct_petites_fournitures': self.pct_petites_fournitures,
+            'heures_prevues_manuel': self.heures_prevues_manuel,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
         }
@@ -1566,6 +1577,7 @@ def init_db():
                 new_cols = {
                     'address_work': 'VARCHAR(200)',
                     'address_billing': 'VARCHAR(200)',
+                    'npa': 'VARCHAR(10)',
                     'date_start': 'VARCHAR(20)',
                     'date_end': 'VARCHAR(20)',
                     'remarque': 'TEXT',
@@ -1752,6 +1764,16 @@ def init_db():
                     conn.commit()
                     inspector = inspect(db.engine)
                     existing_tables = inspector.get_table_names()
+
+            # 6b. heures_prevues_manuel — override du total heures prévues
+            # (voir crayon "Personnel", FinancesTab.tsx), NULL = comportement
+            # historique (somme des ca_lignes_prevues) inchangé.
+            if 'chantier_financiers' in existing_tables:
+                cols = [c['name'] for c in inspector.get_columns('chantier_financiers')]
+                if 'heures_prevues_manuel' not in cols:
+                    logger.info("Migrating chantier_financiers: adding heures_prevues_manuel")
+                    conn.execute(text("ALTER TABLE chantier_financiers ADD COLUMN heures_prevues_manuel FLOAT"))
+                    conn.commit()
 
         # One-time migration: CA prévisionnel était 3 champs fixes sur
         # chantier_financiers (montant_adjuge/heures_adjugees, montant_regie/
@@ -2255,6 +2277,31 @@ def user_operations(current_user, user_id):
         return jsonify({'error': 'User not found'}), 404
 
     if request.method == 'DELETE':
+        # Entry/Leave/ChantierAssignment.user_id sont NOT NULL — sans ce
+        # garde, db.session.delete(user) plantait en IntegrityError (400
+        # générique "Invalid or inconsistent data") dès que le compte avait
+        # la moindre heure/absence/affectation, sans jamais dire pourquoi.
+        # Pas de cascade delete ici (contrairement à Chantier.entries) : on
+        # ne veut pas qu'une suppression de compte efface silencieusement
+        # tout un historique d'heures/congés — l'admin doit d'abord
+        # réattribuer ou archiver ces données ailleurs.
+        entries_count = Entry.query.filter_by(user_id=user_id).count()
+        leaves_count = Leave.query.filter_by(user_id=user_id).count()
+        assignments_count = ChantierAssignment.query.filter_by(user_id=user_id).count()
+        if entries_count or leaves_count or assignments_count:
+            parts = []
+            if entries_count:
+                parts.append(f"{entries_count} heure{'s' if entries_count > 1 else ''} entrée{'s' if entries_count > 1 else ''}")
+            if leaves_count:
+                parts.append(f"{leaves_count} absence{'s' if leaves_count > 1 else ''}")
+            if assignments_count:
+                parts.append(f"{assignments_count} chantier{'s' if assignments_count > 1 else ''} assigné{'s' if assignments_count > 1 else ''}")
+            return jsonify({
+                'error': f"Impossible de supprimer : {', '.join(parts)} lié{'s' if len(parts) > 1 or entries_count + leaves_count + assignments_count > 1 else ''} à ce compte. Réattribuez ou archivez ces données avant de supprimer l'utilisateur.",
+                'entries_count': entries_count,
+                'leaves_count': leaves_count,
+                'assignments_count': assignments_count,
+            }), 400
         db.session.delete(user)
         db.session.commit()
         return jsonify({'message': 'User deleted'})
@@ -2321,6 +2368,83 @@ def force_logout_user(current_user, user_id):
     db.session.commit()
     audit_log('auth', current_user, f"force-logged-out {user.username} (id={user.id})")
     return jsonify({'message': f'{user.username} déconnecté de partout'})
+
+
+@app.route('/api/users/<int:user_id>/reset-password', methods=['POST'])
+@token_required
+def reset_user_password(current_user, user_id):
+    """Generates a fresh random temp password, same must_change_password
+    mechanism as an admin-set password (see PUT /api/users/<id>) — the
+    plaintext is returned once here for the admin to hand to the user, then
+    never stored or logged anywhere."""
+    if current_user.role != 'admin':
+        return jsonify({'error': 'Admin access required'}), 403
+    user = db.session.get(User, user_id)
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+
+    temp_password = secrets.token_urlsafe(9)  # 12 chars, well above MIN_LENGTH
+    user.set_password(temp_password)
+    user.must_change_password = True
+    db.session.commit()
+    audit_log('auth', current_user, f"reset password for {user.username} (id={user.id})")
+    return jsonify({'password': temp_password})
+
+
+@app.route('/api/users/<int:user_id>/detail', methods=['GET'])
+@token_required
+def get_user_detail(current_user, user_id):
+    """Fiche détail utilisateur (Gestion Utilisateurs) — un seul appel qui
+    rassemble tout ce qui était sinon éparpillé : solde vacances (déjà sur
+    User.to_dict()), chantiers actuellement assignés, total des heures
+    entrées, historique des absences.
+
+    Chantiers "en cours" pour ce user (interprétation validée avec l'admin) :
+    chantiers DISTINCTS (pas les lignes d'assignment) où ce user a au moins
+    une ChantierAssignment avec statut='confirme' (une 'proposition' est une
+    date candidate pas encore retenue par le client — ne compte pas comme
+    charge réelle), sur un chantier qui n'est ni DONE ni archivé. Aucun filtre
+    de date : un assignment ancien sur un chantier toujours ouvert compte
+    quand même — l'objectif est de repérer une surcharge de PROJETS ouverts,
+    pas l'occupation de l'agenda sur une période (déjà couvert ailleurs, voir
+    RhPlanningTab/Planning).
+
+    Total heures : somme all-time de Entry.heures pour ce user, sans filtre de
+    période pour l'instant (le plus simple qui réponde à la demande — un
+    filtre start/end pourra s'ajouter plus tard si besoin, voir prompt)."""
+    if current_user.role != 'admin':
+        return jsonify({'error': 'Admin access required'}), 403
+    user = db.session.get(User, user_id)
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+
+    chantiers_en_cours = (
+        db.session.query(Chantier.id, Chantier.nom)
+        .join(ChantierAssignment, ChantierAssignment.chantier_id == Chantier.id)
+        .filter(
+            ChantierAssignment.user_id == user_id,
+            ChantierAssignment.statut == 'confirme',
+            Chantier.status != 'DONE',
+            Chantier.archived == False,  # noqa: E712 — SQLAlchemy column comparison, not a Python bool check
+        )
+        .distinct()
+        .order_by(Chantier.nom)
+        .all()
+    )
+
+    total_heures = db.session.query(func.coalesce(func.sum(Entry.heures), 0.0)).filter(
+        Entry.user_id == user_id
+    ).scalar()
+
+    leaves = Leave.query.filter_by(user_id=user_id).order_by(Leave.date_start.desc()).all()
+
+    return jsonify({
+        'user': user.to_dict(),
+        'chantiers_en_cours': [{'id': cid, 'nom': nom} for cid, nom in chantiers_en_cours],
+        'chantiers_en_cours_count': len(chantiers_en_cours),
+        'total_heures': round(total_heures, 2),
+        'leaves': [l.to_dict() for l in leaves],
+    })
 
 
 @app.route('/api/backup', methods=['POST'])
@@ -2471,6 +2595,7 @@ def manage_chantiers(current_user):
             pdf_path=data.get('pdf_path', ''),
             address_work=data.get('address_work'),
             address_billing=data.get('address_billing'),
+            npa=data.get('npa'),
             remarque=data.get('remarque'),
             deadline=data.get('deadline'),
             status=data.get('status', 'FUTURE')
@@ -2535,6 +2660,7 @@ def chantier_detail(current_user, chantier_id):
         chantier.pdf_path = data.get('pdf_path', chantier.pdf_path)
         chantier.address_work = data.get('address_work', chantier.address_work)
         chantier.address_billing = data.get('address_billing', chantier.address_billing)
+        chantier.npa = data.get('npa', chantier.npa)
         if 'referent_id' in data:
             new_referent_id = data.get('referent_id')
             if new_referent_id:
@@ -3255,7 +3381,7 @@ def _parse_date_arg(name):
 # Renamed from VACATION/SICKNESS/OTHER — see the leaves type migration in
 # init_db(). Mirrors frontend Planning.tsx's LEAVE_TYPE_OPTIONS; keep both in
 # sync if a label changes.
-LEAVE_TYPES = ['CONGE', 'MALADIE', 'ABSENCE', 'ARMEE', 'CONGE_PAT_MAT', 'DEMENAGEMENT']
+LEAVE_TYPES = ['CONGE', 'MALADIE', 'ABSENCE', 'ARMEE', 'CONGE_PAT_MAT', 'DEMENAGEMENT', 'FORMATION']
 LEAVE_TYPE_LABELS = {
     'CONGE': 'Congé',
     'MALADIE': 'Maladie',
@@ -3263,6 +3389,7 @@ LEAVE_TYPE_LABELS = {
     'ARMEE': 'Armée',
     'CONGE_PAT_MAT': 'Congé pat./mat.',
     'DEMENAGEMENT': 'Déménagement',
+    'FORMATION': 'Cours et formation',
 }
 # Fixed, distinct color per absence type for the Agenda grid. No per-type
 # palette existed anywhere in the app before this (Planning.tsx colors by
@@ -3275,6 +3402,7 @@ LEAVE_TYPE_COLORS = {
     'ARMEE': '#4B5563',          # gray-600
     'CONGE_PAT_MAT': '#F472B6',  # pink-400
     'DEMENAGEMENT': '#FB923C',   # orange-400
+    'FORMATION': '#0EA5E9',      # sky-500
 }
 # Deterministic per-chantier color for the Agenda grid — hash(chantier_id)
 # into a fixed 15-color palette chosen to stay visually distinct from
@@ -4735,6 +4863,7 @@ def _financier_payload(chantier_id):
             acomptes_montants=[a.montant for a in acomptes],
             achats_montants=[a.montant for a in achats],
             heures_reelles=heures_reelles,
+            heures_prevues_override=financier.heures_prevues_manuel,
         ))
     return payload
 
@@ -4762,6 +4891,11 @@ def manage_financier(current_user, chantier_id):
     if err: return err
     pct_petites_fournitures, err = _parse_amount(data, 'pct_petites_fournitures', required=False, default=financier.pct_petites_fournitures if financier else 0.0)
     if err: return err
+    # None = pas d'override, absent du body -> conserve la valeur existante
+    # (ex: le crayon "Matériel" ne touche jamais à ce champ) ; explicitement
+    # envoyé -> remplace (0 est une valeur valide, distincte de None).
+    heures_prevues_manuel, err = _parse_amount(data, 'heures_prevues_manuel', required=False, default=financier.heures_prevues_manuel if financier else None)
+    if err: return err
 
     materiel_or_pct_changed = financier is None or (
         financier.charge_materiel_prevue != charge_materiel_prevue
@@ -4775,6 +4909,7 @@ def manage_financier(current_user, chantier_id):
     financier.charge_materiel_prevue = charge_materiel_prevue
     financier.taux_horaire = taux_horaire
     financier.pct_petites_fournitures = pct_petites_fournitures
+    financier.heures_prevues_manuel = heures_prevues_manuel
     db.session.commit()
 
     if materiel_or_pct_changed:
@@ -5850,6 +5985,7 @@ def get_financier_stats(current_user):
             acomptes_montants=[a.montant for a in acomptes_by.get(cid, [])],
             achats_montants=[a.montant for a in achats_by.get(cid, [])],
             heures_reelles=heures_by.get(cid, 0.0),
+            heures_prevues_override=fin.heures_prevues_manuel,
         )
         per_chantier.append({'id': cid, 'nom': chantier.nom, 'status': chantier.status, **calc})
 
