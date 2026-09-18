@@ -3,6 +3,7 @@ import { Chantier, User, ChantierStatus } from '../types';
 import { Folder, Plus, Download, X, Search, CalendarDays } from 'lucide-react';
 import { ChantierCard } from './ChantierCard';
 import { InlineSearchSelect } from './ui/InlineSearchSelect';
+import { NpaField } from './ui/NpaField';
 import { AwesomeDatePicker } from './ui/AwesomeDatePicker';
 import { chantierPhase, ChantierPhase } from '../chantierPhase';
 import { api } from '../api';
@@ -58,6 +59,7 @@ export const Dashboard: React.FC<Props> = ({ currentUser, onSelectChantier }) =>
         status: 'FUTURE' as ChantierStatus,
         address_work: '',
         address_billing: '',
+        npa: '',
         remarque: '',
         deadline: ''
     });
@@ -169,6 +171,7 @@ export const Dashboard: React.FC<Props> = ({ currentUser, onSelectChantier }) =>
                 status: 'FUTURE',
                 address_work: '',
                 address_billing: '',
+                npa: '',
                 remarque: '',
                 deadline: ''
             });
@@ -299,14 +302,18 @@ export const Dashboard: React.FC<Props> = ({ currentUser, onSelectChantier }) =>
                     <InlineSearchSelect
                         value={selectedChantierId || undefined}
                         onChange={(v: string) => setSelectedChantierId(v)}
-                        placeholder={`Rechercher un chantier${filterStatus !== 'ALL' ? ` « ${FILTER_LABELS[filterStatus]} »` : ''}…`}
+                        placeholder={`Rechercher par nom, numéro, référent…${filterStatus !== 'ALL' ? ` (« ${FILTER_LABELS[filterStatus]} »)` : ''}`}
                         icon={<Search size={18} />}
+                        focusShortcut
+                        emphasized
                         options={(filterStatus === 'ALL' ? chantiers : chantiers.filter(c => chantierPhase(c) === filterStatus)).map(c => ({
                             // nom = "{numero}-{commune}-{client_repere}" (voir Dashboard
                             // formulaire création) — chercher dans ce texte complet couvre
                             // déjà numéro, ville et client en une seule recherche substring.
+                            // keywords ajoute le référent, absent du label affiché.
                             value: c.id.toString(),
-                            label: c.nom
+                            label: c.nom,
+                            keywords: c.referent_name ?? ''
                         }))}
                     />
                 </div>
@@ -428,7 +435,10 @@ export const Dashboard: React.FC<Props> = ({ currentUser, onSelectChantier }) =>
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                             <div>
                                 <label className="text-xs font-bold text-primary/80 uppercase tracking-widest mb-2 block">Adresse Travaux</label>
-                                <input type="text" className="input-field" value={newChantier.address_work} onChange={e => setNewChantier({ ...newChantier, address_work: e.target.value })} placeholder="Rue, Ville..." />
+                                <div className="flex gap-2">
+                                    <input type="text" className="input-field flex-1" value={newChantier.address_work} onChange={e => setNewChantier({ ...newChantier, address_work: e.target.value })} placeholder="Rue, Ville..." />
+                                    <NpaField addressWork={newChantier.address_work} value={newChantier.npa} onChange={npa => setNewChantier({ ...newChantier, npa })} />
+                                </div>
                             </div>
                             <div>
                                 <label className="text-xs font-bold text-primary/80 uppercase tracking-widest mb-2 block">Adresse Facturation</label>

@@ -215,9 +215,13 @@ export const DocumentExplorer: React.FC<Props> = ({ chantierId, chantierNom, isA
                     <div className="flex-1 flex min-h-0">
                         {/* Sidebar — folder list, Windows-Explorer style. On mobile this IS
                             the first screen (full width); picking a folder switches to the
-                            files screen. sm+ always shows both panes side by side. */}
-                        <div className={`${mobileView === 'files' ? 'hidden sm:block' : 'block'} w-full sm:w-56 border-r border-black/5 bg-slate-50/50 shrink-0 overflow-y-auto py-2`}>
-                            {CATEGORIES.map(cat => {
+                            files screen. sm+ always shows both panes side by side.
+                            Repérage quasi instantané sur mobile : un dossier avec du contenu
+                            devient une carte pleine largeur, accentuée (bordure + fond tinté +
+                            badge nombre) — un dossier vide reste un simple chip compact,
+                            groupé à part pour ne pas polluer visuellement la liste. */}
+                        <div className={`${mobileView === 'files' ? 'hidden sm:block' : 'block'} w-full sm:w-56 border-r border-black/5 bg-slate-50/50 shrink-0 overflow-y-auto p-2 space-y-1.5`}>
+                            {CATEGORIES.filter(cat => byCategory(cat).length > 0).map(cat => {
                                 const meta = CATEGORY_META[cat];
                                 const count = byCategory(cat).length;
                                 const active = activeCategory === cat;
@@ -225,17 +229,40 @@ export const DocumentExplorer: React.FC<Props> = ({ chantierId, chantierNom, isA
                                     <button
                                         key={cat}
                                         onClick={() => { setActiveCategory(cat); setMobileView('files'); }}
-                                        className={`w-full flex items-center gap-2.5 px-4 py-3 sm:py-2.5 text-sm font-bold transition-colors ${active
-                                            ? 'bg-ohm-primary/15 text-ohm-primary sm:border-r-2 sm:border-ohm-primary'
-                                            : 'text-slate-500 hover:bg-black/5 hover:text-slate-900'
+                                        className={`w-full flex items-center gap-3 px-4 py-4 rounded-xl border-l-4 text-left transition-colors ${active
+                                            ? 'bg-ohm-primary/15 border-ohm-primary'
+                                            : 'bg-white border-ohm-primary/50 hover:border-ohm-primary hover:bg-ohm-primary/5'
                                             }`}
                                     >
-                                        <Folder size={18} className="shrink-0" fill={active ? 'currentColor' : 'none'} fillOpacity={active ? 0.15 : 0} />
-                                        <span className="truncate flex-1 text-left">{meta.label}</span>
-                                        <span className="text-xs font-mono text-slate-400">{count}</span>
+                                        <meta.icon size={24} className={`shrink-0 ${active ? 'text-ohm-primary' : 'text-slate-700'}`} />
+                                        <span className={`truncate flex-1 font-black text-sm ${active ? 'text-ohm-primary' : 'text-slate-900'}`}>{meta.label}</span>
+                                        <span className={`shrink-0 text-xs font-black rounded-full px-2 py-0.5 ${active ? 'bg-ohm-primary text-ohm-bg' : 'bg-slate-900 text-white'}`}>{count}</span>
                                     </button>
                                 );
                             })}
+                            {/* Dossiers vides — chips discrets, regroupés en ligne pour rester
+                                compacts au lieu d'une pleine ligne chacun. */}
+                            {CATEGORIES.some(cat => byCategory(cat).length === 0) && (
+                                <div className="flex flex-wrap gap-1.5 px-2 pt-1">
+                                    {CATEGORIES.filter(cat => byCategory(cat).length === 0).map(cat => {
+                                        const meta = CATEGORY_META[cat];
+                                        const active = activeCategory === cat;
+                                        return (
+                                            <button
+                                                key={cat}
+                                                onClick={() => { setActiveCategory(cat); setMobileView('files'); }}
+                                                className={`inline-flex items-center gap-1.5 pl-2 pr-3 py-1.5 rounded-full text-xs font-bold transition-colors ${active
+                                                    ? 'bg-ohm-primary/15 text-ohm-primary'
+                                                    : 'bg-slate-100 text-slate-400 hover:bg-slate-200 hover:text-slate-600'
+                                                    }`}
+                                            >
+                                                <meta.icon size={14} className="shrink-0" />
+                                                {meta.label}
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                            )}
                         </div>
 
                         {/* Main pane — files in the selected folder */}

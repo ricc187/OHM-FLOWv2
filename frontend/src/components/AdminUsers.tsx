@@ -1,33 +1,25 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { User } from '../types';
-import { AwesomeSelect } from './ui/AwesomeSelect';
 import { api } from '../api';
-import { ShieldCheck, ShieldAlert, KeyRound, LogOut, Download, Plus, Pencil, Trash2 } from 'lucide-react';
-import { useConfirm } from '../hooks/useConfirm';
-import { ConfirmDialog } from './ConfirmDialog';
+import { ShieldCheck, ShieldAlert, KeyRound, Download, Plus } from 'lucide-react';
 import { useMountTransition } from '../hooks/useMountTransition';
+import { UserDetail } from './UserDetail';
+import { UserFormModal } from './UserFormModal';
 
 interface Props {
     currentUser: User;
 }
 
 export const AdminUsers: React.FC<Props> = ({ currentUser }) => {
-    const { confirm, confirmDialogProps } = useConfirm();
     const [users, setUsers] = useState<User[]>([]);
-    const [showModal, setShowModal] = useState(false);
-    // transitions-dev "06-modal" — useMountTransition keeps the modal
-    // mounted through its close tween instead of vanishing the instant
-    // showModal/mfaResetTarget flips, no changes needed to the existing
-    // setShowModal(false)/setMfaResetTarget(null) call sites below.
-    const modalT = useMountTransition(showModal, 150);
-    const [editingUser, setEditingUser] = useState<User | null>(null);
-    const [formData, setFormData] = useState({
-        username: '',
-        password: '',
-        role: 'user' as 'admin' | 'user' | 'depanneur' | 'vehicule',
-        vacationBalance: '0'
-    });
-    const [formError, setFormError] = useState('');
+    // Fiche détail — clic sur un username (voir la cellule nom dans la
+    // table) bascule cette vue à la place de la liste, pas une modale :
+    // assez de contenu (chantiers, absences) pour mériter son propre écran.
+    // Reset mdp / modifier / force-logout / supprimer vivent maintenant sur
+    // cette fiche (voir UserDetail.tsx), plus ici — seule la création
+    // ("Ajouter") et le reset 2FA restent sur la liste.
+    const [selectedUserId, setSelectedUserId] = useState<number | null>(null);
+    const [showCreateModal, setShowCreateModal] = useState(false);
 
     // "Réinitialiser 2FA" requires the ACTING admin's own password — a
     // small side prompt rather than a full modal, since it's a rare action.
@@ -54,88 +46,6 @@ export const AdminUsers: React.FC<Props> = ({ currentUser }) => {
             }
         } catch (error) {
             console.error("Failed to fetch users", error);
-        }
-    };
-
-    const handleOpenCreate = () => {
-        setEditingUser(null);
-        setFormData({ username: '', password: '', role: 'user', vacationBalance: '0' });
-        setFormError('');
-        setShowModal(true);
-    };
-
-    const handleOpenEdit = (user: User) => {
-        setEditingUser(user);
-        setFormData({ username: user.username, password: '', role: user.role, vacationBalance: String(user.vacation_balance ?? 0) });
-        setFormError('');
-        setShowModal(true);
-    };
-
-    const handleSubmit = async (e: React.FormEvent) => {
-        e.preventDefault();
-        setFormError('');
-        if (!formData.username) {
-            setFormError('Le nom est requis');
-            return;
-        }
-        if (!editingUser && !formData.password) {
-            setFormError('Un mot de passe initial est requis');
-            return;
-        }
-        const vacationBalance = parseFloat(formData.vacationBalance.replace(',', '.'));
-        if (isNaN(vacationBalance) || vacationBalance < 0) {
-            setFormError('Solde de vacances invalide');
-            return;
-        }
-
-        try {
-            const payload: any = { username: formData.username, role: formData.role, vacation_balance: vacationBalance };
-            if (formData.password) payload.password = formData.password;
-
-            const res = editingUser
-                ? await api.put(`/api/users/${editingUser.id}`, payload)
-                : await api.post('/api/users', payload);
-
-            if (!res.ok) {
-                const data = await res.json().catch(() => ({}));
-                throw new Error(data.error || 'Erreur lors de l\'enregistrement');
-            }
-
-            fetchUsers();
-            setShowModal(false);
-        } catch (err: any) {
-            setFormError(err.message || "Erreur lors de l'enregistrement");
-        }
-    };
-
-    const handleDelete = async (user: User) => {
-        // Strict (taper le nom) : suppression définitive d'un compte —
-        // toutes ses saisies/congés/entrées restent attribués à un user_id
-        // qui n'existera plus, une simple checkbox n'est pas assez de
-        // friction pour ça (voir prompt double-validation, tier "strict").
-        const ok = await confirm({
-            title: 'Supprimer cet utilisateur ?',
-            message: `Le compte « ${user.username} » sera définitivement supprimé.`,
-            strict: true,
-            confirmText: user.username,
-        });
-        if (!ok) return;
-        const res = await api.delete(`/api/users/${user.id}`);
-        if (res.ok) fetchUsers();
-    };
-
-    const handleForceLogout = async (user: User) => {
-        if (user.id === currentUser.id) return; // backend also rejects this — button is disabled on our own row anyway
-        // Exception délibérée à la double validation (voir prompt) : ni une
-        // suppression ni une clôture — juste une invalidation de session,
-        // pleinement réversible (l'utilisateur se reconnecte). window.confirm
-        // explicite : `confirm` local (useConfirm ci-dessus) masquerait sinon
-        // le global du même nom.
-        if (!window.confirm(`Déconnecter ${user.username} de partout ? Sa session en cours sera immédiatement invalidée.`)) return;
-        const res = await api.post(`/api/users/${user.id}/force-logout`);
-        if (!res.ok) {
-            const data = await res.json().catch(() => ({}));
-            alert(data.error || 'Erreur');
         }
     };
 
@@ -176,6 +86,17 @@ export const AdminUsers: React.FC<Props> = ({ currentUser }) => {
         }
     };
 
+    if (selectedUserId !== null) {
+        return (
+            <UserDetail
+                userId={selectedUserId}
+                currentUser={currentUser}
+                onBack={() => setSelectedUserId(null)}
+                onDeleted={() => { setSelectedUserId(null); fetchUsers(); }}
+            />
+        );
+    }
+
     return (
         <div className="animate-fade-in p-6">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
@@ -192,7 +113,7 @@ export const AdminUsers: React.FC<Props> = ({ currentUser }) => {
                         Backup BDD
                     </button>
                     <button
-                        onClick={handleOpenCreate}
+                        onClick={() => setShowCreateModal(true)}
                         className="flex-1 sm:flex-none bg-ohm-primary text-ohm-bg font-black px-6 py-3 rounded-xl shadow-lg hover:bg-yellow-300 transition-all flex items-center justify-center gap-2 uppercase text-xs tracking-wider"
                     >
                         <Plus size={20} strokeWidth={3} />
@@ -218,7 +139,13 @@ export const AdminUsers: React.FC<Props> = ({ currentUser }) => {
                                 <tr key={user.id} className="text-sm hover:bg-slate-50/30 transition-colors">
                                     <td className="px-6 py-4">
                                         <div className="flex flex-col">
-                                            <span className="font-bold text-slate-900">{user.username}</span>
+                                            <button
+                                                onClick={() => setSelectedUserId(user.id)}
+                                                className="font-bold text-slate-900 hover:text-ohm-primary transition-colors text-left w-fit"
+                                                title="Voir la fiche détail"
+                                            >
+                                                {user.username}
+                                            </button>
                                             {user.must_change_password && (
                                                 <span className="text-[10px] text-amber-600 font-bold uppercase mt-0.5">Mot de passe temporaire</span>
                                             )}
@@ -254,15 +181,6 @@ export const AdminUsers: React.FC<Props> = ({ currentUser }) => {
                                     </td>
                                     <td className="px-6 py-4 text-right">
                                         <div className="flex items-center justify-end gap-2">
-                                            {user.id !== currentUser.id && (
-                                                <button
-                                                    onClick={() => handleForceLogout(user)}
-                                                    className="p-2 text-slate-500 hover:text-red-500 hover:bg-red-500/10 rounded-lg transition-all"
-                                                    title="Déconnecter de partout"
-                                                >
-                                                    <LogOut className="w-5 h-5" />
-                                                </button>
-                                            )}
                                             {user.mfa_enabled && (
                                                 <button
                                                     onClick={() => { setMfaResetTarget(user); setMfaResetPassword(''); setMfaResetError(''); }}
@@ -272,18 +190,6 @@ export const AdminUsers: React.FC<Props> = ({ currentUser }) => {
                                                     <KeyRound className="w-5 h-5" />
                                                 </button>
                                             )}
-                                            <button
-                                                onClick={() => handleOpenEdit(user)}
-                                                className="p-2 text-slate-500 hover:text-ohm-primary hover:bg-ohm-primary/10 rounded-lg transition-all"
-                                            >
-                                                <Pencil size={20} />
-                                            </button>
-                                            <button
-                                                onClick={() => handleDelete(user)}
-                                                className="p-2 rounded-lg transition-all text-red-400 hover:bg-red-500/10"
-                                            >
-                                                <Trash2 size={20} />
-                                            </button>
                                         </div>
                                     </td>
                                 </tr>
@@ -293,86 +199,12 @@ export const AdminUsers: React.FC<Props> = ({ currentUser }) => {
                 </div>
             </div>
 
-            {modalT.mounted && (
-                <div className={`t-modal ${modalT.active ? 'is-open' : 'is-closing'} fixed inset-0 z-[100] flex items-center justify-center p-4`}>
-                    <div className="absolute inset-0 bg-ohm-bg/80 backdrop-blur-sm" onClick={() => setShowModal(false)}></div>
-                    <div className="relative w-full max-w-md bg-ohm-surface rounded-3xl border border-slate-300 shadow-2xl overflow-hidden">
-                        <div className="bg-slate-50/80 px-6 py-4 flex items-center justify-between border-b border-slate-300">
-                            <h3 className="font-black text-slate-900 uppercase tracking-widest text-sm">
-                                {editingUser ? 'Modifier' : 'Ajouter'} Collaborateur
-                            </h3>
-                            <button onClick={() => setShowModal(false)} className="text-slate-500 hover:text-slate-900">
-                                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
-                                </svg>
-                            </button>
-                        </div>
-                        <form onSubmit={handleSubmit} className="p-6 space-y-6">
-                            <div>
-                                <label className="block text-[10px] font-black uppercase text-slate-500 mb-2 tracking-widest">Nom / Username</label>
-                                <input
-                                    type="text"
-                                    required
-                                    value={formData.username}
-                                    onChange={(e) => setFormData({ ...formData, username: e.target.value })}
-                                    className="w-full bg-white border border-slate-300 rounded-xl px-4 py-3 text-slate-900 focus:ring-2 focus:ring-ohm-primary/50 transition-all outline-none"
-                                />
-                            </div>
-                            <div>
-                                <label className="block text-[10px] font-black uppercase text-slate-500 mb-2 tracking-widest">
-                                    {editingUser ? 'Nouveau mot de passe (laisser vide pour ne pas changer)' : 'Mot de passe initial (12 caractères min.)'}
-                                </label>
-                                <input
-                                    type="text"
-                                    autoComplete="off"
-                                    value={formData.password}
-                                    onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                                    className="w-full bg-white border border-slate-300 rounded-xl px-4 py-3 text-slate-900 font-mono focus:ring-2 focus:ring-ohm-primary/50 transition-all outline-none"
-                                />
-                                <p className="text-[10px] text-slate-400 mt-1.5">
-                                    {editingUser
-                                        ? "L'utilisateur devra en choisir un nouveau à sa prochaine connexion."
-                                        : "Communiquez-le à l'utilisateur — il devra en choisir un nouveau à sa première connexion."}
-                                </p>
-                            </div>
-                            <div>
-                                <label className="block text-[10px] font-black uppercase text-slate-500 mb-2 tracking-widest">Rôle</label>
-                                <AwesomeSelect
-                                    value={formData.role}
-                                    onChange={(val) => setFormData({ ...formData, role: val as 'user' | 'admin' | 'depanneur' | 'vehicule' })}
-                                    options={[
-                                        { value: 'user', label: 'Utilisateur' },
-                                        { value: 'depanneur', label: 'Dépanneur' },
-                                        { value: 'vehicule', label: 'Garagiste (véhicules uniquement)' },
-                                        { value: 'admin', label: 'Admin (2FA obligatoire)' }
-                                    ]}
-                                />
-                            </div>
-                            {formData.role !== 'vehicule' && (
-                                <div>
-                                    <label className="block text-[10px] font-black uppercase text-slate-500 mb-2 tracking-widest">Solde de vacances (jours)</label>
-                                    <input
-                                        type="number"
-                                        min="0"
-                                        step="0.5"
-                                        required
-                                        value={formData.vacationBalance}
-                                        onChange={(e) => setFormData({ ...formData, vacationBalance: e.target.value })}
-                                        className="w-full bg-white border border-slate-300 rounded-xl px-4 py-3 text-slate-900 focus:ring-2 focus:ring-ohm-primary/50 transition-all outline-none"
-                                    />
-                                </div>
-                            )}
-                            {formError && <p className="text-red-500 text-sm font-bold">{formError}</p>}
-                            <button
-                                type="submit"
-                                className="w-full bg-ohm-primary text-ohm-bg font-black py-4 rounded-xl shadow-lg hover:bg-yellow-300 transition-all uppercase tracking-widest active:scale-95"
-                            >
-                                {editingUser ? 'Mettre à jour' : 'Enregistrer'}
-                            </button>
-                        </form>
-                    </div>
-                </div>
-            )}
+            <UserFormModal
+                show={showCreateModal}
+                editingUser={null}
+                onClose={() => setShowCreateModal(false)}
+                onSaved={() => { fetchUsers(); setShowCreateModal(false); }}
+            />
 
             {mfaModalT.mounted && mfaResetTargetDisplay && (
                 <div className={`t-modal ${mfaModalT.active ? 'is-open' : 'is-closing'} fixed inset-0 z-[100] flex items-center justify-center p-4`}>
@@ -405,7 +237,6 @@ export const AdminUsers: React.FC<Props> = ({ currentUser }) => {
                     </form>
                 </div>
             )}
-            {confirmDialogProps && <ConfirmDialog {...confirmDialogProps} />}
         </div>
     );
 };

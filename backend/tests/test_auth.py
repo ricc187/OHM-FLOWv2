@@ -554,6 +554,60 @@ class AuthTestCase(unittest.TestCase):
         self.assertIn('vacation_balance', row)
         self.assertIn('mfa_enabled', row)
 
+    # --- DELETE /api/users/<id> : bloqué proprement si données liées ---
+
+    def test_delete_user_with_related_data_is_blocked_with_clear_message(self):
+        """Regression : DELETE /api/users/<id> heurtait une IntegrityError
+        brute (400 générique "Invalid or inconsistent data") dès que le
+        compte avait la moindre Entry/Leave/ChantierAssignment — ces FK sont
+        NOT NULL, donc SQLite refusait le delete sans jamais dire pourquoi
+        (trouvé en testant la fiche détail utilisateur dans un vrai
+        navigateur avec des données réalistes). Maintenant vérifié en amont,
+        avec les comptages exacts dans la réponse."""
+        admin_id = self._create_user('admin_del', 'admin')
+        token = ohmapp.serializer.dumps({'user_id': admin_id})
+        self.client.set_cookie(ohmapp.COOKIE_NAME, token)
+
+        target_id = self._create_user('worker_with_history', 'user', mfa_enabled=False)
+
+        with ohmapp.app.app_context():
+            chantier = ohmapp.Chantier(nom='Chantier X', annee=2026, status='ACTIVE')
+            ohmapp.db.session.add(chantier)
+            ohmapp.db.session.commit()
+            ohmapp.db.session.add(ohmapp.Entry(user_id=target_id, chantier_id=chantier.id, date='2026-01-05', heures=8.0))
+            ohmapp.db.session.add(ohmapp.Leave(user_id=target_id, type='CONGE', date_start='2026-02-01', date_end='2026-02-01', status='APPROVED', days_count=1.0))
+            ohmapp.db.session.add(ohmapp.ChantierAssignment(
+                chantier_id=chantier.id, user_id=target_id, date_debut='2026-01-05', date_fin='2026-01-05', statut='confirme',
+            ))
+            ohmapp.db.session.commit()
+
+        res = self.client.delete(f'/api/users/{target_id}')
+        data = res.get_json()
+        self.assertEqual(res.status_code, 400, data)
+        self.assertEqual(data['entries_count'], 1)
+        self.assertEqual(data['leaves_count'], 1)
+        self.assertEqual(data['assignments_count'], 1)
+        self.assertIn('heure', data['error'])
+        self.assertIn('absence', data['error'])
+        self.assertIn('chantier', data['error'])
+
+        # Le compte existe toujours — le delete n'a pas eu lieu.
+        with ohmapp.app.app_context():
+            self.assertIsNotNone(ohmapp.db.session.get(ohmapp.User, target_id))
+
+    def test_delete_user_without_related_data_still_works(self):
+        """Pas de régression sur le cas normal (compte neuf, jamais rien
+        loggé) — doit toujours réussir tel quel."""
+        admin_id = self._create_user('admin_del2', 'admin')
+        token = ohmapp.serializer.dumps({'user_id': admin_id})
+        self.client.set_cookie(ohmapp.COOKIE_NAME, token)
+        target_id = self._create_user('worker_no_history', 'user', mfa_enabled=False)
+
+        res = self.client.delete(f'/api/users/{target_id}')
+        self.assertEqual(res.status_code, 200, res.get_json())
+        with ohmapp.app.app_context():
+            self.assertIsNone(ohmapp.db.session.get(ohmapp.User, target_id))
+
 
 if __name__ == '__main__':
     unittest.main()
