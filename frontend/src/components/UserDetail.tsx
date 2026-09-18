@@ -50,6 +50,7 @@ export const UserDetail: React.FC<Props> = ({ userId, currentUser, onBack, onDel
     const [revealedPassword, setRevealedPassword] = useState<string | null>(null);
     const revealModalT = useMountTransition(!!revealedPassword, 150);
     const [copied, setCopied] = useState(false);
+    const [copyError, setCopyError] = useState(false);
 
     // Échec de suppression (ex: heures/absences/chantiers encore liés à ce
     // compte) — affiché sur la fiche, pas dans une alert() générique.
@@ -78,6 +79,7 @@ export const UserDetail: React.FC<Props> = ({ userId, currentUser, onBack, onDel
         const d = await res.json().catch(() => ({}));
         if (!res.ok) { alert(d.error || 'Erreur'); return; }
         setCopied(false);
+        setCopyError(false);
         setRevealedPassword(d.password);
         fetchDetail();
     };
@@ -281,13 +283,38 @@ export const UserDetail: React.FC<Props> = ({ userId, currentUser, onBack, onDel
                             <code className="flex-1 font-mono text-sm text-slate-900 select-all break-all">{revealedPassword}</code>
                             <button
                                 type="button"
-                                onClick={() => { navigator.clipboard.writeText(revealedPassword); setCopied(true); }}
+                                onClick={() => {
+                                    // Used to be fire-and-forget, setting `copied` unconditionally
+                                    // regardless of whether the write actually succeeded. On an
+                                    // insecure origin or with clipboard permission denied,
+                                    // navigator.clipboard can be undefined (throws synchronously —
+                                    // the try/catch) or writeText() can reject (the .catch) — either
+                                    // way the checkmark still showed "copied" while the clipboard
+                                    // held something else, so whatever got pasted into the login
+                                    // form afterwards wasn't this password at all. writeText() stays
+                                    // called directly here (not deferred behind an extra microtask)
+                                    // so stricter browsers (Safari) still tie it to this click's user
+                                    // gesture.
+                                    setCopyError(false);
+                                    try {
+                                        navigator.clipboard.writeText(revealedPassword)
+                                            .then(() => setCopied(true))
+                                            .catch(() => setCopyError(true));
+                                    } catch {
+                                        setCopyError(true);
+                                    }
+                                }}
                                 className="shrink-0 text-slate-500 hover:text-ohm-primary transition-colors"
                                 title="Copier"
                             >
                                 {copied ? <Check size={18} className="text-green-600" /> : <Copy size={18} />}
                             </button>
                         </div>
+                        {copyError && (
+                            <p className="text-xs text-red-500 font-bold">
+                                Copie automatique impossible — sélectionnez le mot de passe ci-dessus et copiez-le manuellement (Ctrl+C).
+                            </p>
+                        )}
                         <button
                             type="button"
                             onClick={() => setRevealedPassword(null)}
