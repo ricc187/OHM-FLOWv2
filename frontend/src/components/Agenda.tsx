@@ -6,8 +6,9 @@ import { useAutoRefresh } from '../hooks/useAutoRefresh';
 import { useEscapeKey } from '../hooks/useEscapeKey';
 import { useIsMobile } from '../hooks/useIsMobile';
 import { useEntryDrag, DropTarget } from '../hooks/useEntryDrag';
+import { useEntryResize, ResizeState } from '../hooks/useEntryResize';
 import { setAppModalOpen } from '../modalState';
-import { AgendaFormModal, AgendaDetailPanel, AgendaFormValues, emptyFormValues, formValuesFromItem } from './AgendaForm';
+import { AgendaFormModal, AgendaDetailPanel, AgendaFormValues, emptyFormValues, formValuesFromItem, SlotSibling } from './AgendaForm';
 
 // --- Date helpers -----------------------------------------------------
 // Same "parse YYYY-MM-DD as local components" discipline as Planning.tsx's
@@ -93,6 +94,25 @@ const itemsOverlapDay = (items: CalendarItem[], day: Date) => {
     return items.filter(i => i.date_debut <= iso && i.date_fin >= iso);
 };
 
+// Live resize preview (see useEntryResize/EntryChip's edge handles): while a
+// resize gesture is active, the dragged item's edge date is swapped for
+// wherever the pointer currently is, BEFORE the single-day/multi-day split
+// (singleDayItemsFor / packLanes) that decides whether it renders as a
+// day-cell chip or a spanning bar — so the block visibly grows/shrinks (and
+// switches representation as needed) as you drag, committed only on release.
+// Everything else is untouched — this only ever swaps one item's dates.
+const previewResizedItems = (items: CalendarItem[], resize: ResizeState | null): CalendarItem[] => {
+    if (!resize || !resize.overDate) return items;
+    const overDate = resize.overDate;
+    return items.map(i => {
+        if (i.id !== resize.item.id || i.source !== resize.item.source) return i;
+        if (resize.edge === 'start') {
+            return { ...i, date_debut: overDate <= i.date_fin ? overDate : i.date_fin };
+        }
+        return { ...i, date_fin: overDate >= i.date_debut ? overDate : i.date_debut };
+    });
+};
+
 // What a cell click hands back to the form: the clicked day and, when the
 // grid has employee rows (Jour/Semaine), the row's employee — Mois has no
 // employee rows (see MonthGrid), so userId stays undefined there.
@@ -121,7 +141,7 @@ export const Agenda: React.FC<Props> = ({ currentUser: _currentUser, onOpenChant
     const isMobile = useIsMobile();
 
     // Create/edit form, and the read-only detail panel for an existing block.
-    const [formState, setFormState] = useState<{ mode: 'create' | 'edit'; initial: AgendaFormValues; editingItem: CalendarItem | null } | null>(null);
+    const [formState, setFormState] = useState<{ mode: 'create' | 'edit'; initial: AgendaFormValues; editingItem: CalendarItem | null; slotSiblings?: SlotSibling[] } | null>(null);
     const [detailItem, setDetailItem] = useState<CalendarItem | null>(null);
     const [dropError, setDropError] = useState<string | null>(null);
 
@@ -193,7 +213,26 @@ export const Agenda: React.FC<Props> = ({ currentUser: _currentUser, onOpenChant
 
     const openEditFromDetail = () => {
         if (!detailItem) return;
-        setFormState({ mode: 'edit', initial: formValuesFromItem(detailItem), editingItem: detailItem });
+        // "Autres employés sur ce créneau" (AgendaForm.tsx) needs every OTHER
+        // ChantierAssignment already on this exact slot — same chantier,
+        // same date range, same toute_la_journee/heure — derived from the
+        // items already loaded here, no extra fetch. Leaves have no such
+        // concept (undefined, not an empty array — AgendaFormModal only
+        // renders that control for source==='chantier').
+        const slotSiblings = detailItem.source === 'chantier'
+            ? items
+                .filter(i => (
+                    i.source === 'chantier' &&
+                    i.id !== detailItem.id &&
+                    i.chantier_id === detailItem.chantier_id &&
+                    i.date_debut === detailItem.date_debut &&
+                    i.date_fin === detailItem.date_fin &&
+                    i.toute_la_journee === detailItem.toute_la_journee &&
+                    (detailItem.toute_la_journee || (i.heure_debut === detailItem.heure_debut && i.heure_fin === detailItem.heure_fin))
+                ))
+                .map(i => ({ id: i.id, user_id: i.user_id }))
+            : undefined;
+        setFormState({ mode: 'edit', initial: formValuesFromItem(detailItem), editingItem: detailItem, slotSiblings });
         setDetailItem(null);
     };
 
@@ -222,6 +261,44 @@ export const Agenda: React.FC<Props> = ({ currentUser: _currentUser, onOpenChant
         } else {
             const body = await res.json().catch(() => ({}));
             setDropError(body.error || "Impossible de déplacer cette entrée.");
+        }
+    };
+
+    // Resize (stretch/shrink from the left or right edge, see useEntryResize
+    // + EntryChip's handles): edge='start' moves date_debut, edge='end'
+    // moves date_fin — the other bound never changes. Reuses the exact same
+    // endpoints/fields as drag&drop move above (partial date_debut/date_fin
+    // payload, already supported server-side by both routes).
+    //
+    // Other employees sharing the EXACT same slot (chantier/type + both
+    // dates + heures) are resized together, not just the one edge grabbed —
+    // same idea as AgendaForm's "Autres employés sur ce créneau", recomputed
+    // fresh here from the currently loaded items (a drag target isn't
+    // necessarily the item last opened in the detail panel).
+    const handleResizeEntry = async (item: CalendarItem, edge: 'start' | 'end', newDate: string) => {
+        const newDateDebut = edge === 'start' ? (newDate <= item.date_fin ? newDate : item.date_fin) : item.date_debut;
+        const newDateFin = edge === 'end' ? (newDate >= item.date_debut ? newDate : item.date_debut) : item.date_fin;
+        if (newDateDebut === item.date_debut && newDateFin === item.date_fin) return; // released without actually moving
+
+        const siblings = items.filter(i => (
+            i.id !== item.id &&
+            i.source === item.source &&
+            (item.source === 'chantier' ? i.chantier_id === item.chantier_id : i.type === item.type) &&
+            i.date_debut === item.date_debut && i.date_fin === item.date_fin &&
+            i.toute_la_journee === item.toute_la_journee &&
+            (item.toute_la_journee || (i.heure_debut === item.heure_debut && i.heure_fin === item.heure_fin))
+        ));
+
+        const patch = edge === 'start' ? { date_debut: newDateDebut } : { date_fin: newDateFin };
+        const targets = [item, ...siblings];
+        const results = await Promise.all(targets.map(t =>
+            t.source === 'chantier'
+                ? api.put(`/api/calendar/chantier-assignments/${t.id}`, patch)
+                : api.put(`/api/calendar/leaves/${t.id}/reschedule`, patch)
+        ));
+        fetchItems(); // refresh regardless — reflects whatever actually got applied
+        if (!results.every(r => r.ok)) {
+            setDropError("Impossible de redimensionner cette entrée pour tout le monde.");
         }
     };
 
@@ -273,7 +350,7 @@ export const Agenda: React.FC<Props> = ({ currentUser: _currentUser, onOpenChant
                 its screen space. */}
             <div className="flex-1 min-h-0 card p-0 overflow-hidden border border-slate-300 flex flex-col">
                 {view === 'mois' ? (
-                    <MonthGrid anchor={anchor} items={visibleItems} holidays={holidays} isMobile={isMobile} onCellClick={openCreateAt} onBlockClick={openDetail} onDropEntry={handleDropEntry} />
+                    <MonthGrid anchor={anchor} items={visibleItems} holidays={holidays} isMobile={isMobile} onCellClick={openCreateAt} onBlockClick={openDetail} onDropEntry={handleDropEntry} onResizeEntry={handleResizeEntry} />
                 ) : (
                     <ResourceGrid
                         days={days}
@@ -284,6 +361,7 @@ export const Agenda: React.FC<Props> = ({ currentUser: _currentUser, onOpenChant
                         onCellClick={openCreateAt}
                         onBlockClick={openDetail}
                         onDropEntry={handleDropEntry}
+                        onResizeEntry={handleResizeEntry}
                     />
                 )}
             </div>
@@ -310,6 +388,7 @@ export const Agenda: React.FC<Props> = ({ currentUser: _currentUser, onOpenChant
                     editingItem={formState.editingItem}
                     users={users}
                     sidebarUserIds={users.map(u => u.id)}
+                    slotSiblings={formState.slotSiblings}
                     onClose={() => setFormState(null)}
                     onSaved={fetchItems}
                 />
@@ -371,22 +450,37 @@ const employeeColor = (id: number) => EMPLOYEE_COLOR_PALETTE[id % EMPLOYEE_COLOR
 // chip's click to ever read another chip's data.
 type ChipDragProps = React.HTMLAttributes<HTMLDivElement> & { style?: React.CSSProperties };
 
+// resizeHandles: pointer handlers from useEntryResize's handleProps(item, edge)
+// for the left ('start', moves date_debut) and right ('end', moves date_fin)
+// edges — omitted entirely disables resizing for that render (not currently
+// done anywhere, but kept optional in case a future read-only context needs it).
 const EntryChip: React.FC<{
     item: CalendarItem;
     dragProps: ChipDragProps;
     onClick: (e: React.MouseEvent) => void;
     dragging?: boolean;
     style?: React.CSSProperties;
-}> = ({ item, dragProps, onClick, dragging, style }) => (
+    resizeHandles?: { start: ChipDragProps; end: ChipDragProps };
+    resizingEdge?: 'start' | 'end' | null;
+}> = ({ item, dragProps, onClick, dragging, style, resizeHandles, resizingEdge }) => (
     <div
         title={`${item.titre}${item.description ? ' — ' + item.description : ''}`}
         {...dragProps}
         onClick={onClick}
-        className={`px-2 py-1 rounded text-xs font-bold text-white truncate cursor-grab active:cursor-grabbing leading-tight select-none ${blockClasses(item)} ${dragging ? 'opacity-30' : ''}`}
+        className={`relative px-2 py-1 rounded text-xs font-bold text-white truncate cursor-grab active:cursor-grabbing leading-tight select-none ${blockClasses(item)} ${dragging ? 'opacity-30' : ''} ${resizingEdge ? 'ring-2 ring-white' : ''}`}
         style={{ backgroundColor: item.couleur, height: CHIP_HEIGHT - 2, ...dragProps.style, ...style }}
     >
         {!item.toute_la_journee && item.heure_debut && <span className="font-mono opacity-80">{item.heure_debut} </span>}
         {item.titre}
+        {/* Étirer/raccourcir d'un jour (ou plus) — voir useEntryResize.
+            onClick stopPropagation : un simple tap sur la poignée sans
+            glisser ne doit jamais aussi ouvrir le panneau détail du chip. */}
+        {resizeHandles && (
+            <>
+                <div {...resizeHandles.start} onClick={e => e.stopPropagation()} className="absolute left-0 top-0 bottom-0 w-2 cursor-ew-resize" />
+                <div {...resizeHandles.end} onClick={e => e.stopPropagation()} className="absolute right-0 top-0 bottom-0 w-2 cursor-ew-resize" />
+            </>
+        )}
     </div>
 );
 
@@ -411,13 +505,24 @@ const ResourceGrid: React.FC<{
     onCellClick: (cell: CellClick) => void;
     onBlockClick: (item: CalendarItem) => void;
     onDropEntry: (item: CalendarItem, target: DropTarget) => void;
-}> = ({ days, items, allUsers, holidays, isMobile, onCellClick, onBlockClick, onDropEntry }) => {
+    onResizeEntry: (item: CalendarItem, edge: 'start' | 'end', newDate: string) => void;
+}> = ({ days, items, allUsers, holidays, isMobile, onCellClick, onBlockClick, onDropEntry, onResizeEntry }) => {
     const today = startOfDay(new Date());
     const nameColWidth = isMobile ? NAME_COL_WIDTH_MOBILE : NAME_COL_WIDTH_DESKTOP;
     const dayGridColumns = `repeat(${days.length}, minmax(${isMobile ? DAY_COL_WIDTH_MOBILE : DAY_COL_MIN_WIDTH_DESKTOP}, 1fr))`;
     const headerGridColumns = `${nameColWidth} ${dayGridColumns}`;
 
     const { drag, chipHandlers, isDragging, guardClick, shouldIgnoreClick } = useEntryDrag(onDropEntry);
+    const { resize, handleProps: resizeHandleProps, isResizingEdge } = useEntryResize(onResizeEntry);
+    // See previewResizedItems — everything below reads these, not the raw
+    // `items` prop, so a live resize visibly grows/shrinks the block (and
+    // switches single-day-chip <-> spanning-bar representation as needed)
+    // as you drag, committed only on release.
+    const displayItems = useMemo(() => previewResizedItems(items, resize), [items, resize]);
+    const resizeHandlesFor = (item: CalendarItem) => ({
+        start: resizeHandleProps(item, 'start'),
+        end: resizeHandleProps(item, 'end'),
+    });
 
     // Single-day entries (date_debut === date_fin) render inside their one
     // day cell. A multi-day entry is pulled out and drawn once, as an
@@ -426,7 +531,7 @@ const ResourceGrid: React.FC<{
     // — that way it sits on the SAME droppable cells the single-day chips
     // use, instead of needing its own separate hit-testable layer.
     const singleDayItemsFor = (userId: number, day: Date) =>
-        itemsOverlapDay(items, day).filter(i => i.user_id === userId && i.date_debut === i.date_fin);
+        itemsOverlapDay(displayItems, day).filter(i => i.user_id === userId && i.date_debut === i.date_fin);
 
     const dayIndexClamped = (dateStr: string, edge: 'start' | 'end') => {
         const idx = days.findIndex(d => toISODate(d) === dateStr);
@@ -471,7 +576,7 @@ const ResourceGrid: React.FC<{
             {/* Employee rows — every employee always gets a full row. */}
             <div className="flex-1 overflow-y-auto divide-y divide-slate-200">
                 {allUsers.map(emp => {
-                    const empItems = items.filter(i => i.user_id === emp.id);
+                    const empItems = displayItems.filter(i => i.user_id === emp.id);
                     const multiDayLaned = packLanes(empItems.filter(i => i.date_debut !== i.date_fin));
                     const laneCount = multiDayLaned.reduce((max, { lane }) => Math.max(max, lane + 1), 0);
                     const maxSingleDayCount = Math.max(1, ...days.map(d => singleDayItemsFor(emp.id, d).length));
@@ -526,7 +631,11 @@ const ResourceGrid: React.FC<{
                                                 className="absolute px-1"
                                                 style={{ gridColumn: `${startIdx + 1} / ${endIdx + 2}`, left: 0, right: 0, top: lane * CHIP_HEIGHT + 4, zIndex: 5 }}
                                             >
-                                                <EntryChip item={item} dragProps={chipHandlers(item)} onClick={guardClick(() => onBlockClick(item))} dragging={isDragging(item)} />
+                                                <EntryChip
+                                                    item={item} dragProps={chipHandlers(item)} onClick={guardClick(() => onBlockClick(item))}
+                                                    dragging={isDragging(item)} resizeHandles={resizeHandlesFor(item)}
+                                                    resizingEdge={isResizingEdge(item, 'start') ? 'start' : isResizingEdge(item, 'end') ? 'end' : null}
+                                                />
                                             </div>
                                         );
                                     })}
@@ -545,7 +654,11 @@ const ResourceGrid: React.FC<{
                                                 className={`p-1 space-y-0.5 border-l border-slate-200 cursor-pointer hover:bg-slate-50 transition-colors ${holiday ? 'bg-amber-50/60' : isToday ? 'bg-primary/5' : ''} ${isDropHover ? (drag?.valid ? 'ring-2 ring-inset ring-primary bg-primary/10' : 'ring-2 ring-inset ring-red-400 bg-red-50') : ''}`}
                                             >
                                                 {dayItems.map(i => (
-                                                    <EntryChip key={`${i.source}-${i.id}`} item={i} dragProps={chipHandlers(i)} onClick={guardClick(() => onBlockClick(i))} dragging={isDragging(i)} />
+                                                    <EntryChip
+                                                        key={`${i.source}-${i.id}`} item={i} dragProps={chipHandlers(i)} onClick={guardClick(() => onBlockClick(i))}
+                                                        dragging={isDragging(i)} resizeHandles={resizeHandlesFor(i)}
+                                                        resizingEdge={isResizingEdge(i, 'start') ? 'start' : isResizingEdge(i, 'end') ? 'end' : null}
+                                                    />
                                                 ))}
                                             </div>
                                         );
@@ -583,7 +696,8 @@ const MonthGrid: React.FC<{
     onCellClick: (cell: CellClick) => void;
     onBlockClick: (item: CalendarItem) => void;
     onDropEntry: (item: CalendarItem, target: DropTarget) => void;
-}> = ({ anchor, items, holidays, isMobile, onCellClick, onBlockClick, onDropEntry }) => {
+    onResizeEntry: (item: CalendarItem, edge: 'start' | 'end', newDate: string) => void;
+}> = ({ anchor, items, holidays, isMobile, onCellClick, onBlockClick, onDropEntry, onResizeEntry }) => {
     const { start } = periodRange('mois', anchor);
     const weeks = 6;
     const cells = Array.from({ length: weeks * 7 }, (_, i) => addDays(start, i));
@@ -595,6 +709,14 @@ const MonthGrid: React.FC<{
     // userId — the drag hook then only ever validates/moves the date,
     // for both chantier assignments and leaves alike.
     const { drag, chipHandlers, isDragging, guardClick, shouldIgnoreClick } = useEntryDrag(onDropEntry);
+    const { resize, handleProps: resizeHandleProps, isResizingEdge } = useEntryResize(onResizeEntry);
+    // See previewResizedItems (ResourceGrid comment) — same live-preview idea,
+    // just fed to itemsOverlapDay below instead of a single/multi-day split.
+    const displayItems = useMemo(() => previewResizedItems(items, resize), [items, resize]);
+    const resizeHandlesFor = (item: CalendarItem) => ({
+        start: resizeHandleProps(item, 'start'),
+        end: resizeHandleProps(item, 'end'),
+    });
 
     return (
         <div className="flex flex-col h-full min-h-0 overflow-x-auto">
@@ -605,7 +727,7 @@ const MonthGrid: React.FC<{
             </div>
             <div className="grid flex-1 overflow-y-auto" style={{ gridTemplateColumns: gridColumns }}>
                 {cells.map(d => {
-                    const dayItems = itemsOverlapDay(items, d);
+                    const dayItems = itemsOverlapDay(displayItems, d);
                     const isToday = d.getTime() === today.getTime();
                     const inMonth = d.getMonth() === currentMonth;
                     const holiday = holidayName(holidays, d);
@@ -625,7 +747,11 @@ const MonthGrid: React.FC<{
                             </div>
                             <div className="space-y-0.5">
                                 {dayItems.slice(0, 3).map(i => (
-                                    <EntryChip key={`${i.source}-${i.id}`} item={i} dragProps={chipHandlers(i)} onClick={guardClick(() => onBlockClick(i))} dragging={isDragging(i)} />
+                                    <EntryChip
+                                        key={`${i.source}-${i.id}`} item={i} dragProps={chipHandlers(i)} onClick={guardClick(() => onBlockClick(i))}
+                                        dragging={isDragging(i)} resizeHandles={resizeHandlesFor(i)}
+                                        resizingEdge={isResizingEdge(i, 'start') ? 'start' : isResizingEdge(i, 'end') ? 'end' : null}
+                                    />
                                 ))}
                                 {dayItems.length > 3 && (
                                     <div className="text-[10px] text-slate-400 font-bold px-1">+{dayItems.length - 3}</div>

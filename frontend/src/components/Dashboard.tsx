@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Chantier, User, ChantierStatus } from '../types';
-import { Folder, Plus, Download, X, Search } from 'lucide-react';
+import { Folder, Plus, Download, X, Search, CalendarDays } from 'lucide-react';
 import { ChantierCard } from './ChantierCard';
 import { InlineSearchSelect } from './ui/InlineSearchSelect';
 import { AwesomeDatePicker } from './ui/AwesomeDatePicker';
@@ -8,6 +8,7 @@ import { chantierPhase, ChantierPhase } from '../chantierPhase';
 import { api } from '../api';
 import { useEscapeKey } from '../hooks/useEscapeKey';
 import { useAutoRefresh } from '../hooks/useAutoRefresh';
+import { AgendaFormModal, AgendaFormValues, emptyFormValues } from './AgendaForm';
 
 type DashboardFilter = ChantierPhase | 'ALL';
 const VALID_FILTERS: DashboardFilter[] = ['NON_PLANIFIE', 'EN_COURS', 'TERMINE', 'ALL'];
@@ -61,6 +62,12 @@ export const Dashboard: React.FC<Props> = ({ currentUser, onSelectChantier }) =>
         deadline: ''
     });
     const [users, setUsers] = useState<User[]>([]);
+    // Coche "Planifier directement dans l'Agenda" — évite le détour par le
+    // Pot à chantier : réutilise le même AgendaFormModal que celui-ci (voir
+    // PotAChantier.tsx), avec le chantier tout juste créé verrouillé dessus
+    // (lockedChantier) et la plupart des champs déjà pertinents.
+    const [planifierApresCreation, setPlanifierApresCreation] = useState(false);
+    const [planning, setPlanning] = useState<{ chantier: Chantier; initial: AgendaFormValues } | null>(null);
 
     useEffect(() => {
         fetchChantiers();
@@ -153,6 +160,7 @@ export const Dashboard: React.FC<Props> = ({ currentUser, onSelectChantier }) =>
 
         const res = await api.post('/api/chantiers', payload);
         if (res.ok) {
+            const created: Chantier = await res.json();
             setNewChantier({
                 commune: '',
                 client_repere: '',
@@ -166,6 +174,11 @@ export const Dashboard: React.FC<Props> = ({ currentUser, onSelectChantier }) =>
             });
             setShowCreate(false);
             fetchChantiers();
+            if (planifierApresCreation) {
+                const today = new Date().toISOString().split('T')[0];
+                setPlanning({ chantier: created, initial: { ...emptyFormValues(today), chantierId: created.id.toString() } });
+            }
+            setPlanifierApresCreation(false);
         }
     };
 
@@ -428,6 +441,18 @@ export const Dashboard: React.FC<Props> = ({ currentUser, onSelectChantier }) =>
                             <textarea className="input-field min-h-[100px]" value={newChantier.remarque} onChange={e => setNewChantier({ ...newChantier, remarque: e.target.value })} placeholder="Informations complémentaires..." />
                         </div>
 
+                        <label className="flex items-center gap-2 cursor-pointer select-none">
+                            <input
+                                type="checkbox"
+                                checked={planifierApresCreation}
+                                onChange={e => setPlanifierApresCreation(e.target.checked)}
+                                className="rounded border-slate-300 text-primary focus:ring-primary/50"
+                            />
+                            <span className="text-sm font-bold text-slate-700 flex items-center gap-1.5">
+                                <CalendarDays size={14} className="text-primary" /> Planifier directement dans l'Agenda après création
+                            </span>
+                        </label>
+
                         <div className="flex justify-end pt-4">
                             <button type="submit" className="w-full md:w-auto px-8 py-3 bg-ohm-primary text-ohm-bg font-bold rounded-xl hover:bg-yellow-300 hover:shadow-glow hover:scale-[1.02] transition-all">
                                 CRÉER LE CHANTIER
@@ -452,6 +477,18 @@ export const Dashboard: React.FC<Props> = ({ currentUser, onSelectChantier }) =>
                     <Folder size={64} className="mx-auto mb-6 opacity-20 text-slate-900" />
                     <p className="text-xl font-medium">Aucun chantier dans cette catégorie</p>
                 </div>
+            )}
+
+            {planning && (
+                <AgendaFormModal
+                    mode="create"
+                    initial={planning.initial}
+                    users={users}
+                    sidebarUserIds={users.map(u => u.id)}
+                    lockedChantier={planning.chantier}
+                    onClose={() => setPlanning(null)}
+                    onSaved={fetchChantiers}
+                />
             )}
         </div>
     );

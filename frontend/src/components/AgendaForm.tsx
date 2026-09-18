@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { X, Pencil, Trash2, Search, CheckSquare, Plus, CalendarCheck, MapPin, FolderOpen } from 'lucide-react';
+import { X, Pencil, Trash2, Search, CheckSquare, Plus, CalendarCheck, MapPin, FolderOpen, Repeat } from 'lucide-react';
 import { CalendarItem, Chantier, User } from '../types';
 import { LEAVE_TYPE_OPTIONS, LEAVE_TYPE_LABELS } from '../leaveTypes';
 import { AwesomeSelect } from './ui/AwesomeSelect';
@@ -38,6 +38,13 @@ export interface AgendaFormValues {
     // dateFin/touteLaJournee/heure* fields above for submission.
     aPlanifier: boolean;
     candidates: CandidateRange[];
+    // Récurrence — create mode only, mutually exclusive with aPlanifier
+    // (different concept: a repeating confirmed series, not candidate dates
+    // awaiting client confirmation). When true, the single dateDebut/dateFin
+    // range above is repeated every week (same weekday, same span) up to
+    // recurrenceUntil — see backend _generate_weekly_occurrences.
+    recurrence: boolean;
+    recurrenceUntil: string;
 }
 
 const emptyCandidate = (dateDebut: string): CandidateRange => ({
@@ -56,6 +63,8 @@ export const emptyFormValues = (dateDebut: string, userIds: number[] = []): Agen
     userIds,
     aPlanifier: false,
     candidates: [],
+    recurrence: false,
+    recurrenceUntil: '',
 });
 
 export const formValuesFromItem = (item: CalendarItem): AgendaFormValues => ({
@@ -73,6 +82,10 @@ export const formValuesFromItem = (item: CalendarItem): AgendaFormValues => ({
     // below for why category/mode can't change on an existing row).
     aPlanifier: false,
     candidates: [],
+    // Same reasoning as aPlanifier above — récurrence only ever applies at
+    // creation time, editing one occurrence never re-triggers the series.
+    recurrence: false,
+    recurrenceUntil: '',
 });
 
 const TYPE_OPTIONS = [
@@ -222,6 +235,15 @@ const CandidateListEditor: React.FC<{
 
 // --- Form modal: create, or edit an existing item ------------------------
 
+// Another ChantierAssignment on the exact same chantier/date/time slot as
+// the item being edited — how AgendaFormModal knows who else to offer in
+// "Autres employés sur ce créneau" (see below) and, for one that gets
+// unchecked, which row id to delete. Computed by the caller (Agenda.tsx)
+// from the calendar items it already has loaded — no dedicated backend
+// endpoint for this, plain calendars items already carry chantier_id/
+// date_debut/date_fin/user_id.
+export interface SlotSibling { id: number; user_id: number; }
+
 interface AgendaFormModalProps {
     mode: 'create' | 'edit';
     initial: AgendaFormValues;
@@ -232,11 +254,16 @@ interface AgendaFormModalProps {
     // connu, le Type et la recherche Chantier sont verrouillés dessus — pas
     // de nouveau composant, juste ce champ en plus sur celui-ci.
     lockedChantier?: Chantier;
+    // Edit mode, chantier entries only (see SlotSibling above) — every OTHER
+    // ChantierAssignment already on this exact slot, besides editingItem
+    // itself. Lets the form add/remove co-assigned employees without
+    // reassigning/deleting the row actually being edited.
+    slotSiblings?: SlotSibling[];
     onClose: () => void;
     onSaved: () => void;
 }
 
-export const AgendaFormModal: React.FC<AgendaFormModalProps> = ({ mode, initial, editingItem, users, sidebarUserIds, lockedChantier, onClose, onSaved }) => {
+export const AgendaFormModal: React.FC<AgendaFormModalProps> = ({ mode, initial, editingItem, users, sidebarUserIds, lockedChantier, slotSiblings, onClose, onSaved }) => {
     // transitions-dev "06-modal" — this component owns its own mount, so it
     // plays the close animation itself before telling the parent to unmount it.
     const [isOpen, setIsOpen] = useState(false);
@@ -253,6 +280,17 @@ export const AgendaFormModal: React.FC<AgendaFormModalProps> = ({ mode, initial,
     const [chantiers, setChantiers] = useState<Chantier[]>([]);
     const [error, setError] = useState<string | null>(null);
     const [saving, setSaving] = useState(false);
+
+    // "Autres employés sur ce créneau" (edit mode, chantier entries only) —
+    // captured once at mount (this modal is unmounted/remounted per open, see
+    // Agenda.tsx's `{formState && <AgendaFormModal .../>}`), so a plain
+    // useMemo with no deps is a safe one-time snapshot, not a stale closure.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    const initialExtraUserIds = useMemo(
+        () => (slotSiblings || []).filter(s => s.user_id !== editingItem?.user_id).map(s => s.user_id),
+        []
+    );
+    const [extraUserIds, setExtraUserIds] = useState<number[]>(initialExtraUserIds);
 
     useEffect(() => {
         api.get('/api/chantiers').then(res => res.ok && res.json()).then((data: Chantier[] | false) => data && setChantiers(data));
@@ -274,6 +312,10 @@ export const AgendaFormModal: React.FC<AgendaFormModalProps> = ({ mode, initial,
         }
         if (values.dateFin < values.dateDebut) return 'La date de fin doit être après la date de début.';
         if (!values.touteLaJournee && values.heureFin <= values.heureDebut) return "L'heure de fin doit être après l'heure de début.";
+        if (mode === 'create' && values.recurrence) {
+            if (!values.recurrenceUntil) return 'Sélectionnez une date de fin de récurrence.';
+            if (values.recurrenceUntil < values.dateDebut) return 'La date de fin de récurrence doit être après la date de début.';
+        }
         return null;
     };
 
@@ -308,18 +350,24 @@ export const AgendaFormModal: React.FC<AgendaFormModalProps> = ({ mode, initial,
                 })),
             });
         } else if (mode === 'create') {
+            // "Récurrence" — repeats this same range weekly server-side (see
+            // _generate_weekly_occurrences in app.py); create-only, same as
+            // aPlanifier above, never sent on an edit.
+            const recurrencePayload = values.recurrence ? { recurrence: { until: values.recurrenceUntil } } : {};
             res = values.entryType === 'CHANTIER'
                 ? await api.post('/api/calendar/chantier-assignments', {
                     chantier_id: parseInt(values.chantierId, 10),
                     user_ids: values.userIds,
                     description: values.description || undefined,
                     ...period,
+                    ...recurrencePayload,
                 })
                 : await api.post('/api/calendar/leaves', {
                     type: values.entryType,
                     user_ids: values.userIds,
                     description: values.description || undefined,
                     ...period,
+                    ...recurrencePayload,
                 });
         } else if (editingItem) {
             res = editingItem.source === 'chantier'
@@ -340,6 +388,37 @@ export const AgendaFormModal: React.FC<AgendaFormModalProps> = ({ mode, initial,
                     heure_fin: period.heure_fin,
                     description: values.description || undefined,
                 });
+        }
+
+        // "Autres employés sur ce créneau" — additive/subtractive on top of
+        // the main save above, chantier edit mode only. Runs only once the
+        // main PUT succeeded; a failure here doesn't roll that back (same
+        // "best effort, surface it, don't lose already-saved work" spirit as
+        // e.g. DocumentExplorer's batch upload) — it's reported via alert()
+        // rather than blocking the modal from closing.
+        if (res && res.ok && mode === 'edit' && editingItem?.source === 'chantier') {
+            const added = extraUserIds.filter(id => !initialExtraUserIds.includes(id));
+            const removed = initialExtraUserIds.filter(id => !extraUserIds.includes(id));
+            const slotErrors: string[] = [];
+            if (added.length > 0) {
+                const addRes = await api.post('/api/calendar/chantier-assignments', {
+                    chantier_id: parseInt(values.chantierId, 10),
+                    user_ids: added,
+                    description: values.description || undefined,
+                    ...period,
+                });
+                if (!addRes.ok) {
+                    const body = await addRes.json().catch(() => ({}));
+                    slotErrors.push(body.error || "Échec de l'ajout d'employé(s) sur ce créneau.");
+                }
+            }
+            for (const uid of removed) {
+                const sibling = (slotSiblings || []).find(s => s.user_id === uid);
+                if (!sibling) continue;
+                const delRes = await api.delete(`/api/calendar/chantier-assignments/${sibling.id}`);
+                if (!delRes.ok) slotErrors.push(`Échec du retrait d'un employé sur ce créneau.`);
+            }
+            if (slotErrors.length > 0) alert(slotErrors.join('\n'));
         }
 
         setSaving(false);
@@ -399,7 +478,7 @@ export const AgendaFormModal: React.FC<AgendaFormModalProps> = ({ mode, initial,
                         </div>
                     )}
 
-                    {values.entryType === 'CHANTIER' && mode === 'create' && (
+                    {values.entryType === 'CHANTIER' && mode === 'create' && !values.recurrence && (
                         <label className="flex items-center gap-2 cursor-pointer select-none">
                             <input
                                 type="checkbox"
@@ -419,6 +498,39 @@ export const AgendaFormModal: React.FC<AgendaFormModalProps> = ({ mode, initial,
                                 <CalendarCheck size={14} className="text-primary" /> Chantier à planifier (dates multiples)
                             </span>
                         </label>
+                    )}
+
+                    {/* Récurrence — mutuellement exclusive avec "à planifier" (concept
+                        différent : une série déjà confirmée qui se répète, pas des dates
+                        candidates en attente de confirmation client). Marche pour les
+                        chantiers ET les absences, contrairement à "à planifier". */}
+                    {mode === 'create' && !values.aPlanifier && (
+                        <label className="flex items-center gap-2 cursor-pointer select-none">
+                            <input
+                                type="checkbox"
+                                checked={values.recurrence}
+                                onChange={e => setValues({ ...values, recurrence: e.target.checked })}
+                                className="rounded border-slate-300 text-primary focus:ring-primary/50"
+                            />
+                            <span className="text-sm font-bold text-slate-700 flex items-center gap-1.5">
+                                <Repeat size={14} className="text-primary" /> Récurrence (chaque semaine, même jour)
+                            </span>
+                        </label>
+                    )}
+
+                    {mode === 'create' && !values.aPlanifier && values.recurrence && (
+                        <div>
+                            <label className="text-xs font-bold text-slate-400 uppercase mb-2 block">Jusqu'à quand (inclus)</label>
+                            <AwesomeDatePicker
+                                value={values.recurrenceUntil}
+                                onChange={d => setValues({ ...values, recurrenceUntil: d })}
+                                minDate={values.dateDebut}
+                                placeholder="Ex: fin juin"
+                            />
+                            <p className="text-[11px] text-slate-400 mt-1.5">
+                                Répète cette entrée chaque semaine, le même jour, jusqu'à cette date incluse.
+                            </p>
+                        </div>
                     )}
 
                     <div>
@@ -484,12 +596,32 @@ export const AgendaFormModal: React.FC<AgendaFormModalProps> = ({ mode, initial,
                             // already-created row (chantier-assignments takes a single
                             // user_id it never got here; the leaves route doesn't accept
                             // one at all) — shown read-only rather than a picker that
-                            // would silently do nothing.
+                            // would silently do nothing. Adding/removing OTHER employees
+                            // on the same chantier slot is a separate control just below
+                            // (chantier entries only) — it never touches this row.
                             <div className="px-3 py-2 rounded-lg bg-slate-50 border border-slate-200 text-sm text-slate-600 font-medium">
                                 {editedUser?.username || `Employé #${editingItem?.user_id}`}
                             </div>
                         )}
                     </div>
+
+                    {mode === 'edit' && editingItem?.source === 'chantier' && (
+                        <div>
+                            <label className="text-xs font-bold text-slate-400 uppercase mb-2 block">
+                                Autres employés sur ce créneau
+                            </label>
+                            <MultiUserSelect
+                                users={users.filter(u => u.id !== editingItem.user_id)}
+                                selected={extraUserIds}
+                                onChange={setExtraUserIds}
+                                presetIds={users.filter(u => u.id !== editingItem.user_id).map(u => u.id)}
+                            />
+                            <p className="text-[11px] text-slate-400 mt-1.5">
+                                Cocher ajoute cet employé sur ce même chantier/créneau ; décocher retire son
+                                affectation existante — sans toucher à l'entrée de {editedUser?.username || 'cet employé'} ci-dessus.
+                            </p>
+                        </div>
+                    )}
 
                     {isAbsenceType && mode === 'create' && (
                         <p className="text-xs text-slate-400 italic">
@@ -556,6 +688,30 @@ export const AgendaDetailPanel: React.FC<AgendaDetailPanelProps> = ({ item, user
         const res = item.source === 'chantier'
             ? await api.delete(`/api/calendar/chantier-assignments/${item.id}`)
             : await api.delete(`/api/leaves/${item.id}`);
+        setDeleting(false);
+        if (res.ok) {
+            onChanged();
+            handleClose();
+        } else {
+            const body = await res.json().catch(() => ({}));
+            alert(body.error || 'Suppression impossible.');
+        }
+    };
+
+    // "Récurrence" series — deletes THIS occurrence and every later one from
+    // the same recurring submission (scope=this_and_following, see backend
+    // manage_single_leave / manage_chantier_assignment). Only offered when
+    // item.recurrence_group_id is set — a one-off entry never has this button.
+    const handleDeleteFollowing = async () => {
+        const ok = await confirm({
+            title: 'Supprimer cette date et les suivantes ?',
+            message: 'Toutes les occurrences de cette série de récurrence, à partir de cette date, seront définitivement supprimées.',
+        });
+        if (!ok) return;
+        setDeleting(true);
+        const res = item.source === 'chantier'
+            ? await api.delete(`/api/calendar/chantier-assignments/${item.id}?scope=this_and_following`)
+            : await api.delete(`/api/leaves/${item.id}?scope=this_and_following`);
         setDeleting(false);
         if (res.ok) {
             onChanged();
@@ -667,9 +823,24 @@ export const AgendaDetailPanel: React.FC<AgendaDetailPanelProps> = ({ item, user
                             <CalendarCheck size={16} /> {validating ? 'Validation...' : 'Valider cette date'}
                         </button>
                     )}
-                    <button onClick={handleDelete} disabled={deleting} className="p-2 rounded-lg bg-red-500/10 text-red-400 hover:bg-red-500 hover:text-white transition-all disabled:opacity-50" title="Supprimer">
+                    <button
+                        onClick={handleDelete} disabled={deleting}
+                        className="p-2 rounded-lg bg-red-500/10 text-red-400 hover:bg-red-500 hover:text-white transition-all disabled:opacity-50"
+                        title={item.recurrence_group_id ? 'Supprimer cette date seule' : 'Supprimer'}
+                    >
                         <Trash2 size={18} />
                     </button>
+                    {/* "Récurrence" series only — deletes this occurrence AND every
+                        later one from the same submission (see handleDeleteFollowing). */}
+                    {item.recurrence_group_id && (
+                        <button
+                            onClick={handleDeleteFollowing} disabled={deleting}
+                            className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-red-500/10 text-red-400 hover:bg-red-500 hover:text-white transition-all disabled:opacity-50 text-xs font-bold"
+                            title="Supprimer cette date et les suivantes"
+                        >
+                            <Trash2 size={14} /> + suivantes
+                        </button>
+                    )}
                     <button onClick={onEdit} className="p-2 rounded-lg bg-slate-100 text-slate-500 hover:text-slate-900 hover:bg-slate-200 transition-all" title="Modifier">
                         <Pencil size={18} />
                     </button>
