@@ -356,6 +356,63 @@ class AuthTestCase(unittest.TestCase):
         res = self._login('pwchange', 'New-Strong-Pass-99')
         self.assertEqual(res.get_json()['status'], 'ok')
 
+    def test_first_time_forced_password_change_then_relogin_full_flow(self):
+        """Exact real-world scenario reported as broken: admin creates an
+        account (must_change_password=True, the real default — not
+        _create_user's helper default of False), the new user logs in with
+        the temp password, is gated to onboarding-only routes, changes their
+        password through the normal endpoint, and must then be able to log
+        back in with the NEW password (old one dead) — same cookie also
+        stays valid immediately after the change, no forced re-login."""
+        admin_id = self._create_user('onboard_admin', 'admin')
+        with ohmapp.app.app_context():
+            admin_token = ohmapp.serializer.dumps({'user_id': admin_id})
+        admin_client = ohmapp.app.test_client()
+        admin_client.set_cookie(ohmapp.COOKIE_NAME, admin_token)
+
+        create_res = admin_client.post('/api/users', json={
+            'username': 'onboard_newbie', 'password': 'Temp-Initial-Pass-99', 'role': 'user',
+        })
+        self.assertEqual(create_res.status_code, 201, create_res.get_json())
+        self.assertTrue(create_res.get_json()['must_change_password'])
+
+        # Real first login with the temp password.
+        login_res = self._login('onboard_newbie', 'Temp-Initial-Pass-99')
+        self.assertEqual(login_res.status_code, 200, login_res.get_json())
+        self.assertTrue(login_res.get_json()['must_change_password'])
+        new_user_cookie = login_res.headers.get('Set-Cookie')
+        self.assertIn(ohmapp.COOKIE_NAME, new_user_cookie or '')
+
+        user_client = ohmapp.app.test_client()
+        raw_token = new_user_cookie.split(f'{ohmapp.COOKIE_NAME}=')[1].split(';')[0]
+        user_client.set_cookie(ohmapp.COOKIE_NAME, raw_token)
+
+        # Onboarding gate: anything but /api/me and /api/change-password 403s.
+        gated = user_client.get('/api/me')
+        self.assertEqual(gated.status_code, 200)
+
+        # The actual forced change, with the temp password as current_password.
+        change_res = user_client.post('/api/change-password', json={
+            'current_password': 'Temp-Initial-Pass-99', 'new_password': 'Brand-New-Pass-2026',
+        })
+        self.assertEqual(change_res.status_code, 200, change_res.get_json())
+
+        # Same cookie, no re-login needed, immediately past the onboarding gate.
+        after_change = user_client.get('/api/me')
+        self.assertEqual(after_change.status_code, 200)
+        self.assertFalse(after_change.get_json()['must_change_password'])
+
+        # Fresh client (simulates a real new browser session/tab) — the NEW
+        # password must log in.
+        relogin_res = self._login('onboard_newbie', 'Brand-New-Pass-2026')
+        self.assertEqual(relogin_res.status_code, 200, relogin_res.get_json())
+        self.assertEqual(relogin_res.get_json()['status'], 'ok')
+        self.assertFalse(relogin_res.get_json()['must_change_password'])
+
+        # The OLD temp password must no longer work.
+        stale_res = self._login('onboard_newbie', 'Temp-Initial-Pass-99')
+        self.assertEqual(stale_res.status_code, 401)
+
     def test_change_password_enforces_policy(self):
         user_id = self._create_user('pwpolicy', 'user')
         with ohmapp.app.app_context():
@@ -500,6 +557,85 @@ class AuthTestCase(unittest.TestCase):
             target = ohmapp.db.session.get(ohmapp.User, target_id)
             self.assertFalse(target.mfa_enabled)
 
+    # --- Admin password reset (POST /api/users/<id>/reset-password) -----
+    # Regression coverage for a real-world report: reset a user's password,
+    # then try to log in with EXACTLY the plaintext the endpoint returned —
+    # end to end through the real /api/login route, not just a hash check
+    # in isolation. Investigation found the backend chain (token generation
+    # -> set_password -> check_password -> login()) sound in every manual
+    # repro; these tests pin that down so a future regression is caught
+    # automatically instead of only in production.
+
+    def test_admin_password_reset_then_login_with_returned_password_succeeds(self):
+        admin_id = self._create_user('pwreset_admin', 'admin')
+        target_id = self._create_user('pwreset_target', 'user')
+        with ohmapp.app.app_context():
+            token = ohmapp.serializer.dumps({'user_id': admin_id})
+        c = ohmapp.app.test_client()
+        c.set_cookie(ohmapp.COOKIE_NAME, token)
+
+        res = c.post(f'/api/users/{target_id}/reset-password')
+        self.assertEqual(res.status_code, 200, res.get_json())
+        temp_password = res.get_json()['password']
+
+        # The exact string the endpoint returned — nothing normalized,
+        # stripped or re-encoded — must log the target in.
+        login_res = self._login('pwreset_target', temp_password)
+        self.assertEqual(login_res.status_code, 200, login_res.get_json())
+        body = login_res.get_json()
+        self.assertEqual(body['status'], 'ok')
+        self.assertTrue(body['must_change_password'])
+        self.assertIn(ohmapp.COOKIE_NAME, login_res.headers.get('Set-Cookie', ''))
+
+        # The old password must no longer work.
+        stale_res = self._login('pwreset_target', STRONG_PASSWORD)
+        self.assertEqual(stale_res.status_code, 401)
+
+    def test_admin_password_reset_for_mfa_enabled_admin_password_step_succeeds(self):
+        """Same scenario for an admin target with 2FA already enabled (the
+        exact shape of the account involved in the real-world report) — the
+        password step must still succeed (status 'mfa_required', not a
+        bad_credentials 401): resetting the password must never touch
+        mfa_enabled, and must never make check_password itself fail."""
+        admin_id = self._create_user('pwreset_admin2', 'admin')
+        target_id = self._create_user('pwreset_mfa_target', 'admin', mfa_enabled=True)
+        with ohmapp.app.app_context():
+            token = ohmapp.serializer.dumps({'user_id': admin_id})
+        c = ohmapp.app.test_client()
+        c.set_cookie(ohmapp.COOKIE_NAME, token)
+
+        res = c.post(f'/api/users/{target_id}/reset-password')
+        self.assertEqual(res.status_code, 200, res.get_json())
+        temp_password = res.get_json()['password']
+
+        login_res = self._login('pwreset_mfa_target', temp_password)
+        self.assertEqual(login_res.status_code, 200, login_res.get_json())
+        self.assertEqual(login_res.get_json()['status'], 'mfa_required')
+
+        with ohmapp.app.app_context():
+            target = ohmapp.db.session.get(ohmapp.User, target_id)
+            self.assertTrue(target.mfa_enabled)
+            self.assertTrue(target.must_change_password)
+
+    def test_admin_password_reset_generated_password_meets_policy(self):
+        """secrets.token_urlsafe(9) is always exactly 12 URL-safe chars —
+        pinned here since MIN_LENGTH (auth_security.py) is also 12: any
+        future change to either constant must keep the generated password
+        valid, not silently drop it 1 char under the minimum."""
+        admin_id = self._create_user('pwreset_admin3', 'admin')
+        target_id = self._create_user('pwreset_policy_target', 'user')
+        with ohmapp.app.app_context():
+            token = ohmapp.serializer.dumps({'user_id': admin_id})
+        c = ohmapp.app.test_client()
+        c.set_cookie(ohmapp.COOKIE_NAME, token)
+
+        for _ in range(20):
+            res = c.post(f'/api/users/{target_id}/reset-password')
+            temp_password = res.get_json()['password']
+            self.assertIsNone(ohmapp.validate_password(temp_password))
+            login_res = self._login('pwreset_policy_target', temp_password)
+            self.assertEqual(login_res.status_code, 200, login_res.get_json())
+
     def test_login_rate_limit_applies(self):
         """The route's own IP throttle (separate from account lockout) —
         the only test in this file that re-enables RATELIMIT_ENABLED."""
@@ -510,6 +646,31 @@ class AuthTestCase(unittest.TestCase):
                 self._login('rate_limited', 'wrongpassword123')
             res = self._login('rate_limited', 'wrongpassword123')
             self.assertEqual(res.status_code, 429)
+        finally:
+            ohmapp.limiter.enabled = False
+
+    def test_login_rate_limit_response_is_json_with_a_clear_message(self):
+        """Regression: Flask-Limiter's 429 used to fall through to
+        Werkzeug's default HTML error page (no error handler covered it) —
+        api.ts's res.json() then threw "Unexpected token '<'", crashing the
+        login form instead of showing an error. Real-world report: a user
+        retrying a few failed logins hit this and saw a total UI crash
+        instead of "too many attempts". Pins both that this is valid JSON
+        AND that the message is an actual sentence, not Flask-Limiter's raw
+        rate spec ("5 per 1 minute") — that string was the first fix and
+        would have passed a "just check it's JSON" test while still being
+        meaningless to someone without backend context."""
+        self._create_user('rate_limited_msg', 'user')
+        ohmapp.limiter.enabled = True
+        try:
+            for _ in range(5):
+                self._login('rate_limited_msg', 'wrongpassword123')
+            res = self._login('rate_limited_msg', 'wrongpassword123')
+            self.assertEqual(res.status_code, 429)
+            self.assertEqual(res.content_type, 'application/json')
+            body = res.get_json()  # raises if the body isn't valid JSON
+            self.assertNotIn('per', body['error'])  # not Flask-Limiter's raw "N per M minute(s)" spec
+            self.assertTrue(len(body['error']) > 0)
         finally:
             ohmapp.limiter.enabled = False
 

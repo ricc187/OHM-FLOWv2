@@ -6225,6 +6225,7 @@ def get_planned_vs_actual_hours(current_user):
 
 # Error handlers: never leak a raw traceback to the client, always JSON.
 from sqlalchemy.exc import IntegrityError
+from werkzeug.exceptions import HTTPException
 
 @app.errorhandler(IntegrityError)
 def handle_integrity_error(e):
@@ -6237,6 +6238,31 @@ def handle_internal_error(e):
     db.session.rollback()
     logger.error(f"Unhandled error: {e}")
     return jsonify({'error': 'Internal server error'}), 500
+
+# Flask-Limiter's own description (e.g. "5 per 1 minute") is a technical
+# rate spec, not a sentence — the generic HTTPException handler below would
+# otherwise surface it verbatim in the login form's error text (frontend
+# just does setError(data.error), see Login.tsx), which means nothing to
+# someone without the backend's context. A dedicated, more specific handler
+# (Flask picks the most specific match for a given exception) replaces it
+# with an actual message instead.
+@app.errorhandler(429)
+def handle_rate_limit_exceeded(e):
+    return jsonify({'error': 'Trop de tentatives — réessayez dans une minute'}), 429
+
+# Catch-all for every other auto-raised HTTP error Werkzeug/Flask-Limiter
+# produce on their own (405 wrong method, 413 payload too large, 400
+# malformed JSON body, ...) — none of these go through a route function, so
+# none of them were ever covered by the "always JSON" routes above. Left
+# unhandled, Werkzeug renders its own default HTML error page for each of
+# these, which api.ts's res.json() then fails to parse ("Unexpected token
+# '<'"), surfacing as a total client-side crash instead of the actual error.
+# The dedicated @app.errorhandler(404) above still wins for 404 specifically
+# (SPA fallback, unrelated to the API) — Flask picks the most specific
+# handler for a given exception, this one only catches what nothing else does.
+@app.errorhandler(HTTPException)
+def handle_http_exception(e):
+    return jsonify({'error': e.description}), e.code
 
 # Security Headers
 @app.after_request
