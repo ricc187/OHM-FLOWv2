@@ -16,6 +16,7 @@ const LEAVE_TYPE_COLORS: Record<string, string> = {
     ARMEE: '#4B5563',
     CONGE_PAT_MAT: '#F472B6',
     DEMENAGEMENT: '#FB923C',
+    FORMATION: '#0EA5E9',
 };
 
 const ROLE_LABELS: Record<string, string> = { admin: 'Admin', depanneur: 'Dépanneur', user: 'Employé' };
