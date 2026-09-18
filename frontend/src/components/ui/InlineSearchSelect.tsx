@@ -6,6 +6,10 @@ import { useEscapeKey } from '../../hooks/useEscapeKey';
 export interface InlineSearchSelectOption {
     value: string;
     label: string;
+    // Texte additionnel filtré mais jamais affiché — permet de chercher sur
+    // un champ absent du label visible (ex: le référent d'un chantier, voir
+    // Dashboard.tsx) sans changer ce qui s'affiche dans la liste.
+    keywords?: string;
 }
 
 interface InlineSearchSelectProps {
@@ -14,6 +18,16 @@ interface InlineSearchSelectProps {
     options: InlineSearchSelectOption[];
     placeholder?: string;
     icon?: React.ReactNode;
+    // Raccourci clavier global "/" qui met le focus sur ce champ depuis
+    // n'importe où sur la page (façon GitHub/Slack/Reddit) — désactivé par
+    // défaut : à activer explicitement là où une seule barre de recherche
+    // principale doit réagir (voir Dashboard.tsx), pas sur chaque instance
+    // du composant (AgendaForm.tsx en a une autre, plus locale).
+    focusShortcut?: boolean;
+    // Style plus marqué (bordure/ombre bleues, champ plus généreux) — opt-in
+    // pour la barre de recherche principale du Dashboard, sans changer le
+    // look standard des autres usages (AgendaForm.tsx).
+    emphasized?: boolean;
 }
 
 // Search bar that IS the input — click it and type right away, dropdown
@@ -21,10 +35,11 @@ interface InlineSearchSelectProps {
 // popup like AwesomeSelect. Kept separate from AwesomeSelect on purpose:
 // AwesomeSelect's modal pattern is used as a generic form select in 6 other
 // places and shouldn't change behavior there.
-export const InlineSearchSelect: React.FC<InlineSearchSelectProps> = ({ value, onChange, options, placeholder = 'Rechercher...', icon }) => {
+export const InlineSearchSelect: React.FC<InlineSearchSelectProps> = ({ value, onChange, options, placeholder = 'Rechercher...', icon, focusShortcut = false, emphasized = false }) => {
     const [isOpen, setIsOpen] = useState(false);
     const [query, setQuery] = useState('');
     const containerRef = useRef<HTMLDivElement>(null);
+    const inputRef = useRef<HTMLInputElement>(null);
     // Responsive fix: this popover always opened downward with a fixed
     // max-h-80 (320px), regardless of how much viewport space was actually
     // below it — on mobile, a field near the bottom of a scrolled form (or
@@ -41,7 +56,7 @@ export const InlineSearchSelect: React.FC<InlineSearchSelectProps> = ({ value, o
     const filteredOptions = useMemo(() => {
         if (!query) return options;
         const q = query.toLowerCase();
-        return options.filter(o => o.label.toLowerCase().includes(q));
+        return options.filter(o => `${o.label} ${o.keywords ?? ''}`.toLowerCase().includes(q));
     }, [options, query]);
 
     const openDropdown = () => {
@@ -77,11 +92,38 @@ export const InlineSearchSelect: React.FC<InlineSearchSelectProps> = ({ value, o
         return () => document.removeEventListener('mousedown', handler);
     }, [isOpen]);
 
+    // Raccourci "/" (façon GitHub/Slack) : focus ce champ depuis n'importe
+    // où sur la page. Ignoré si on est déjà en train de taper ailleurs (un
+    // autre champ/textarea/select focus — couvre aussi le cas où une modale
+    // avec un champ autoFocus est ouverte par-dessus) pour ne jamais voler
+    // le "/" d'une saisie en cours.
+    useEffect(() => {
+        if (!focusShortcut) return;
+        const handler = (e: KeyboardEvent) => {
+            if (e.key !== '/') return;
+            const active = document.activeElement;
+            const isTyping = active instanceof HTMLElement && (
+                active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.tagName === 'SELECT' || active.isContentEditable
+            );
+            if (isTyping) return;
+            e.preventDefault();
+            inputRef.current?.focus();
+            openDropdown();
+        };
+        window.addEventListener('keydown', handler);
+        return () => window.removeEventListener('keydown', handler);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [focusShortcut]);
+
     return (
         <div ref={containerRef} className="relative">
-            <div className="w-full flex items-center bg-white/80 border border-slate-300 focus-within:border-blue-500 text-blue-600 font-mono px-4 py-3 rounded-xl transition-all shadow-[inset_0_0_8px_rgba(37,99,235,0.1)] focus-within:shadow-[0_0_12px_rgba(37,99,235,0.2)] gap-3">
+            <div className={emphasized
+                ? "w-full flex items-center bg-white border border-primary/30 focus-within:border-primary text-primary font-mono px-5 py-3.5 rounded-xl transition-all shadow-md focus-within:shadow-glow gap-3"
+                : "w-full flex items-center bg-white/80 border border-slate-300 focus-within:border-blue-500 text-blue-600 font-mono px-4 py-3 rounded-xl transition-all shadow-[inset_0_0_8px_rgba(37,99,235,0.1)] focus-within:shadow-[0_0_12px_rgba(37,99,235,0.2)] gap-3"
+            }>
                 {icon && <span className="opacity-70 text-blue-600 shrink-0">{icon}</span>}
                 <input
+                    ref={inputRef}
                     type="text"
                     value={isOpen ? query : (selectedOption?.label ?? '')}
                     onFocus={openDropdown}
@@ -90,6 +132,11 @@ export const InlineSearchSelect: React.FC<InlineSearchSelectProps> = ({ value, o
                     placeholder={placeholder}
                     className="flex-1 min-w-0 bg-transparent outline-none placeholder-slate-500 text-blue-600 font-bold"
                 />
+                {/* Indice de raccourci — visible seulement au repos (pas focus,
+                    rien de sélectionné), disparaît dès qu'on interagit avec le champ. */}
+                {focusShortcut && !isOpen && !selectedOption && (
+                    <kbd className="shrink-0 px-1.5 py-0.5 rounded-md border border-slate-300 bg-slate-50 text-slate-400 text-xs font-mono font-bold">/</kbd>
+                )}
                 {selectedOption && !isOpen && (
                     <button
                         type="button"
