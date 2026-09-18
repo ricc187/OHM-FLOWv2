@@ -57,6 +57,7 @@ def compute_financier(
     acomptes_montants: list,
     achats_montants: list,
     heures_reelles: float,
+    heures_prevues_override: float = None,
 ) -> dict:
     """Calcule le prévisionnel/réel/écart complet d'un chantier.
 
@@ -74,10 +75,15 @@ def compute_financier(
                           (inclut la ligne type='estimation_petites_fournitures').
     heures_reelles       : SUM(entries.heures) pour ce chantier — vient du module
                           heures existant, pas recalculé ici.
+    heures_prevues_override : quand renseigné (non None), remplace la somme
+                          des heures par ligne CA — permet à un admin de fixer
+                          directement le total sans redécouper les lignes CA
+                          une à une (voir le crayon "Personnel" du frontend).
+                          None (par défaut) = comportement historique inchangé.
     """
     # --- Prévisionnel ---
     ca_prevu = sum(ca_lignes_montants)  # réf. C15 = SUM(C10:C14)
-    heures_prevues = sum(ca_lignes_heures)  # réf. D15 = SUM(D10:D14)
+    heures_prevues = heures_prevues_override if heures_prevues_override is not None else sum(ca_lignes_heures)  # réf. D15 = SUM(D10:D14)
     cout_mo_prevu = taux_horaire * heures_prevues  # réf. C32 = D30*C30
     marge_prevue = ca_prevu - charge_materiel_prevue - cout_mo_prevu  # réf. C35
     pct_marge_prevue = _safe_div(marge_prevue, ca_prevu)  # réf. D35 = C35/C15
