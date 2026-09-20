@@ -48,6 +48,14 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
     const [entries, setEntries] = useState<Entry[]>([]);
     // Popup "lire la description" — juste la ligne d'entry en cours de lecture.
     const [readingEntry, setReadingEntry] = useState<Entry | null>(null);
+    // Édition d'une saisie PENDING par son propriétaire (date + heures
+    // uniquement — voir manage_entry côté backend, admin_note/statut/
+    // réassignation restent hors de portée d'un employé) — plus de bouton
+    // dès que VALIDATED, voir la condition d'affichage sur le bouton crayon.
+    const [editingEntry, setEditingEntry] = useState<Entry | null>(null);
+    const [editEntryForm, setEditEntryForm] = useState({ date: '', heures: '' });
+    const [editEntryError, setEditEntryError] = useState('');
+    const [editEntrySaving, setEditEntrySaving] = useState(false);
 
     // Suivi Modal
     const [showEntryModal, setShowEntryModal] = useState(false);
@@ -91,7 +99,7 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
 
     // Lock background scroll while any modal is open, and tell the app shell
     // to hide its own nav bar so it can't sit on top of / peek behind the modal.
-    const anyModalOpen = showEntryModal || showEditModal || showExplorer;
+    const anyModalOpen = showEntryModal || showEditModal || showExplorer || !!editingEntry;
     useEffect(() => {
         setAppModalOpen(anyModalOpen);
         return () => setAppModalOpen(false);
@@ -101,6 +109,7 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
     // should need the mouse just to back out of one.
     useEscapeKey(showEntryModal, () => setShowEntryModal(false));
     useEscapeKey(showEditModal, () => setShowEditModal(false));
+    useEscapeKey(!!editingEntry, () => setEditingEntry(null));
 
     // transitions-dev "06-modal": keeps each modal mounted long enough to
     // play its scale/fade-out instead of vanishing instantly.
@@ -109,6 +118,7 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
     // "22-toast": the closure-blocked popup rises in/out instead of popping.
     const closeBlockedT = useMountTransition(!!closeBlockedMessage, 250);
     const readingEntryModalT = useMountTransition(!!readingEntry, 150);
+    const editEntryModalT = useMountTransition(!!editingEntry, 150);
     // Closing nulls readingEntry immediately, but the modal stays mounted
     // ~150ms longer to play its close tween and still needs the entry's
     // data to render during that window.
@@ -218,6 +228,37 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
         }
     };
 
+
+    const openEditEntry = (entry: Entry) => {
+        setEditingEntry(entry);
+        setEditEntryForm({ date: entry.date, heures: String(entry.heures) });
+        setEditEntryError('');
+    };
+
+    const handleSaveEntryEdit = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!editingEntry) return;
+        const heures = parseFloat(editEntryForm.heures);
+        if (isNaN(heures) || heures < 0) {
+            setEditEntryError('Nombre d\'heures invalide');
+            return;
+        }
+        if (!editEntryForm.date) {
+            setEditEntryError('Date requise');
+            return;
+        }
+        setEditEntrySaving(true);
+        const res = await api.put(`/api/entries/${editingEntry.id}`, { date: editEntryForm.date, heures });
+        setEditEntrySaving(false);
+        if (res.ok) {
+            const updated = await res.json();
+            setEntries(prev => prev.map(e2 => e2.id === updated.id ? updated : e2));
+            setEditingEntry(null);
+        } else {
+            const data = await res.json().catch(() => ({}));
+            setEditEntryError(data.error || 'Erreur lors de la modification');
+        }
+    };
 
     const handleExport = async () => {
         try {
@@ -487,6 +528,7 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
                                         <th className="p-4 text-right">Heures</th>
                                         <th className="p-4 text-center">Tâche</th>
                                         <th className="p-4 text-right">Statut</th>
+                                        <th className="p-4 text-right"></th>
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-slate-800">
@@ -514,6 +556,21 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
                                             </td>
                                             <td className="p-4 text-right">
                                                 <StatusBadge status={e.status} type="entry" />
+                                            </td>
+                                            <td className="p-4 text-right">
+                                                {/* Admin: toute entrée, tout statut. Propriétaire: seulement
+                                                    tant que PENDING — dès VALIDATED, plus de bouton pour
+                                                    l'employé, juste consultation (voir manage_entry côté
+                                                    backend, même garde). */}
+                                                {(currentUser.role === 'admin' || (e.status === 'PENDING' && e.user_id === currentUser.id)) && (
+                                                    <button
+                                                        onClick={() => openEditEntry(e)}
+                                                        className="p-1.5 rounded-lg text-slate-400 hover:text-ohm-primary hover:bg-black/5 transition-colors"
+                                                        title={currentUser.role === 'admin' ? 'Modifier la saisie' : 'Modifier ma saisie'}
+                                                    >
+                                                        <Pencil size={16} />
+                                                    </button>
+                                                )}
                                             </td>
                                         </tr>
                                     ))}
@@ -836,6 +893,37 @@ export const ChantierDetail: React.FC<Props> = ({ chantier: initialChantier, cur
                             {readingEntryDisplay.description}
                         </div>
                     </div>
+                </div>
+            )}
+            {/* Édition d'une saisie propriétaire tant qu'elle est PENDING —
+                date + heures uniquement (voir manage_entry côté backend). */}
+            {editEntryModalT.mounted && editingEntry && (
+                <div className={`t-modal ${editEntryModalT.active ? 'is-open' : 'is-closing'} fixed inset-0 bg-white/80 backdrop-blur-sm flex items-center justify-center z-[100] p-4 safe-top safe-bottom`}>
+                    <form onSubmit={handleSaveEntryEdit} className="card w-full max-w-sm space-y-4">
+                        <div className="flex justify-between items-start">
+                            <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2"><Pencil size={18} className="text-ohm-primary" /> Modifier ma saisie</h3>
+                            <button type="button" onClick={() => setEditingEntry(null)}><X className="text-slate-500" /></button>
+                        </div>
+                        <div>
+                            <label className="text-xs font-bold text-primary/80 uppercase tracking-widest mb-2 block">Date</label>
+                            <AwesomeDatePicker value={editEntryForm.date} onChange={d => setEditEntryForm({ ...editEntryForm, date: d })} />
+                        </div>
+                        <div>
+                            <label className="text-xs font-bold text-primary/80 uppercase tracking-widest mb-2 block">Heures</label>
+                            <input
+                                type="number" step="0.5" min="0" className="input-field"
+                                value={editEntryForm.heures}
+                                onChange={e => setEditEntryForm({ ...editEntryForm, heures: e.target.value })}
+                            />
+                        </div>
+                        {editEntryError && <p className="text-sm text-red-500 font-bold">{editEntryError}</p>}
+                        <button
+                            type="submit" disabled={editEntrySaving}
+                            className="w-full py-3 rounded-xl bg-ohm-primary text-ohm-bg font-black uppercase tracking-widest hover:bg-yellow-300 transition-all disabled:opacity-50"
+                        >
+                            {editEntrySaving ? 'Enregistrement…' : 'Enregistrer'}
+                        </button>
+                    </form>
                 </div>
             )}
             {confirmDialogProps && <ConfirmDialog {...confirmDialogProps} />}

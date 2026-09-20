@@ -3261,13 +3261,22 @@ def validate_entry(current_user, entry_id):
 @app.route('/api/entries/<int:entry_id>', methods=['PUT', 'DELETE'])
 @token_required
 def manage_entry(current_user, entry_id):
-    if current_user.role != 'admin':
-        return jsonify({'error': 'Admin access required'}), 403
     entry = Entry.query.get(entry_id)
     if not entry:
         return jsonify({'error': 'Entry not found'}), 404
 
+    is_admin = current_user.role == 'admin'
+    is_owner = entry.user_id == current_user.id
+
+    # Same pattern as Leave (manage_single_leave): admin always, or the
+    # owner while their own entry is still PENDING — once VALIDATED (or
+    # otherwise not PENDING), only an admin can still touch it.
+    if not is_admin and not (is_owner and entry.status == 'PENDING'):
+        return jsonify({'error': 'Admin access required'}), 403
+
     if request.method == 'DELETE':
+        if not is_admin:
+            return jsonify({'error': 'Admin access required'}), 403
         audit_log('entries', current_user,
                    f"deleted/rejected entry #{entry.id} ({entry.user.username}, chantier {entry.chantier.nom if entry.chantier else entry.chantier_id}, "
                    f"date {entry.date}, {entry.heures}h)")
@@ -3284,32 +3293,46 @@ def manage_entry(current_user, entry_id):
         if heures < 0:
             return jsonify({'error': 'heures cannot be negative'}), 400
 
-        # Admin can reassign an entry to a different user (e.g. it was logged
-        # under the wrong name).
-        new_user_id = data.get('user_id')
-        old_user = entry.user
+        # date: owner (while PENDING) or admin — same requirement as at
+        # creation (see add_entry): non-empty.
+        new_date = entry.date
+        if 'date' in data:
+            new_date = (data.get('date') or '').strip()
+            if not new_date:
+                return jsonify({'error': 'date is required'}), 400
+
+        # Everything else here (reassigning to another user, forcing status,
+        # admin_note) stays admin-only — an owner mid-PENDING-edit only ever
+        # touches date/heures, same narrow scope as what the frontend's
+        # owner-facing edit form exposes.
         reassigned_to = None
-        if new_user_id is not None and int(new_user_id) != entry.user_id:
-            new_user = db.session.get(User, int(new_user_id))
-            if not new_user:
-                return jsonify({'error': 'User not found'}), 404
-            reassigned_to = new_user
-            entry.user_id = new_user.id
+        old_user = entry.user
+        if is_admin:
+            new_user_id = data.get('user_id')
+            if new_user_id is not None and int(new_user_id) != entry.user_id:
+                new_user = db.session.get(User, int(new_user_id))
+                if not new_user:
+                    return jsonify({'error': 'User not found'}), 404
+                reassigned_to = new_user
+                entry.user_id = new_user.id
 
         changes = []
         if heures != entry.heures:
             changes.append(f'heures {entry.heures} -> {heures}')
+        if new_date != entry.date:
+            changes.append(f'date {entry.date} -> {new_date}')
         if reassigned_to:
             changes.append(f'user {old_user.username} -> {reassigned_to.username}')
 
         entry.heures = heures
-        if 'status' in data:
+        entry.date = new_date
+        if is_admin and 'status' in data:
             if data['status'] != entry.status:
                 changes.append(f"status {entry.status} -> {data['status']}")
             entry.status = data['status']
-        if 'admin_note' in data:
+        if is_admin and 'admin_note' in data:
             entry.admin_note = data['admin_note']
-        if 'description' in data:
+        if is_admin and 'description' in data:
             new_description = (data['description'] or '').strip()
             if not new_description:
                 return jsonify({'error': 'Description de la tâche requise'}), 400
@@ -3770,6 +3793,102 @@ def manage_single_leave(current_user, leave_id):
 
         db.session.commit()
         return jsonify(leave.to_dict())
+
+
+# Statuts affichés en clair dans les exports (voir LEAVE_TYPE_LABELS
+# ci-dessus pour le même principe côté type) — jamais exposé ailleurs, les
+# routes JSON renvoient toujours le code brut ('PENDING', ...), seul un
+# document destiné à être lu directement par un humain a besoin du libellé.
+LEAVE_STATUS_LABELS = {'PENDING': 'En attente', 'APPROVED': 'Approuvé', 'REJECTED': 'Refusé'}
+
+
+def _leaves_export_rows(date_start=None, date_end=None):
+    """Congés à exporter (Excel/Word), triés du plus récent au plus ancien —
+    filtre de période optionnel sur date_start (la vue admin n'a elle-même
+    aucun filtre de période aujourd'hui, voir AdminLeaves.tsx : sans lui,
+    tout est exporté par défaut)."""
+    query = Leave.query
+    if date_start:
+        query = query.filter(Leave.date_start >= date_start)
+    if date_end:
+        query = query.filter(Leave.date_start <= date_end)
+    leaves = query.order_by(Leave.date_start.desc()).all()
+    return [
+        {
+            'user_name': l.user.username if l.user else 'Inconnu',
+            'type': LEAVE_TYPE_LABELS.get(l.type, l.type),
+            'date_start': l.date_start,
+            'date_end': l.date_end,
+            'days_count': l.days_count,
+            'status': LEAVE_STATUS_LABELS.get(l.status, l.status),
+        }
+        for l in leaves
+    ]
+
+
+@app.route('/api/leaves/export.xlsx', methods=['GET'])
+@token_required
+def export_leaves_xlsx(current_user):
+    if current_user.role != 'admin':
+        return jsonify({'error': 'Admin access required'}), 403
+    from openpyxl import Workbook
+    from openpyxl.styles import Font
+
+    rows = _leaves_export_rows(request.args.get('date_start'), request.args.get('date_end'))
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = 'Congés'
+    headers = ['Employé', 'Type', 'Début', 'Fin', 'Jours', 'Statut']
+    ws.append(headers)
+    for cell in ws[1]:
+        cell.font = Font(bold=True)
+    for r in rows:
+        ws.append([r['user_name'], r['type'], r['date_start'], r['date_end'], r['days_count'], r['status']])
+    for col, width in zip('ABCDEF', (22, 16, 12, 12, 8, 12)):
+        ws.column_dimensions[col].width = width
+
+    buf = BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return send_file(
+        buf, as_attachment=True, download_name='conges.xlsx',
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    )
+
+
+@app.route('/api/leaves/export.docx', methods=['GET'])
+@token_required
+def export_leaves_docx(current_user):
+    if current_user.role != 'admin':
+        return jsonify({'error': 'Admin access required'}), 403
+    from docx import Document
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+    rows = _leaves_export_rows(request.args.get('date_start'), request.args.get('date_end'))
+
+    doc = Document()
+    doc.add_heading('Liste des congés', level=1)
+    headers = ['Employé', 'Type', 'Début', 'Fin', 'Jours', 'Statut']
+    table = doc.add_table(rows=1, cols=len(headers))
+    table.style = 'Light Grid Accent 1'
+    for cell, header in zip(table.rows[0].cells, headers):
+        cell.text = header
+        cell.paragraphs[0].runs[0].bold = True
+    for r in rows:
+        row_cells = table.add_row().cells
+        values = [r['user_name'], r['type'], r['date_start'], r['date_end'], str(r['days_count']), r['status']]
+        for cell, value in zip(row_cells, values):
+            cell.text = value
+            cell.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.LEFT
+
+    buf = BytesIO()
+    doc.save(buf)
+    buf.seek(0)
+    return send_file(
+        buf, as_attachment=True, download_name='conges.docx',
+        mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    )
 
 
 # --- Agenda: unified calendar (chantier assignments + leaves) ----------

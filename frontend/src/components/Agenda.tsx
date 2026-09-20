@@ -23,6 +23,16 @@ const startOfDay = (d: Date) => { const r = new Date(d); r.setHours(0, 0, 0, 0);
 const daysBetweenISO = (a: string, b: string) => Math.round((parseISODate(b).getTime() - parseISODate(a).getTime()) / 86400000);
 // Monday-start week, matching CalendarView's convention elsewhere in the app.
 const getMonday = (d: Date) => { const day = d.getDay(); const diff = day === 0 ? -6 : 1 - day; return addDays(startOfDay(d), diff); };
+// ISO 8601 week number (standard algorithm: shift to that week's Thursday,
+// then count weeks since the Thursday-containing year's January 1st) — used
+// for the "S39" label in the Semaine view header (ResourceGrid).
+const isoWeekNumber = (d: Date) => {
+    const date = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+    const dayNum = date.getUTCDay() || 7;
+    date.setUTCDate(date.getUTCDate() + 4 - dayNum);
+    const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
+    return Math.ceil(((date.getTime() - yearStart.getTime()) / 86400000 + 1) / 7);
+};
 
 const MONTH_SHORT = ['janv.', 'févr.', 'mars', 'avr.', 'mai', 'juin', 'juil.', 'août', 'sept.', 'oct.', 'nov.', 'déc.'];
 const MONTH_FULL = ['Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin', 'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre'];
@@ -559,7 +569,15 @@ const ResourceGrid: React.FC<{
         <div className="flex flex-col h-full min-h-0 overflow-x-auto">
             {/* Day headers */}
             <div className="grid border-b border-slate-300 bg-slate-50 shrink-0" style={{ gridTemplateColumns: headerGridColumns }}>
-                <div className="sticky left-0 z-10 bg-slate-50 p-2 text-[10px] font-bold text-slate-400 uppercase tracking-widest self-center">Employé</div>
+                <div className="sticky left-0 z-10 bg-slate-50 p-2 flex flex-col items-center justify-center text-center">
+                    {/* Numéro de semaine ISO — vue Semaine uniquement (days.length===7,
+                        Jour n'en a qu'un seul) : en haut, centré, en évidence — même
+                        registre que le numéro du jour dans les en-têtes de colonnes. */}
+                    {days.length === 7 && (
+                        <span className="text-lg font-black text-primary leading-tight">S{isoWeekNumber(days[0])}</span>
+                    )}
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Employé</span>
+                </div>
                 {days.map(d => {
                     const isToday = d.getTime() === today.getTime();
                     const holiday = holidayName(holidays, d);

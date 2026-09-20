@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { CalendarCheck, Check, X } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { CalendarCheck, Check, Download, FileSpreadsheet, FileText, X } from 'lucide-react';
 import { Leave } from '../types';
 import { LEAVE_TYPE_LABELS } from '../leaveTypes';
 import { api } from '../api';
@@ -24,6 +24,39 @@ export const AdminLeaves: React.FC = () => {
     const [leaves, setLeaves] = useState<Leave[]>([]);
     const [loading, setLoading] = useState(true);
     const [actingId, setActingId] = useState<number | null>(null);
+    const [showExportMenu, setShowExportMenu] = useState(false);
+    const exportMenuRef = useRef<HTMLDivElement>(null);
+
+    // Ferme le menu au clic extérieur — pas de backdrop plein écran pour un
+    // simple menu déroulant à deux options.
+    useEffect(() => {
+        if (!showExportMenu) return;
+        const onClickOutside = (e: MouseEvent) => {
+            if (exportMenuRef.current && !exportMenuRef.current.contains(e.target as Node)) {
+                setShowExportMenu(false);
+            }
+        };
+        document.addEventListener('mousedown', onClickOutside);
+        return () => document.removeEventListener('mousedown', onClickOutside);
+    }, [showExportMenu]);
+
+    // Exporte TOUS les congés (pas seulement ceux affichés à l'écran, qui ne
+    // montre que les PENDING — voir le commentaire d'en-tête) : cet écran n'a
+    // pas de filtre de période aujourd'hui, donc pas de plage à transmettre.
+    const handleExport = async (format: 'xlsx' | 'docx') => {
+        setShowExportMenu(false);
+        const res = await api.get(`/api/leaves/export.${format}`);
+        if (!res.ok) { alert('Erreur lors de l\'export'); return; }
+        const blob = await res.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `conges.${format}`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        window.URL.revokeObjectURL(url);
+    };
 
     const fetchLeaves = () => {
         api.get('/api/leaves')
@@ -68,8 +101,34 @@ export const AdminLeaves: React.FC = () => {
                     </h2>
                     <p className="text-slate-500 mt-1">Demandes d'absence en attente d'approbation.</p>
                 </div>
-                <div className="bg-slate-50 px-4 py-2 rounded-lg text-slate-900 font-mono font-bold">
-                    {leaves.length} en attente
+                <div className="flex items-center gap-3">
+                    <div className="bg-slate-50 px-4 py-2 rounded-lg text-slate-900 font-mono font-bold">
+                        {leaves.length} en attente
+                    </div>
+                    <div className="relative" ref={exportMenuRef}>
+                        <button
+                            onClick={() => setShowExportMenu(v => !v)}
+                            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-white border border-slate-300 text-slate-600 hover:border-ohm-primary hover:text-ohm-primary transition-all font-bold text-sm"
+                        >
+                            <Download size={16} /> Exporter
+                        </button>
+                        {showExportMenu && (
+                            <div className="absolute right-0 mt-2 w-48 bg-white border border-slate-200 rounded-xl shadow-xl py-1 z-20">
+                                <button
+                                    onClick={() => handleExport('xlsx')}
+                                    className="w-full flex items-center gap-2 px-4 py-2 text-sm text-left text-slate-700 hover:bg-ohm-primary/10 transition-colors"
+                                >
+                                    <FileSpreadsheet size={16} className="text-green-600" /> Excel
+                                </button>
+                                <button
+                                    onClick={() => handleExport('docx')}
+                                    className="w-full flex items-center gap-2 px-4 py-2 text-sm text-left text-slate-700 hover:bg-ohm-primary/10 transition-colors"
+                                >
+                                    <FileText size={16} className="text-blue-600" /> Word
+                                </button>
+                            </div>
+                        )}
+                    </div>
                 </div>
             </div>
 
