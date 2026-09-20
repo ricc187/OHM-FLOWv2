@@ -10,6 +10,7 @@ export const LEAVE_TYPE_OPTIONS: { value: LeaveType; label: string }[] = [
     { value: 'ARMEE', label: 'Armée' },
     { value: 'CONGE_PAT_MAT', label: 'Congé pat./mat.' },
     { value: 'DEMENAGEMENT', label: 'Déménagement' },
+    { value: 'FORMATION', label: 'Cours et formation' },
 ];
 
 export const LEAVE_TYPE_LABELS: Record<string, string> = Object.fromEntries(

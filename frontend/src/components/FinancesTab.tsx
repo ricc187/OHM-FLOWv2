@@ -261,7 +261,18 @@ export const FinancesTab: React.FC<Props> = ({ chantierId, avancementDeclare }) 
         ));
         setMaterielEditing(true);
     };
-    const startPersonnelEdit = () => { setPersonnelDraft(toDraft(data!.financier!, ['taux_horaire'])); setPersonnelEditing(true); };
+    // Heures prévues n'est pas une colonne du financier (c'est la somme des
+    // heures des lignes CA, voir financier_calculs.compute_financier) — on
+    // pré-remplit avec la valeur EFFECTIVE actuelle (data.heures_prevues,
+    // déjà l'override si un précédent enregistrement en a posé un), pas le
+    // champ brut heures_prevues_manuel qui peut être null.
+    const startPersonnelEdit = () => {
+        setPersonnelDraft({
+            ...toDraft(data!.financier!, ['taux_horaire']),
+            heures_prevues_manuel: String(data!.heures_prevues ?? 0),
+        });
+        setPersonnelEditing(true);
+    };
 
     // Sauvegarde groupée du crayon "Matériel" : le prévisionnel (PUT unique)
     // puis chaque achat modifié (un PUT par achat — pas de route bulk côté
@@ -673,7 +684,9 @@ export const FinancesTab: React.FC<Props> = ({ chantierId, avancementDeclare }) 
                 </tr>
                 <tr>
                     <Td className="font-medium text-slate-700">Heures prévues</Td>
-                    <Td className={`text-right font-bold ${RESULT}`} colSpan={2}>{formatHeures(data.heures_prevues)}</Td>
+                    <Td className={`text-right font-bold ${personnelEditing ? FIELD : RESULT}`} colSpan={2}>
+                        <NumCell editing={personnelEditing} value={personnelDraft.heures_prevues_manuel ?? ''} onChange={v => setPersonnelDraft({ ...personnelDraft, heures_prevues_manuel: v })} step="0.5" formatted={formatHeures(data.heures_prevues)} />
+                    </Td>
                     <Td className={RESULT}>Total heures</Td>
                     <Td className={`text-right font-bold ${RESULT}`}>{formatHeures(data.heures_reelles)}</Td>
                     <Td className={`text-right font-bold ${signColor(data.ecart_heures, true)}`}>{formatHeures(data.ecart_heures)}</Td>

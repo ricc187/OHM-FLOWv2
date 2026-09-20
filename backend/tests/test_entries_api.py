@@ -45,14 +45,16 @@ class EntriesApiTestCase(unittest.TestCase):
             cls.token = ohmapp.serializer.dumps({'user_id': admin.id})
             cls.admin_id = admin.id
 
-            worker_a = ohmapp.User(username='WorkerA', role='user')
+            worker_a = ohmapp.User(username='WorkerA', role='user', must_change_password=False)
             worker_a.set_pin('1234')
-            worker_b = ohmapp.User(username='WorkerB', role='user')
+            worker_b = ohmapp.User(username='WorkerB', role='user', must_change_password=False)
             worker_b.set_pin('1234')
             ohmapp.db.session.add_all([worker_a, worker_b])
             ohmapp.db.session.commit()
             cls.worker_a_id = worker_a.id
             cls.worker_b_id = worker_b.id
+            cls.worker_a_token = ohmapp.serializer.dumps({'user_id': worker_a.id})
+            cls.worker_b_token = ohmapp.serializer.dumps({'user_id': worker_b.id})
         cls.client.set_cookie(ohmapp.COOKIE_NAME, cls.token)
 
     def setUp(self):
@@ -143,6 +145,109 @@ class EntriesApiTestCase(unittest.TestCase):
         entry_id = create.get_json()['id']
         res = self.client.put(f'/api/entries/{entry_id}', json={'heures': 5, 'user_id': 999999})
         self.assertEqual(res.status_code, 404)
+
+    # --- Owner edit while PENDING (same pattern as Leave) ----------------
+
+    def _worker_client(self, token):
+        c = ohmapp.app.test_client()
+        c.set_cookie(ohmapp.COOKIE_NAME, token)
+        return c
+
+    def test_owner_can_edit_own_pending_entry(self):
+        worker_client = self._worker_client(self.worker_a_token)
+        create = worker_client.post('/api/entries', json={
+            'chantier_id': self.chantier_id,
+            'date': '2026-01-05', 'heures': 5, 'description': 'Travaux divers'
+        })
+        self.assertEqual(create.status_code, 201, create.get_json())
+        entry_id = create.get_json()['id']
+
+        res = worker_client.put(f'/api/entries/{entry_id}', json={'heures': 6.5, 'date': '2026-01-06'})
+        self.assertEqual(res.status_code, 200, res.get_json())
+        body = res.get_json()
+        self.assertEqual(body['heures'], 6.5)
+        self.assertEqual(body['date'], '2026-01-06')
+
+    def test_owner_cannot_edit_once_validated(self):
+        worker_client = self._worker_client(self.worker_a_token)
+        create = worker_client.post('/api/entries', json={
+            'chantier_id': self.chantier_id,
+            'date': '2026-01-05', 'heures': 5, 'description': 'Travaux divers'
+        })
+        entry_id = create.get_json()['id']
+
+        validate_res = self.client.put(f'/api/entries/{entry_id}/validate')
+        self.assertEqual(validate_res.status_code, 200)
+
+        res = worker_client.put(f'/api/entries/{entry_id}', json={'heures': 8})
+        self.assertEqual(res.status_code, 403)
+
+    def test_owner_cannot_edit_someone_elses_entry(self):
+        worker_a_client = self._worker_client(self.worker_a_token)
+        create = worker_a_client.post('/api/entries', json={
+            'chantier_id': self.chantier_id,
+            'date': '2026-01-05', 'heures': 5, 'description': 'Travaux divers'
+        })
+        entry_id = create.get_json()['id']
+
+        worker_b_client = self._worker_client(self.worker_b_token)
+        res = worker_b_client.put(f'/api/entries/{entry_id}', json={'heures': 1})
+        self.assertEqual(res.status_code, 403)
+
+    def test_owner_edit_ignores_admin_only_fields(self):
+        """A PENDING owner-edit payload sneaking in status/user_id/admin_note
+        must silently leave those alone — only heures/date are theirs to
+        change, matching the frontend's owner-facing form (date + heures
+        only, see the exploration report)."""
+        worker_client = self._worker_client(self.worker_a_token)
+        create = worker_client.post('/api/entries', json={
+            'chantier_id': self.chantier_id,
+            'date': '2026-01-05', 'heures': 5, 'description': 'Travaux divers'
+        })
+        entry_id = create.get_json()['id']
+
+        res = worker_client.put(f'/api/entries/{entry_id}', json={
+            'heures': 6, 'status': 'VALIDATED', 'user_id': self.worker_b_id, 'admin_note': 'sneaky',
+        })
+        self.assertEqual(res.status_code, 200, res.get_json())
+        body = res.get_json()
+        self.assertEqual(body['heures'], 6)
+        self.assertEqual(body['status'], 'PENDING')
+        self.assertEqual(body['user_id'], self.worker_a_id)
+        self.assertIsNone(body['admin_note'])
+
+    def test_admin_can_edit_any_entry_even_validated(self):
+        """Backing the new admin pencil in ChantierDetail's Suivi tab:
+        an admin must be able to edit date/heures on someone else's entry
+        regardless of status, unlike the owner (see test_owner_cannot_edit_once_validated)."""
+        worker_client = self._worker_client(self.worker_a_token)
+        create = worker_client.post('/api/entries', json={
+            'chantier_id': self.chantier_id,
+            'date': '2026-01-05', 'heures': 5, 'description': 'Travaux divers'
+        })
+        entry_id = create.get_json()['id']
+
+        validate_res = self.client.put(f'/api/entries/{entry_id}/validate')
+        self.assertEqual(validate_res.status_code, 200)
+
+        res = self.client.put(f'/api/entries/{entry_id}', json={'heures': 7.5, 'date': '2026-01-07'})
+        self.assertEqual(res.status_code, 200, res.get_json())
+        body = res.get_json()
+        self.assertEqual(body['heures'], 7.5)
+        self.assertEqual(body['date'], '2026-01-07')
+        self.assertEqual(body['status'], 'VALIDATED')
+        self.assertEqual(body['user_id'], self.worker_a_id)
+
+    def test_owner_cannot_delete_own_pending_entry(self):
+        worker_client = self._worker_client(self.worker_a_token)
+        create = worker_client.post('/api/entries', json={
+            'chantier_id': self.chantier_id,
+            'date': '2026-01-05', 'heures': 5, 'description': 'Travaux divers'
+        })
+        entry_id = create.get_json()['id']
+
+        res = worker_client.delete(f'/api/entries/{entry_id}')
+        self.assertEqual(res.status_code, 403)
 
     def test_validate_and_delete_are_logged(self):
         create = self.client.post('/api/entries', json={
