@@ -8,6 +8,8 @@ import re
 import threading
 import zipfile
 import tempfile
+import base64
+import json
 from io import BytesIO
 from itsdangerous import URLSafeTimedSerializer
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -5256,6 +5258,25 @@ def _volta_env(key):
 # l'étape 2 pour le détail.
 _volta_token_cache = {'token': None, 'expires_at': None}
 
+def _volta_token_expiry(token):
+    """Lit le claim `exp` (JWT standard, epoch UTC) du token Volta reçu —
+    sans vérifier la signature, on ne fait que lire une info que Volta nous
+    donne lui-même, la validité réelle reste tranchée par Volta au prochain
+    appel. Renvoie None si le token n'est pas un JWT exploitable (l'appelant
+    retombe alors sur un TTL par défaut prudent).
+
+    Corrige le bug HTTP 401 constaté en prod : le code supposait un TTL fixe
+    de 50min, mais le vrai `exp` renvoyé par Volta donne une durée de vie de
+    5min (confirmé en décodant un token réel) — décoder l'exp réel évite de
+    resupposer une constante qui peut encore changer côté Volta.
+    """
+    try:
+        payload_b64 = token.split('.')[1]
+        payload = json.loads(base64.urlsafe_b64decode(payload_b64 + '=' * (-len(payload_b64) % 4)))
+        return datetime.datetime.utcfromtimestamp(payload['exp'])
+    except Exception:
+        return None
+
 def _volta_authenticate():
     now = datetime.datetime.utcnow()
     if _volta_token_cache['token'] and _volta_token_cache['expires_at'] and now < _volta_token_cache['expires_at']:
@@ -5276,9 +5297,27 @@ def _volta_authenticate():
     if not token:
         raise VoltaSyncError("Authentification Volta: réponse sans access_token")
 
+    expiry = _volta_token_expiry(token)
+    # Marge de 15s : ré-authentifie un peu avant l'expiration annoncée par
+    # Volta plutôt que pile dessus (un appel qui traîne ne doit pas taper
+    # pile sur la limite). Sans `exp` exploitable, repli sur 4min — proche
+    # du vrai TTL observé (5min), plutôt que l'ancienne constante de 50min.
+    _volta_token_cache['expires_at'] = (expiry - datetime.timedelta(seconds=15)) if expiry else (now + datetime.timedelta(minutes=4))
     _volta_token_cache['token'] = token
-    _volta_token_cache['expires_at'] = now + datetime.timedelta(minutes=50)
     return token
+
+def _volta_get_with_reauth(url, params, timeout=30):
+    """GET Volta authentifié, avec un retry après réauth si Volta renvoie
+    401 — filet de sécurité en plus du TTL réel (voir _volta_token_expiry) :
+    au cas où Volta invalide un token plus tôt que son `exp` annoncé."""
+    token = _volta_authenticate()
+    resp = requests.get(url, headers={'Authorization': f'Bearer {token}'}, params=params, timeout=timeout)
+    if resp.status_code == 401:
+        _volta_token_cache['token'] = None
+        _volta_token_cache['expires_at'] = None
+        token = _volta_authenticate()
+        resp = requests.get(url, headers={'Authorization': f'Bearer {token}'}, params=params, timeout=timeout)
+    return resp
 
 def fetch_invoice_amount(numero_facture):
     """Récupère le montant d'une facture Volta par son numéro.
@@ -5301,13 +5340,10 @@ def fetch_invoice_amount(numero_facture):
 
     base_url = _volta_env('VOLTA_API_BASE_URL').rstrip('/')
     org_unit = _volta_env('VOLTA_ORG_UNIT_PROJECTS')
-    token = _volta_authenticate()
     try:
-        resp = requests.get(
+        resp = _volta_get_with_reauth(
             f'{base_url}/v2/documents/invoice-amount',
-            headers={'Authorization': f'Bearer {token}'},
             params={'orgUnitCode': org_unit, 'invoiceNumber': invoice_number},
-            timeout=30,
         )
     except requests.RequestException as e:
         raise VoltaSyncError(f"Erreur réseau Volta (facture {numero_facture}): {e}")
@@ -5357,11 +5393,9 @@ def fetch_project_offers_or_contracts(numero_projet):
 
     base_url = _volta_env('VOLTA_API_BASE_URL').rstrip('/')
     org_unit = _volta_env('VOLTA_ORG_UNIT_PROJECTS')
-    token = _volta_authenticate()
     try:
-        resp = requests.get(
+        resp = _volta_get_with_reauth(
             f'{base_url}/v2/offers',
-            headers={'Authorization': f'Bearer {token}'},
             params={
                 'orgUnitCode': org_unit,
                 # Date volontairement ancienne — cet appel veut TOUTES les
@@ -5371,7 +5405,6 @@ def fetch_project_offers_or_contracts(numero_projet):
                 'projectMainNumber': project_main_number,
                 'projectSubNumber': project_sub_number,
             },
-            timeout=30,
         )
     except requests.RequestException as e:
         raise VoltaSyncError(f"Erreur réseau Volta (projet {numero_projet}): {e}")
