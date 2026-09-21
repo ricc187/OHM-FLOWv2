@@ -26,3 +26,24 @@ Ce projet utilise un workflow à 3 niveaux : `feature` → `staging` → `main`.
 ## Tester `staging`
 
 Tester `staging` en local (comme le serveur de démo déjà en place) suffit pour la plupart des vérifications. Un environnement Docker séparé (2e environnement sur le VPS, ou VPS/sous-domaine dédié) n'est à envisager que si un besoin précis de test "comme en prod" apparaît — à évaluer au cas par cas, pas mis en place par défaut.
+
+## CI (GitHub Actions)
+
+`.github/workflows/ci.yml` tourne sur chaque Pull Request vers `main` et vers `staging` : job `backend` (`pip install -r requirements.txt` frais + `python -m unittest discover`) et job `frontend` (`npm ci` + `tsc --noEmit` + `npm run build`). Les deux doivent être verts pour merger une PR une fois la protection de branche (ci-dessous) activée.
+
+## Protection de la branche `main`
+
+À activer manuellement dans GitHub : **Settings → Branches → Add branch ruleset** (ou **Add rule** sur l'ancienne UI "Branch protection rules"), branche cible `main`.
+
+Cases à cocher :
+
+- **Require a pull request before merging** — interdit le push direct sur `main` ; seul un merge de PR est accepté.
+  - Nombre d'approbations requises : `0` suffit pour un projet solo — augmenter si un second reviewer rejoint le projet.
+- **Require status checks to pass before merging**
+  - Cocher **Require branches to be up to date before merging**.
+  - Dans la recherche de checks, ajouter les deux jobs définis par `ci.yml` : **`backend`** et **`frontend`**. (Ils n'apparaissent dans la liste qu'après avoir tourné au moins une fois sur une PR — c'est déjà fait, voir PR #45.)
+- **Do not allow bypassing the above settings** — sans cette case, un admin (donc probablement ton propre compte) peut quand même push direct ou merger avec des checks rouges ; à cocher pour que la règle s'applique aussi à toi.
+
+Optionnel, pas strictement demandé mais cohérent avec le workflow ci-dessus :
+- **Require linear history** — interdit les merge commits sur `main`, force un historique propre si souhaité (le workflow actuel utilise des merges `--no-ff` `staging` → `main`, donc **ne pas cocher** si on garde cette pratique).
+- La même protection appliquée à `staging` n'est pas demandée ici et casserait le "merge direct si travail solo" du cycle de vie d'une feature (§ ci-dessus) — à activer seulement si ce choix change.
