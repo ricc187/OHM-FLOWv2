@@ -3579,16 +3579,19 @@ def _validate_period(payload):
     }, None
 
 
-def _generate_weekly_occurrences(date_debut, date_fin, until):
+def _generate_weekly_occurrences(date_debut, date_fin, until, heure_debut=None, heure_fin=None, toute_la_journee=True):
     """Agenda "Récurrence" checkbox — weekly recurrence, the only pattern
     offered (see prompt discussion: same weekday as date_debut, every week,
     until an end date — covers "tous les mardis jusqu'à fin juin" exactly,
     nothing more configurable was asked for).
 
     Repeats the [date_debut, date_fin] span (same weekday, same span length)
-    every 7 days, up to and including `until`. Returns a list of
-    {'date_debut', 'date_fin'} dicts (YYYY-MM-DD strings), starting with the
-    original occurrence itself — always at least one element once validated.
+    every 7 days, up to and including `until`. heure_debut/heure_fin/
+    toute_la_journee come from the validated source period and are carried
+    unchanged onto every generated occurrence (same time-of-day each week).
+    Returns a list of {'date_debut', 'date_fin', 'heure_debut', 'heure_fin',
+    'toute_la_journee'} dicts, starting with the original occurrence itself —
+    always at least one element once validated.
     Raises ValueError (never a raw exception) on a malformed `until` or one
     before date_debut (nothing to repeat), for the caller to turn into a 400."""
     try:
@@ -3608,6 +3611,9 @@ def _generate_weekly_occurrences(date_debut, date_fin, until):
         occurrences.append({
             'date_debut': cursor.isoformat(),
             'date_fin': (cursor + datetime.timedelta(days=span)).isoformat(),
+            'heure_debut': heure_debut,
+            'heure_fin': heure_fin,
+            'toute_la_journee': toute_la_journee,
         })
         cursor += one_week
     return occurrences
@@ -4247,7 +4253,11 @@ def create_calendar_leaves(current_user):
         if not isinstance(recurrence, dict) or not recurrence.get('until'):
             return jsonify({'error': 'recurrence.until is required when recurrence is set'}), 400
         try:
-            occurrences = _generate_weekly_occurrences(period['date_debut'], period['date_fin'], recurrence['until'])
+            occurrences = _generate_weekly_occurrences(
+                period['date_debut'], period['date_fin'], recurrence['until'],
+                heure_debut=period['heure_debut'], heure_fin=period['heure_fin'],
+                toute_la_journee=period['toute_la_journee'],
+            )
         except ValueError as e:
             return jsonify({'error': str(e)}), 400
     else:
