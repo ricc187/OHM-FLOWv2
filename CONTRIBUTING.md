@@ -40,10 +40,7 @@ Deux rulesets sont activés sur GitHub (**Settings → Rules → Rulesets**), cr
 - **Require status checks to pass before merging**, contexts `backend` + `frontend` (les deux jobs de `ci.yml`), branches à jour exigées.
 - `bypass_actors: []` — personne, admin compris, ne peut contourner ces deux règles.
 
-**`staging-ci-required`** (branche `staging`) :
-- **Require status checks to pass before merging** seulement, mêmes contexts `backend` + `frontend` — pas de règle `pull_request`, donc le push/merge direct reste autorisé (voir "merge direct si travail solo" ci-dessus). Une PR ouverte vers `staging` doit quand même avoir la CI verte pour être mergeable.
-
-Note : `required_status_checks` ne s'applique qu'au merge d'une PR — `ci.yml` ne se déclenche que sur `pull_request` (pas sur `push`), donc un push direct sur `staging` ne fait tourner aucun check, comme avant.
+**`staging`** : aucun ruleset. Un `required_status_checks` a été testé puis retiré — contrairement à ce qu'on pensait, cette règle exige que le check ait tourné et réussi sur le commit poussé, y compris en push direct (pas seulement au merge d'une PR) ; comme `ci.yml` ne se déclenche que sur `pull_request` (jamais sur `push`), aucun commit poussé directement ne peut jamais satisfaire la règle — ça bloque tout push direct, pas seulement le force sans CI. Incompatible avec "merge direct si travail solo" (voir plus haut), donc retiré. Une PR ouverte vers `staging` fait quand même tourner `ci.yml` et affiche le statut des checks — juste sans les rendre obligatoires pour merger.
 
 Pas de **Require linear history** sur `main` : le workflow actuel utilise des merges `--no-ff` `staging` → `main`, une règle linéaire l'interdirait.
 
