@@ -31,19 +31,20 @@ Tester `staging` en local (comme le serveur de démo déjà en place) suffit pou
 
 `.github/workflows/ci.yml` tourne sur chaque Pull Request vers `main` et vers `staging` : job `backend` (`pip install -r requirements.txt` frais + `python -m unittest discover`) et job `frontend` (`npm ci` + `tsc --noEmit` + `npm run build`). Les deux doivent être verts pour merger une PR une fois la protection de branche (ci-dessous) activée.
 
-## Protection de la branche `main`
+## Protection de branche (active)
 
-À activer manuellement dans GitHub : **Settings → Branches → Add branch ruleset** (ou **Add rule** sur l'ancienne UI "Branch protection rules"), branche cible `main`.
+Deux rulesets sont activés sur GitHub (**Settings → Rules → Rulesets**), créés via l'API `gh api repos/.../rulesets` :
 
-Cases à cocher :
+**`main-protection`** (branche `main`) :
+- **Require a pull request before merging** — push direct interdit, seul un merge de PR est accepté. `0` approbation requise (projet solo).
+- **Require status checks to pass before merging**, contexts `backend` + `frontend` (les deux jobs de `ci.yml`), branches à jour exigées.
+- `bypass_actors: []` — personne, admin compris, ne peut contourner ces deux règles.
 
-- **Require a pull request before merging** — interdit le push direct sur `main` ; seul un merge de PR est accepté.
-  - Nombre d'approbations requises : `0` suffit pour un projet solo — augmenter si un second reviewer rejoint le projet.
-- **Require status checks to pass before merging**
-  - Cocher **Require branches to be up to date before merging**.
-  - Dans la recherche de checks, ajouter les deux jobs définis par `ci.yml` : **`backend`** et **`frontend`**. (Ils n'apparaissent dans la liste qu'après avoir tourné au moins une fois sur une PR — c'est déjà fait, voir PR #45.)
-- **Do not allow bypassing the above settings** — sans cette case, un admin (donc probablement ton propre compte) peut quand même push direct ou merger avec des checks rouges ; à cocher pour que la règle s'applique aussi à toi.
+**`staging-ci-required`** (branche `staging`) :
+- **Require status checks to pass before merging** seulement, mêmes contexts `backend` + `frontend` — pas de règle `pull_request`, donc le push/merge direct reste autorisé (voir "merge direct si travail solo" ci-dessus). Une PR ouverte vers `staging` doit quand même avoir la CI verte pour être mergeable.
 
-Optionnel, pas strictement demandé mais cohérent avec le workflow ci-dessus :
-- **Require linear history** — interdit les merge commits sur `main`, force un historique propre si souhaité (le workflow actuel utilise des merges `--no-ff` `staging` → `main`, donc **ne pas cocher** si on garde cette pratique).
-- La même protection appliquée à `staging` n'est pas demandée ici et casserait le "merge direct si travail solo" du cycle de vie d'une feature (§ ci-dessus) — à activer seulement si ce choix change.
+Note : `required_status_checks` ne s'applique qu'au merge d'une PR — `ci.yml` ne se déclenche que sur `pull_request` (pas sur `push`), donc un push direct sur `staging` ne fait tourner aucun check, comme avant.
+
+Pas de **Require linear history** sur `main` : le workflow actuel utilise des merges `--no-ff` `staging` → `main`, une règle linéaire l'interdirait.
+
+Pour modifier ces règles : `gh api repos/ricc187/OHM-FLOWv2/rulesets/<id>` (`GET`/`PATCH`/`DELETE`), ou directement dans l'interface GitHub (Settings → Rules → Rulesets).
