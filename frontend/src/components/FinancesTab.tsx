@@ -110,16 +110,21 @@ const SectionCard: React.FC<{ children: React.ReactNode }> = ({ children }) => (
     </div>
 );
 
-// --- Donut d'avancement (% réel / prévu) ---
-// <90% = neutre (encore en cours), 90-100% = ambre (bientôt au budget),
-// >100% = rouge (dépassement). null (dénominateur nul) = gris "—".
-const DonutStat: React.FC<{ label: string; pct: number | null; colorOverride?: string }> = ({ label, pct, colorOverride }) => {
+// --- Donut d'avancement ---
+// Deux modes :
+// - pct (ex: "Déclaré") : anneau rempli au %, couleur vert/ambre/rouge selon
+//   seuil 90%/100% de BUDGET (dépassement). null (dénominateur nul) = gris "—".
+// - raw (CA/Matériel/MO/Débours sec) : valeur réelle brute affichée telle
+//   quelle, sans dépendre d'un prévisionnel renseigné ou non — anneau
+//   décoratif neutre (rempli, pas de notion de dépassement à signaler).
+const DonutStat: React.FC<{ label: string; pct?: number | null; raw?: { value: string; unit: string }; colorOverride?: string }> = ({ label, pct, raw, colorOverride }) => {
     const size = 108, stroke = 11, r = (size - stroke) / 2, c = 2 * Math.PI * r;
-    const clamped = pct == null ? 0 : Math.max(0, Math.min(pct, 1));
+    const clamped = raw ? 1 : (pct == null ? 0 : Math.max(0, Math.min(pct, 1)));
+    const NEUTRAL = '#64748b'; // slate-500 — anneau raw, purement décoratif
     // colorOverride : pour un % qui n'est pas un "avancement vs budget" (donc
     // sans notion de dépassement) — l'avancement déclaré par exemple, où le
     // vert/ambre/rouge habituel (90%/100% de BUDGET) n'a pas de sens.
-    const color = colorOverride ?? (pct == null ? '#94a3b8' : pct > 1 ? '#ef4444' : pct >= 0.9 ? '#f59e0b' : '#16a34a');
+    const color = colorOverride ?? (raw ? NEUTRAL : (pct == null ? '#94a3b8' : pct! > 1 ? '#ef4444' : pct! >= 0.9 ? '#f59e0b' : '#16a34a'));
     return (
         <div className="flex flex-col items-center gap-2">
             <div className="relative" style={{ width: size, height: size }}>
@@ -131,8 +136,15 @@ const DonutStat: React.FC<{ label: string; pct: number | null; colorOverride?: s
                         className="transition-[stroke-dashoffset] duration-500 ease-out"
                     />
                 </svg>
-                <div className="absolute inset-0 flex items-center justify-center">
-                    <span className="text-xl font-black font-mono" style={{ color }}>{formatPct(pct)}</span>
+                <div className="absolute inset-0 flex flex-col items-center justify-center leading-tight">
+                    {raw ? (
+                        <>
+                            <span className="text-base font-black font-mono" style={{ color }}>{raw.value}</span>
+                            <span className="text-[10px] font-bold" style={{ color }}>{raw.unit}</span>
+                        </>
+                    ) : (
+                        <span className="text-xl font-black font-mono" style={{ color }}>{formatPct(pct)}</span>
+                    )}
                 </div>
             </div>
             <span className="text-xs font-bold text-slate-600 uppercase tracking-wide text-center leading-tight">{label}</span>
@@ -420,9 +432,11 @@ export const FinancesTab: React.FC<Props> = ({ chantierId, avancementDeclare }) 
                 </div>
             </div>
 
-            {/* Avancement — 4 formules calculées depuis le budget, + l'avancement
-                physique déclaré à la main (voir le bouton dans l'en-tête de la
-                fiche chantier) pour comparer "où on en est vraiment" vs budget. */}
+            {/* Avancement — 4 valeurs réelles brutes (CA/Matériel/MO/Débours sec :
+                indépendantes d'un prévisionnel renseigné ou non, voir bug donuts
+                "–" sur chantiers historiques sans taux horaire/budget saisi), +
+                l'avancement physique déclaré à la main (voir le bouton dans
+                l'en-tête de la fiche chantier), seul donut encore en %. */}
             <div className="card">
                 <h4 className="text-sm font-black text-slate-900 uppercase tracking-wide mb-5">Avancement</h4>
                 <div className="grid grid-cols-2 sm:grid-cols-5 gap-4 sm:gap-6">
@@ -431,10 +445,10 @@ export const FinancesTab: React.FC<Props> = ({ chantierId, avancementDeclare }) 
                         pct={avancementDeclare != null ? avancementDeclare / 100 : null}
                         colorOverride={avancementDeclare != null ? '#2563eb' : undefined}
                     />
-                    <DonutStat label="Chiffre d'affaires" pct={data.pct_avancement_ca ?? null} />
-                    <DonutStat label="Matériel" pct={data.pct_avancement_materiel ?? null} />
-                    <DonutStat label="Main d'œuvre" pct={data.pct_avancement_mo ?? null} />
-                    <DonutStat label="Débours sec" pct={data.pct_avancement_debourse_sec ?? null} />
+                    <DonutStat label="Chiffre d'affaires" raw={{ value: formatCHF(data.ca_reel), unit: 'CHF' }} />
+                    <DonutStat label="Matériel" raw={{ value: formatCHF(data.total_achats_reel), unit: 'CHF' }} />
+                    <DonutStat label="Main d'œuvre" raw={{ value: formatHeures(data.heures_reelles), unit: 'h' }} />
+                    <DonutStat label="Débours sec" raw={{ value: formatCHF(data.debourse_sec_reel), unit: 'CHF' }} />
                 </div>
                 {avancementDeclare == null && (
                     <p className="text-[11px] text-slate-400 mt-4 italic">
