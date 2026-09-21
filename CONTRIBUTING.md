@@ -26,3 +26,22 @@ Ce projet utilise un workflow à 3 niveaux : `feature` → `staging` → `main`.
 ## Tester `staging`
 
 Tester `staging` en local (comme le serveur de démo déjà en place) suffit pour la plupart des vérifications. Un environnement Docker séparé (2e environnement sur le VPS, ou VPS/sous-domaine dédié) n'est à envisager que si un besoin précis de test "comme en prod" apparaît — à évaluer au cas par cas, pas mis en place par défaut.
+
+## CI (GitHub Actions)
+
+`.github/workflows/ci.yml` tourne sur chaque Pull Request vers `main` et vers `staging` : job `backend` (`pip install -r requirements.txt` frais + `python -m unittest discover`) et job `frontend` (`npm ci` + `tsc --noEmit` + `npm run build`). Les deux doivent être verts pour merger une PR une fois la protection de branche (ci-dessous) activée.
+
+## Protection de branche (active)
+
+Deux rulesets sont activés sur GitHub (**Settings → Rules → Rulesets**), créés via l'API `gh api repos/.../rulesets` :
+
+**`main-protection`** (branche `main`) :
+- **Require a pull request before merging** — push direct interdit, seul un merge de PR est accepté. `0` approbation requise (projet solo).
+- **Require status checks to pass before merging**, contexts `backend` + `frontend` (les deux jobs de `ci.yml`), branches à jour exigées.
+- `bypass_actors: []` — personne, admin compris, ne peut contourner ces deux règles.
+
+**`staging`** : aucun ruleset. Un `required_status_checks` a été testé puis retiré — contrairement à ce qu'on pensait, cette règle exige que le check ait tourné et réussi sur le commit poussé, y compris en push direct (pas seulement au merge d'une PR) ; comme `ci.yml` ne se déclenche que sur `pull_request` (jamais sur `push`), aucun commit poussé directement ne peut jamais satisfaire la règle — ça bloque tout push direct, pas seulement le force sans CI. Incompatible avec "merge direct si travail solo" (voir plus haut), donc retiré. Une PR ouverte vers `staging` fait quand même tourner `ci.yml` et affiche le statut des checks — juste sans les rendre obligatoires pour merger.
+
+Pas de **Require linear history** sur `main` : le workflow actuel utilise des merges `--no-ff` `staging` → `main`, une règle linéaire l'interdirait.
+
+Pour modifier ces règles : `gh api repos/ricc187/OHM-FLOWv2/rulesets/<id>` (`GET`/`PATCH`/`DELETE`), ou directement dans l'interface GitHub (Settings → Rules → Rulesets).

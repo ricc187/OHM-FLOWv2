@@ -13,26 +13,17 @@ Lancer : python -m unittest tests.test_weekly_km_prompt -v   (depuis backend/)
 import datetime
 import os
 import sys
-import shutil
-import tempfile
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # backend/
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # tests/ (for _app_loader)
 
 os.environ.setdefault('SECRET_KEY', 'test-secret-key-for-unittests-only')
 
-_TEST_DIR = tempfile.mkdtemp(prefix='ohmflow_weekly_km_test_')
-_orig_cwd = os.getcwd()
-os.chdir(_TEST_DIR)
-try:
-    import app as ohmapp  # noqa: E402
-finally:
-    os.chdir(_orig_cwd)
+from _app_loader import load_fresh_app
+ohmapp = load_fresh_app('ohmflow_weekly_km_test_')
 
 ohmapp.limiter.enabled = False  # même raison que test_auth.py
-
-import atexit
-atexit.register(lambda: shutil.rmtree(_TEST_DIR, ignore_errors=True))
 
 STRONG_PASSWORD = 'Correct-Horse-Battery-99'
 

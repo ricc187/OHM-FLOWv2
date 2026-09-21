@@ -11,24 +11,18 @@ Lancer : python -m unittest tests.test_auth -v   (depuis backend/)
 import datetime
 import os
 import sys
-import shutil
-import tempfile
 import time
 import unittest
 
 import pyotp
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # backend/
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # tests/ (for _app_loader)
 
 os.environ.setdefault('SECRET_KEY', 'test-secret-key-for-unittests-only')
 
-_TEST_DIR = tempfile.mkdtemp(prefix='ohmflow_auth_test_')
-_orig_cwd = os.getcwd()
-os.chdir(_TEST_DIR)
-try:
-    import app as ohmapp  # noqa: E402
-finally:
-    os.chdir(_orig_cwd)
+from _app_loader import load_fresh_app
+ohmapp = load_fresh_app('ohmflow_auth_test_')
 
 # These tests exercise the login/lockout logic itself with far more than
 # 5 requests/minute against /api/login — the route's own IP rate limit
@@ -38,9 +32,6 @@ finally:
 # alone does nothing here — toggle the extension's own `.enabled` instead.
 # Re-enabled for that one dedicated test.
 ohmapp.limiter.enabled = False
-
-import atexit
-atexit.register(lambda: shutil.rmtree(_TEST_DIR, ignore_errors=True))
 
 STRONG_PASSWORD = 'Correct-Horse-Battery-99'
 
