@@ -8,29 +8,15 @@ Lancer : python -m unittest tests.test_financier_api -v   (depuis backend/)
 """
 import os
 import sys
-import shutil
-import tempfile
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # backend/
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # tests/ (for _app_loader)
 
 os.environ.setdefault('SECRET_KEY', 'test-secret-key-for-unittests-only')
 
-_TEST_DIR = tempfile.mkdtemp(prefix='ohmflow_financier_test_')
-_orig_cwd = os.getcwd()
-os.chdir(_TEST_DIR)
-try:
-    import app as ohmapp  # noqa: E402 — must import with cwd=_TEST_DIR (paths/init_db baked in at import time)
-finally:
-    os.chdir(_orig_cwd)
-
-
-def _addCleanupModule():
-    import atexit
-    atexit.register(lambda: shutil.rmtree(_TEST_DIR, ignore_errors=True))
-
-
-_addCleanupModule()
+from _app_loader import load_fresh_app
+ohmapp = load_fresh_app('ohmflow_financier_test_')
 
 # Same "La Baita" reference numbers as test_financier_calculs.py. Le CA
 # prévisionnel (montant_adjuge/heures_adjugees/... d'avant) est maintenant

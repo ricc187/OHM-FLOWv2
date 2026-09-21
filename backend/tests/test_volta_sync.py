@@ -25,35 +25,16 @@ Lancer : python -m unittest tests.test_volta_sync -v   (depuis backend/)
 """
 import os
 import sys
-import shutil
-import tempfile
 import threading
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # backend/
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # tests/ (for _app_loader)
 
 os.environ.setdefault('SECRET_KEY', 'test-secret-key-for-unittests-only')
-# Doit être positionné AVANT `import app` : app.py démarre le thread de cron
-# Volta au niveau module (juste après init_db()), gardé par cette variable —
-# sans ça, importer app.py ici démarrerait un vrai thread de fond qui
-# tournerait pendant (et après) toute la suite. Voir test_cron_thread_does_not_start_during_tests.
-os.environ['OHM_DISABLE_VOLTA_CRON'] = '1'
 
-_TEST_DIR = tempfile.mkdtemp(prefix='ohmflow_volta_sync_test_')
-_orig_cwd = os.getcwd()
-os.chdir(_TEST_DIR)
-try:
-    import app as ohmapp  # noqa: E402 — must import with cwd=_TEST_DIR (paths/init_db baked in at import time)
-finally:
-    os.chdir(_orig_cwd)
-
-
-def _addCleanupModule():
-    import atexit
-    atexit.register(lambda: shutil.rmtree(_TEST_DIR, ignore_errors=True))
-
-
-_addCleanupModule()
+from _app_loader import load_fresh_app
+ohmapp = load_fresh_app('ohmflow_volta_sync_test_')
 
 
 def _ok_invoice(montant=2734.8):
@@ -675,10 +656,12 @@ class VoltaSyncTestCase(unittest.TestCase):
     # --- Cron de synchro Volta : garde-fou anti-doublon multi-workers ---
 
     def test_cron_thread_does_not_start_during_tests(self):
-        # OHM_DISABLE_VOLTA_CRON=1 est positionné tout en haut de ce fichier,
-        # AVANT `import app` — vérifie que ça a bien empêché le thread de
-        # démarrer (import déjà fait une fois pour toute la classe/suite),
-        # et qu'aucun thread résiduel de ce nom ne tourne en fond.
+        # OHM_DISABLE_VOLTA_CRON=1 est le défaut de _app_loader.load_fresh_app
+        # (voir tests/_app_loader.py), positionné avant `import app` pour
+        # tous les fichiers de test — vérifie que ça a bien empêché le
+        # thread de démarrer, et qu'aucun thread résiduel de ce nom ne
+        # tourne en fond (résiduel = qui aurait fuité d'un autre fichier de
+        # test important app.py sans passer par le loader).
         self.assertIsNone(ohmapp._volta_sync_cron_thread)
         self.assertNotIn('volta-sync-cron', [t.name for t in threading.enumerate()])
 

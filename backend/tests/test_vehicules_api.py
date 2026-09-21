@@ -9,30 +9,21 @@ Lancer : python -m unittest tests.test_vehicules_api -v   (depuis backend/)
 """
 import os
 import sys
-import shutil
-import tempfile
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # backend/
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # tests/ (for _app_loader)
 
 os.environ.setdefault('SECRET_KEY', 'test-secret-key-for-unittests-only')
 
-_TEST_DIR = tempfile.mkdtemp(prefix='ohmflow_vehicules_test_')
-_orig_cwd = os.getcwd()
-os.chdir(_TEST_DIR)
-try:
-    import app as ohmapp  # noqa: E402
-finally:
-    os.chdir(_orig_cwd)
+from _app_loader import load_fresh_app
+ohmapp = load_fresh_app('ohmflow_vehicules_test_')
 
 # Chaque test se connecte avec un nouveau compte (voir _unique_username) —
 # largement plus que la limite de /api/login (voir test_auth.py, même
 # raison : Flask-Limiter lit sa config une fois à l'import, donc seul
 # .enabled peut être togglé après coup).
 ohmapp.limiter.enabled = False
-
-import atexit
-atexit.register(lambda: shutil.rmtree(_TEST_DIR, ignore_errors=True))
 
 STRONG_PASSWORD = 'Correct-Horse-Battery-99'
 
