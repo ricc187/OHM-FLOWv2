@@ -9,24 +9,15 @@ Lancer : python -m unittest tests.test_entries_api -v   (depuis backend/)
 """
 import os
 import sys
-import shutil
-import tempfile
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # backend/
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # tests/ (for _app_loader)
 
 os.environ.setdefault('SECRET_KEY', 'test-secret-key-for-unittests-only')
 
-_TEST_DIR = tempfile.mkdtemp(prefix='ohmflow_entries_test_')
-_orig_cwd = os.getcwd()
-os.chdir(_TEST_DIR)
-try:
-    import app as ohmapp  # noqa: E402 — must import with cwd=_TEST_DIR
-finally:
-    os.chdir(_orig_cwd)
-
-import atexit
-atexit.register(lambda: shutil.rmtree(_TEST_DIR, ignore_errors=True))
+from _app_loader import load_fresh_app
+ohmapp = load_fresh_app('ohmflow_entries_test_')
 
 
 class EntriesApiTestCase(unittest.TestCase):
